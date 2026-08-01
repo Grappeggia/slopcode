@@ -12,7 +12,7 @@ import { SessionTabsRemovedDetail } from "@/components/titlebar-session-events"
 import { migrateClosedTabs, pruneClosedTabs, removeClosedTabs, type ClosedTab } from "./closed-tabs"
 import { createTabController } from "./tab-controller"
 import { migrateTabs } from "./tab-migration"
-import { draftHref, tabHref } from "./tab-route"
+import { decodeSessionTabDirectory, draftHref, tabHref } from "./tab-route"
 
 export type SessionTab = {
   type: "session"
@@ -46,9 +46,10 @@ export function sessionHasOpenTab(tabs: Tab[], server: ServerConnection.Key, ses
 export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
   name: "Tabs",
   gate: false,
-  init: () => {
+  init: (props: { serverCatalogAuthoritative?: () => boolean }) => {
     const server = useServer()
     const platform = usePlatform()
+    const serverCatalogAuthoritative = () => props.serverCatalogAuthoritative?.() ?? true
     const fallback = server.key
     const [store, setStore, , ready] = persisted(
       {
@@ -61,7 +62,12 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       {
         ...Persist.global("tabs.closed"),
         migrate: (value: unknown) =>
-          migrateClosedTabs(value, fallback, new Set(server.list.map(ServerConnection.key))),
+          migrateClosedTabs(
+            value,
+            fallback,
+            new Set(server.list.map(ServerConnection.key)),
+            !serverCatalogAuthoritative(),
+          ),
       },
       createStore<ClosedTab[]>([]),
     )
@@ -92,14 +98,14 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     }
 
     createEffect(() => {
-      if (!ready()) return
+      if (!ready() || !serverCatalogAuthoritative()) return
       const servers = new Set(server.list.map(ServerConnection.key))
       if (store.every((tab) => servers.has(tab.server))) return
       setStore((tabs) => tabs.filter((tab) => servers.has(tab.server)))
     })
 
     createEffect(() => {
-      if (!closedReady()) return
+      if (!closedReady() || !serverCatalogAuthoritative()) return
       const servers = new Set(server.list.map(ServerConnection.key))
       if (closed.every((entry) => servers.has(entry.tab.server))) return
       setClosed((stack) => pruneClosedTabs(stack, servers))
@@ -238,14 +244,14 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
               const removedCurrent =
                 currentTab?.type === "session" &&
                 currentTab.server === server.key &&
-                atob(currentTab.dirBase64) === input.directory &&
+                decodeSessionTabDirectory(currentTab) === input.directory &&
                 sessionIDs.has(currentTab.sessionId)
 
               for (let i = tabs.length - 1; i >= 0; i--) {
                 const tab = tabs[i]
                 if (!tab || tab.type !== "session") continue
                 if (tab.server !== server.key) continue
-                if (atob(tab.dirBase64) !== input.directory) continue
+                if (decodeSessionTabDirectory(tab) !== input.directory) continue
                 if (!sessionIDs.has(tab.sessionId)) continue
                 tabs.splice(i, 1)
               }

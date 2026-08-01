@@ -3,6 +3,7 @@ import { createRoot, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import {
   createServerProjects,
+  isServerStateReady,
   migrateCanonicalLocalServerState,
   nextServerAfterRemoval,
   resolveServerList,
@@ -59,6 +60,13 @@ describe("resolveServerList", () => {
     })
     expect(list[0]?.type === "http" ? list[0].authToken : true).toBeUndefined()
   })
+})
+
+test("waits for an external server catalog before exposing server state", () => {
+  expect(isServerStateReady(false, true)).toBe(false)
+  expect(isServerStateReady(true, false)).toBe(false)
+  expect(isServerStateReady(true, true)).toBe(true)
+  expect(isServerStateReady(true, undefined)).toBe(true)
 })
 
 test("treats WSL sidecars as remote server connections", () => {

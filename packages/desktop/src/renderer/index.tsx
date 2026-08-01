@@ -24,7 +24,7 @@ import pkg from "../../package.json"
 import { initI18n, t } from "./i18n"
 import { initializationData, initializationReady } from "./initialization"
 import { resetZoom, setPinchZoomEnabled, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
-import { availableStartupServer, readyWslConnections } from "./wsl/connections"
+import { availableStartupServer, readyWslConnections, wslStartupReady } from "./wsl/connections"
 import { handleLinkClick } from "./links"
 import "./styles.css"
 import { Splash } from "@slopcode-ai/ui/logo"
@@ -323,6 +323,11 @@ render(() => {
 
   function App() {
     const wslServers = useWslServers()
+    const wslStartup = createMemo(() => wslStartupReady(wslServers.data, wslServers.isPending))
+    const wslCatalogUnavailable = createMemo(
+      () => Boolean(platform.wslServers && !wslServers.isPending && !wslServers.data),
+    )
+    const wslCatalogReady = createMemo(() => wslStartup() || wslCatalogUnavailable())
     const splash = (
       <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
         <Splash class="w-16 h-20 opacity-50 animate-pulse" />
@@ -330,7 +335,12 @@ render(() => {
     )
 
     const ready = createMemo(
-      () => !defaultServer.loading && !sidecar.loading && !windowCount.loading && !locale.loading,
+      () =>
+        !defaultServer.loading &&
+        !sidecar.loading &&
+        !windowCount.loading &&
+        !locale.loading &&
+        (!platform.wslServers || wslCatalogReady()),
     )
     const servers = createMemo(() => {
       const data = initializationData(sidecar)
@@ -358,7 +368,13 @@ render(() => {
       <Show when={ready()} fallback={splash}>
         <Show when={effectiveDefaultServer()} keyed>
           {(key) => (
-            <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
+            <AppInterface
+              defaultServer={key}
+              servers={servers()}
+              serversReady={() => !platform.wslServers || wslCatalogReady()}
+              serverCatalogAuthoritative={() => !platform.wslServers || wslStartup()}
+              router={MemoryRouter}
+            >
               <DesktopFirstLaunchOnboarding />
               <Inner />
             </AppInterface>

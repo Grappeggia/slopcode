@@ -30,6 +30,7 @@ export function migrateClosedTabs(
   value: unknown,
   fallback: SessionTab["server"],
   servers: ReadonlySet<SessionTab["server"]>,
+  preserveUnknown = false,
 ): ClosedTab[] {
   if (!Array.isArray(value)) return []
   return value.flatMap<ClosedTab>((entry) => {
@@ -39,7 +40,7 @@ export function migrateClosedTabs(
     if (tab.type !== "session" || typeof tab.sessionId !== "string" || typeof tab.dirBase64 !== "string") return []
     if ("server" in tab && typeof tab.server !== "string") return []
     const server = ("server" in tab ? tab.server : fallback) as SessionTab["server"]
-    if (!servers.has(server)) return []
+    if (!preserveUnknown && !servers.has(server)) return []
     return [{ tab: { type: "session", server, sessionId: tab.sessionId, dirBase64: tab.dirBase64 }, index: entry.index }]
   })
 }

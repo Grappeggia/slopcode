@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { WslServersState } from "@slopcode-ai/app/wsl/types"
-import { availableStartupServer, readyWslConnections } from "./connections"
+import { availableStartupServer, readyWslConnections, wslStartupReady } from "./connections"
 
 const state = (kind: "starting" | "ready" | "failed" | "stopped"): WslServersState => ({
   runtime: null,
@@ -39,5 +39,14 @@ describe("WSL desktop connections", () => {
     expect(availableStartupServer(key, undefined)).toBe("sidecar")
     expect(availableStartupServer(key, state("starting"))).toBe("sidecar")
     expect(availableStartupServer(key, state("ready"))).toBe(key)
+  })
+
+  test("waits for configured WSL servers to leave startup before restoring tabs", () => {
+    expect(wslStartupReady(undefined, true)).toBe(false)
+    expect(wslStartupReady(undefined, false)).toBe(false)
+    expect(wslStartupReady(state("starting"), false)).toBe(false)
+    expect(wslStartupReady(state("ready"), false)).toBe(true)
+    expect(wslStartupReady(state("failed"), false)).toBe(true)
+    expect(wslStartupReady(state("stopped"), false)).toBe(true)
   })
 })

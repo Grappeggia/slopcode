@@ -457,6 +457,8 @@ export function AppInterface(props: {
   defaultServer: ServerConnection.Key
   canonicalLocalServer?: ServerConnection.Key
   servers?: Array<ServerConnection.Any>
+  serversReady?: () => boolean
+  serverCatalogAuthoritative?: () => boolean
   router?: Component<BaseRouterProps>
   disableHealthCheck?: boolean
 }) {
@@ -465,13 +467,14 @@ export function AppInterface(props: {
       defaultServer={props.defaultServer}
       canonicalLocalServer={props.canonicalLocalServer}
       servers={props.servers}
+      serversReady={props.serversReady}
     >
       <GlobalProvider>
         <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
           <Dynamic
             component={props.router ?? Router}
             root={(routerProps) => (
-              <TabsProvider>
+              <TabsProvider serverCatalogAuthoritative={props.serverCatalogAuthoritative}>
                 <ServerKey>
                   <QueryProvider>
                     <ServerSDKProvider>

@@ -218,6 +218,10 @@ export function nextServerAfterRemoval(
   return next ? ServerConnection.key(next) : fallback
 }
 
+export function isServerStateReady(persisted: boolean, external: boolean | undefined) {
+  return persisted && external !== false
+}
+
 export const { use: useServer, provider: ServerProvider } = createSimpleContext({
   name: "Server",
   gate: true,
@@ -225,6 +229,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     defaultServer: ServerConnection.Key
     canonicalLocalServer?: ServerConnection.Key
     servers?: Array<ServerConnection.Any>
+    serversReady?: () => boolean
   }) => {
     const [store, setStore, _, ready] = persisted(
       {
@@ -277,7 +282,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       })
     }
 
-    const isReady = createMemo(() => ready() && !!state.active)
+    const isReady = createMemo(() => isServerStateReady(ready() && !!state.active, props.serversReady?.()))
 
     const scope = (key = state.active) => ServerScope.fromServerKey(key, props.canonicalLocalServer)
     const projects = createServerProjects({ scope, store, setStore })

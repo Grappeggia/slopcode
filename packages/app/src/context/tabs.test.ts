@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { migrateClosedTabs, nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
 import { migrateTabs } from "./tab-migration"
-import type { SessionTab, Tab } from "./tabs"
+import { type SessionTab, type Tab } from "./tabs"
 import type { ServerConnection } from "./server"
 import { createTabController } from "./tab-controller"
-import { tabHref } from "./tab-route"
+import { decodeSessionTabDirectory, tabHref } from "./tab-route"
 
 const server = "local\nhttp://localhost:4096" as ServerConnection.Key
 const remote = "https://remote.example.test" as ServerConnection.Key
@@ -19,6 +19,11 @@ describe("tab migration", () => {
       migrateTabs([null, sessionTab("a"), { type: "session", server, sessionId: "missing-dir" }, "invalid"], server),
     ).toEqual([sessionTab("a")])
     expect(migrateTabs([{ type: "session", sessionId: "a", dirBase64: "L3RtcA" }], server)).toEqual([sessionTab("a")])
+  })
+
+  test("does not throw on malformed persisted directory encodings", () => {
+    expect(() => decodeSessionTabDirectory({ dirBase64: "%%%" })).not.toThrow()
+    expect(decodeSessionTabDirectory({ dirBase64: "%%%" })).toBeUndefined()
   })
 })
 
@@ -85,5 +90,10 @@ describe("closed tab stack", () => {
     expect(stale.entry).toBeUndefined()
     expect(stale.tabs).toEqual([])
     expect(stale.closed).toEqual([])
+  })
+
+  test("preserves unknown servers while the external catalog is unavailable", () => {
+    const entry = { tab: { ...sessionTab("pending"), server: remote }, index: 0 }
+    expect(migrateClosedTabs([entry], server, new Set([server]), true)).toEqual([entry])
   })
 })

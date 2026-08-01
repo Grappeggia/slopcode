@@ -20,6 +20,11 @@ export function readyWslConnections(state?: WslServersState) {
   })
 }
 
+export function wslStartupReady(state: WslServersState | undefined, pending: boolean) {
+  if (pending || !state) return false
+  return !state.servers.some((item) => item.runtime.kind === "starting")
+}
+
 export function availableStartupServer(defaultServer: string | null | undefined, state?: WslServersState) {
   const key = defaultServer ?? "sidecar"
   if (!key.startsWith("wsl:")) return key
