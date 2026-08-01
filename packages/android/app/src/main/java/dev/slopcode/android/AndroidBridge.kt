@@ -25,6 +25,7 @@ class AndroidBridge(
   private val activity: MainActivity,
   private val webView: WebView,
 ) {
+  private val state = activity.getSharedPreferences("slopcode.permission", android.content.Context.MODE_PRIVATE)
   private val deepLinks = CopyOnWriteArrayList<String>()
   private val permission = CopyOnWriteArrayList<(String) -> Unit>()
   private val channelId = "slopcode.android"
@@ -45,12 +46,14 @@ class AndroidBridge(
     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
   )
 
+  private fun notificationRequested() = state.getBoolean("notification_requested", false)
+
   private fun permissionState(): String {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return "granted"
-    return if (activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
-      "granted"
-    else
-      "prompt"
+    if (activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+      return "granted"
+    }
+    return if (notificationRequested()) "denied" else "prompt"
   }
 
   private fun remoteBaseUrl(): URL? {
@@ -276,6 +279,7 @@ class AndroidBridge(
   }
 
   fun onNotificationPermissionResult(granted: Boolean) {
+    state.edit().putBoolean("notification_requested", true).apply()
     val state = if (granted) "granted" else "denied"
     val callbacks = permission.toList()
     permission.clear()

@@ -32,4 +32,13 @@ describe("android security source regressions", () => {
     expect(bridge).not.toContain("localhost")
     expect(bridge).toContain('"requestNotificationPermission" -> requestNotificationPermission { state ->')
   })
+
+  test("persists notification request state so denied stays denied after the first prompt", async () => {
+    const bridge = await Bun.file(`${root}/app/src/main/java/dev/slopcode/android/AndroidBridge.kt`).text()
+
+    expect(bridge).toContain('getSharedPreferences("slopcode.permission"')
+    expect(bridge).toContain('state.getBoolean("notification_requested", false)')
+    expect(bridge).toContain('return if (notificationRequested()) "denied" else "prompt"')
+    expect(bridge).toContain('state.edit().putBoolean("notification_requested", true).apply()')
+  })
 })
