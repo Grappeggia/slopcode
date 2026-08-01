@@ -80,6 +80,15 @@ function sshWorkspaceID() {
   return "wrk_remote_pairing_ssh"
 }
 
+function selectionInput(pairing: { id: string; selection: { deviceID: string; nonce: string; code: string } }) {
+  return {
+    pairingID: pairing.id,
+    deviceID: pairing.selection.deviceID,
+    selectionNonce: pairing.selection.nonce,
+    selectionCode: pairing.selection.code,
+  }
+}
+
 afterEach(async () => {
   Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
   await disposeAllInstances()
@@ -167,6 +176,9 @@ describe.serial("remote pairing HttpApi", () => {
           })
           expect(pairing.status).toBe(200)
           const created = await pairing.json()
+          expect(created.selection.deviceID).toBe(created.device.id)
+          expect(created.selection.code).toBe(created.code)
+          expect(created.selection.nonce).toMatch(/^[A-Za-z0-9_-]{16,128}$/)
 
           const validateBefore = await requestWith(app, WorkspacePaths.remoteSshValidate, remoteTmp.path, {
             method: "POST",
@@ -240,7 +252,7 @@ describe.serial("remote pairing HttpApi", () => {
               authorization: auth(),
               "content-type": "application/json",
             },
-            body: JSON.stringify({ pairingID: created.id }),
+            body: JSON.stringify(selectionInput(created)),
           })
           expect(selectBefore.status).toBe(409)
 
@@ -263,6 +275,16 @@ describe.serial("remote pairing HttpApi", () => {
           })
           expect(target.status).toBe(204)
 
+          const wrongDevice = await requestWith(app, WorkspacePaths.remoteSelect, remoteTmp.path, {
+            method: "POST",
+            headers: {
+              authorization: auth(),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ ...selectionInput(created), deviceID: "dev_other" }),
+          })
+          expect(wrongDevice.status).toBe(409)
+
           const listed = await requestWith(app, WorkspacePaths.remoteHosts, remoteTmp.path, {
             headers: { authorization: auth() },
           })
@@ -272,6 +294,7 @@ describe.serial("remote pairing HttpApi", () => {
           expect(listedJson).not.toContain("secret")
           expect(listedJson).not.toContain(`/bridge`)
           expect(listedJson).not.toContain(`"code":`)
+          expect(listedJson).not.toContain(`"selection":`)
 
           const validateAfter = await requestWith(app, WorkspacePaths.remoteSshValidate, remoteTmp.path, {
             method: "POST",
@@ -289,9 +312,49 @@ describe.serial("remote pairing HttpApi", () => {
               authorization: auth(),
               "content-type": "application/json",
             },
-            body: JSON.stringify({ pairingID: created.id }),
+            body: JSON.stringify(selectionInput(created)),
           })
           expect(selectAfter.status).toBe(200)
+          const selected = await selectAfter.json()
+          expect(selected.code).toBeUndefined()
+          expect(selected.selection).toBeUndefined()
+
+          const replay = await requestWith(app, WorkspacePaths.remoteSelect, remoteTmp.path, {
+            method: "POST",
+            headers: {
+              authorization: auth(),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(selectionInput(created)),
+          })
+          expect(replay.status).toBe(409)
+
+          const refreshedResponse = await requestWith(app, WorkspacePaths.remotePairing, remoteTmp.path, {
+            method: "POST",
+            headers: {
+              authorization: auth(),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ device: created.device, workspace: created.workspace }),
+          })
+          expect(refreshedResponse.status).toBe(200)
+          const refreshed = await refreshedResponse.json()
+          expect(refreshed.id).toBe(created.id)
+          expect(refreshed.selection.nonce).not.toBe(created.selection.nonce)
+
+          const concurrentSelect = await Promise.all(
+            [0, 1].map(() =>
+              requestWith(app, WorkspacePaths.remoteSelect, remoteTmp.path, {
+                method: "POST",
+                headers: {
+                  authorization: auth(),
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify(selectionInput(refreshed)),
+              }),
+            ),
+          )
+          expect(concurrentSelect.map((response) => response.status).sort()).toEqual([200, 409])
 
           const unauthenticatedRoutes = [
             `/api/location?workspace=${sshWorkspaceID()}&auth_token=client-secret`,
@@ -453,7 +516,7 @@ describe.serial("remote pairing HttpApi", () => {
             await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
               method: "POST",
               headers: { authorization: auth(), "content-type": "application/json" },
-              body: JSON.stringify({ pairingID: secondPairing.id }),
+              body: JSON.stringify(selectionInput(secondPairing)),
             })
           ).status,
         ).toBe(409)
@@ -463,17 +526,40 @@ describe.serial("remote pairing HttpApi", () => {
             await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
               method: "POST",
               headers: { authorization: auth(), "content-type": "application/json" },
-              body: JSON.stringify({ pairingID: secondPairing.id }),
+              body: JSON.stringify(selectionInput(secondPairing)),
             })
           ).status,
         ).toBe(409)
-        expect((await target(secondPairing.id, "second-secret")).status).toBe(204)
         expect(
           (
             await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
               method: "POST",
               headers: { authorization: auth(), "content-type": "application/json" },
-              body: JSON.stringify({ pairingID: secondPairing.id }),
+              body: JSON.stringify(selectionInput(firstPairing)),
+            })
+          ).status,
+        ).toBe(200)
+        expect((await target(secondPairing.id, "second-secret")).status).toBe(204)
+        const refreshedSecondResponse = await create("dev_scope_b")
+        expect(refreshedSecondResponse.status).toBe(200)
+        const refreshedSecond = await refreshedSecondResponse.json()
+        expect(refreshedSecond.id).toBe(secondPairing.id)
+        expect(refreshedSecond.selection.nonce).not.toBe(secondPairing.selection.nonce)
+        expect(
+          (
+            await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
+              method: "POST",
+              headers: { authorization: auth(), "content-type": "application/json" },
+              body: JSON.stringify(selectionInput(secondPairing)),
+            })
+          ).status,
+        ).toBe(409)
+        expect(
+          (
+            await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
+              method: "POST",
+              headers: { authorization: auth(), "content-type": "application/json" },
+              body: JSON.stringify(selectionInput(refreshedSecond)),
             })
           ).status,
         ).toBe(200)
@@ -488,12 +574,16 @@ describe.serial("remote pairing HttpApi", () => {
             )
           ).status,
         ).toBe(204)
+        const afterRevokeSecondResponse = await create("dev_scope_b")
+        expect(afterRevokeSecondResponse.status).toBe(200)
+        const afterRevokeSecond = await afterRevokeSecondResponse.json()
+        expect(afterRevokeSecond.id).toBe(secondPairing.id)
         expect(
           (
             await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
               method: "POST",
               headers: { authorization: auth(), "content-type": "application/json" },
-              body: JSON.stringify({ pairingID: secondPairing.id }),
+              body: JSON.stringify(selectionInput(afterRevokeSecond)),
             })
           ).status,
         ).toBe(200)

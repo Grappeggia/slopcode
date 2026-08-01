@@ -212,7 +212,8 @@ export const WorkspaceApi = HttpApi.make("workspace")
           OpenApi.annotations({
             identifier: "experimental.workspace.remote.pairing.create",
             summary: "Create remote pairing",
-            description: "Create or refresh a persisted device pairing for one remote workspace selection.",
+            description:
+              "Create or refresh a persisted device pairing and return its one-time device-bound selection binding.",
           }),
         ),
         HttpApiEndpoint.delete("remotePairingRemove", WorkspacePaths.remotePairingRemove, {
@@ -243,13 +244,13 @@ export const WorkspaceApi = HttpApi.make("workspace")
           query: WorkspaceRoutingQuery,
           payload: RemoteWorkspaceSelectInput,
           success: described(Schema.UndefinedOr(RemotePairingRecordWire), "Remote workspace selected"),
-          error: ApiWorkspaceRemoteSelectError,
+          error: [ApiWorkspaceRemoteSelectError, HttpApiError.BadRequest],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "experimental.workspace.remote.select",
             summary: "Select remote workspace",
             description:
-              "Activate one persisted remote workspace selection only after a fail-closed supervisor target is available.",
+              "Activate one persisted remote workspace selection with its exact device-bound nonce and code only after a fail-closed supervisor target is available; the binding is consumed on success.",
           }),
         ),
         HttpApiEndpoint.post("remoteTarget", WorkspacePaths.remoteTarget, {
@@ -262,7 +263,7 @@ export const WorkspaceApi = HttpApi.make("workspace")
             identifier: "experimental.workspace.remote.target.register",
             summary: "Register remote workspace target",
             description:
-              "Authenticated desktop supervisor handoff that registers the exact validated target for one remote workspace selection.",
+              "Authenticated desktop supervisor handoff that registers the exact pairing, host, workspace, and validated target.",
           }),
         ),
       )

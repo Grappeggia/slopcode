@@ -4,8 +4,11 @@ import { Schema, SchemaParser, Struct } from "effect"
 const Text = Schema.Trim.pipe(Schema.check(Schema.isNonEmpty()))
 const Port = PositiveInt.check(Schema.isLessThanOrEqualTo(65535))
 const exact = <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
-  Schema.declareConstructor<S["Type"], S["Encoded"]>()([schema], ([codec]) => (u, _ast, options) =>
-    SchemaParser.decodeUnknownEffect(codec, { ...options, onExcessProperty: "error" })(u),
+  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
+    [schema],
+    ([codec]) =>
+      (u, _ast, options) =>
+        SchemaParser.decodeUnknownEffect(codec, { ...options, onExcessProperty: "error" })(u),
   )
 
 const loopback = new Set(["127.0.0.1", "localhost", "::1", "[::1]"])
@@ -69,6 +72,27 @@ export const RemoteDeviceID = Schema.String.check(Schema.isPattern(/^dev_[a-zA-Z
   Schema.brand("RemoteV1.DeviceID"),
 )
 export type RemoteDeviceID = typeof RemoteDeviceID.Type
+
+export const RemoteSelectionNonce = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{16,128}$/)).pipe(
+  Schema.brand("RemoteV1.SelectionNonce"),
+)
+export type RemoteSelectionNonce = typeof RemoteSelectionNonce.Type
+
+export const RemotePairingSelection = exact(
+  Schema.Struct({
+    nonce: RemoteSelectionNonce,
+    deviceID: RemoteDeviceID,
+    code: RemotePairingCode,
+  }),
+).annotate({ identifier: "RemoteV1.PairingSelection" })
+export type RemotePairingSelection = typeof RemotePairingSelection.Type
+export type RemotePairingSelectionEncoded = typeof RemotePairingSelection.Encoded
+
+const RemotePairingSelectionWire = Schema.Struct({
+  nonce: RemoteSelectionNonce,
+  deviceID: RemoteDeviceID,
+  code: RemotePairingCode,
+}).annotate({ identifier: "RemoteV1.PairingSelectionWire" })
 
 export const RemoteHostID = Schema.String.check(Schema.isPattern(/^hst_[a-zA-Z0-9._:-]+$/)).pipe(
   Schema.brand("RemoteV1.HostID"),
@@ -159,6 +183,7 @@ export const RemotePairing = Schema.Struct({
   version: RemoteVersion,
   id: RemotePairingID,
   code: RemotePairingCode,
+  selection: RemotePairingSelection,
   device: RemoteDevice,
   host: RemoteHost,
   workspace: RemoteWorkspace,
@@ -167,7 +192,7 @@ export const RemotePairing = Schema.Struct({
 export type RemotePairing = typeof RemotePairing.Type
 export type RemotePairingEncoded = typeof RemotePairing.Encoded
 
-export const RemotePairingRecord = Schema.Struct(Struct.omit(RemotePairing.fields, ["code"])).annotate({
+export const RemotePairingRecord = Schema.Struct(Struct.omit(RemotePairing.fields, ["code", "selection"])).annotate({
   identifier: "RemoteV1.PairingRecord",
 })
 export type RemotePairingRecord = typeof RemotePairingRecord.Type
@@ -177,6 +202,7 @@ export const RemotePairingWire = Schema.Struct({
   version: RemoteVersion,
   id: RemotePairingID,
   code: RemotePairingCode,
+  selection: RemotePairingSelectionWire,
   device: RemoteDevice,
   host: RemoteHost,
   workspace: RemoteWorkspaceInput,
@@ -185,7 +211,9 @@ export const RemotePairingWire = Schema.Struct({
 export type RemotePairingWire = typeof RemotePairingWire.Type
 export type RemotePairingWireEncoded = typeof RemotePairingWire.Encoded
 
-export const RemotePairingRecordWire = Schema.Struct(Struct.omit(RemotePairingWire.fields, ["code"])).annotate({
+export const RemotePairingRecordWire = Schema.Struct(
+  Struct.omit(RemotePairingWire.fields, ["code", "selection"]),
+).annotate({
   identifier: "RemoteV1.PairingRecordWire",
 })
 export type RemotePairingRecordWire = typeof RemotePairingRecordWire.Type
@@ -194,7 +222,9 @@ export type RemotePairingRecordWireEncoded = typeof RemotePairingRecordWire.Enco
 export const RemoteTargetCapabilityHeader = "x-slopcode-remote-capability" as const
 const RemoteTargetCapability = Text.check(
   Schema.makeFilter((value: string) =>
-    value.length <= 1024 && !/[\r\n]/.test(value) ? undefined : "Remote target capability must be a single bounded header value",
+    value.length <= 1024 && !/[\r\n]/.test(value)
+      ? undefined
+      : "Remote target capability must be a single bounded header value",
   ),
 )
 export const RemoteTargetHeaders = exact(
@@ -243,6 +273,9 @@ export type RemotePairingCreatePayloadEncoded = typeof RemotePairingCreatePayloa
 
 export const RemoteWorkspaceSelectInput = Schema.Struct({
   pairingID: RemotePairingID,
+  deviceID: RemoteDeviceID,
+  selectionNonce: RemoteSelectionNonce,
+  selectionCode: RemotePairingCode,
 }).annotate({ identifier: "RemoteV1.WorkspaceSelectInput" })
 export type RemoteWorkspaceSelectInput = typeof RemoteWorkspaceSelectInput.Type
 export type RemoteWorkspaceSelectInputEncoded = typeof RemoteWorkspaceSelectInput.Encoded
@@ -289,7 +322,7 @@ export type RemoteTargetInput = typeof RemoteTargetInput.Type
 export type RemoteTargetInputEncoded = typeof RemoteTargetInput.Encoded
 
 export const RemoteWorkspaceTargetInput = Schema.Struct({
-  pairingID: Schema.optional(RemotePairingID),
+  pairingID: RemotePairingID,
   workspace: RemoteWorkspace,
   target: RemoteTarget,
 }).annotate({ identifier: "RemoteV1.WorkspaceTargetInput" })
@@ -297,7 +330,7 @@ export type RemoteWorkspaceTargetInput = typeof RemoteWorkspaceTargetInput.Type
 export type RemoteWorkspaceTargetInputEncoded = typeof RemoteWorkspaceTargetInput.Encoded
 
 export const RemoteWorkspaceTargetPayload = Schema.Struct({
-  pairingID: Schema.optional(RemotePairingID),
+  pairingID: RemotePairingID,
   workspace: RemoteWorkspaceInput,
   target: RemoteTargetInput,
 }).annotate({ identifier: "RemoteV1.WorkspaceTargetPayload" })

@@ -155,7 +155,10 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     const remoteSelect = Effect.fn("WorkspaceHttpApi.remoteSelect")(function* (ctx: {
       payload: typeof RemoteWorkspaceSelectInput.Type
     }) {
-      return yield* pairings.select(ctx.payload, yield* remoteScope()).pipe(
+      const payload = yield* Schema.decodeUnknownEffect(RemoteWorkspaceSelectInput)(ctx.payload).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      return yield* pairings.select(payload, yield* remoteScope()).pipe(
         Effect.mapError(
           (error) =>
             new ApiWorkspaceRemoteSelectError({

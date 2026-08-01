@@ -4,8 +4,10 @@ import {
   RemoteEnvelope,
   RemoteEnvelopeJson,
   RemotePairing,
+  RemotePairingSelection,
   RemoteWorkspace,
   RemoteWorkspaceJson,
+  RemoteWorkspaceSelectInput,
 } from "../src/remote"
 
 describe("remote protocol contracts", () => {
@@ -55,6 +57,11 @@ describe("remote protocol contracts", () => {
         version: "v1",
         id: "pair_ssh-1",
         code: "AB12CD",
+        selection: {
+          nonce: "0123456789abcdef",
+          deviceID: "dev_phone-1",
+          code: "AB12CD",
+        },
         device: {
           id: "dev_phone-1",
           name: "Android Remote",
@@ -109,6 +116,56 @@ describe("remote protocol contracts", () => {
     expect(event.kind).toBe("event")
     if (event.kind !== "event") throw new Error("expected event")
     expect(String(event.requestID)).toBe("req_remote-1")
+  })
+
+  test("requires a bounded device-bound one-time selection", async () => {
+    const selection = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemotePairingSelection)({
+        nonce: "0123456789abcdef",
+        deviceID: "dev_phone-1",
+        code: "AB12CD",
+      }),
+    )
+    const input = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteWorkspaceSelectInput)({
+        pairingID: "pair_ssh-1",
+        deviceID: selection.deviceID,
+        selectionNonce: selection.nonce,
+        selectionCode: selection.code,
+      }),
+    )
+
+    expect(input.selectionNonce).toBe(selection.nonce)
+    expect(input.selectionCode).toBe(selection.code)
+
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemotePairingSelection)({
+          nonce: "too-short",
+          deviceID: "dev_phone-1",
+          code: "AB12CD",
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemotePairingSelection)({
+          nonce: "0123456789abcdef",
+          deviceID: "dev_phone-1",
+          code: "AB12CD",
+          extra: true,
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteWorkspaceSelectInput)({
+          pairingID: "pair_ssh-1",
+          deviceID: "dev_phone-1",
+          selectionNonce: "0123456789abcdef",
+        }),
+      ),
+    ).rejects.toThrow()
   })
 
   test("rejects malformed ssh workspaces and metadata", async () => {

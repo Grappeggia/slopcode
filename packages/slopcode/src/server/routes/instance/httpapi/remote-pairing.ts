@@ -4,24 +4,32 @@ import {
   RemoteCapability,
   RemoteDevice,
   RemoteHost,
+  RemoteHostID,
   RemotePairedHost,
   RemotePairing,
   RemotePairingCreateInput,
   RemotePairingID,
   RemotePairingRecord,
+  RemotePairingSelection,
+  RemoteSelectionNonce,
   RemoteTarget,
   RemoteWorkspace,
   RemoteWorkspaceSelectInput,
   RemoteWorkspaceSsh,
   RemoteWorkspaceTargetInput,
 } from "../../../../../../protocol/src/remote"
-import { Context, Effect, Layer, Schema, Semaphore } from "effect"
+import { Context, Effect, Layer, Schema, Semaphore, Struct } from "effect"
 import path from "node:path"
 import os from "node:os"
 
+const StoredPairing = Schema.Struct({
+  ...Struct.omit(RemotePairing.fields, ["selection"]),
+  selection: Schema.optional(RemotePairingSelection),
+}).annotate({ identifier: "RemotePairing.StoredPairing" })
+
 const StoredTarget = Schema.Struct({
   pairingID: RemotePairingID,
-  hostID: Schema.String,
+  hostID: RemoteHostID,
   workspace: RemoteWorkspace,
   target: RemoteTarget,
 }).annotate({ identifier: "RemotePairing.StoredTarget" })
@@ -29,7 +37,7 @@ const StoredTarget = Schema.Struct({
 const StoredScope = Schema.Struct({
   projectID: Schema.String,
   directory: Schema.String,
-  pairings: Schema.Array(RemotePairing),
+  pairings: Schema.Array(StoredPairing),
   targets: Schema.Array(StoredTarget),
   selectedPairingID: Schema.optional(RemotePairingID),
 }).annotate({ identifier: "RemotePairing.Scope" })
@@ -42,6 +50,7 @@ const RemotePairingStore = Schema.Struct({
 
 type PairingStore = typeof RemotePairingStore.Type
 type ScopeState = typeof StoredScope.Type
+type StoredPairingState = typeof StoredPairing.Type
 type WorkspaceID = (typeof RemoteWorkspace.Type)["id"]
 
 export type PairingScope = {
@@ -97,6 +106,7 @@ function putScope(store: PairingStore, next: ScopeState) {
 }
 
 const decodeRemotePairing = Schema.decodeUnknownSync(RemotePairing)
+const decodeStoredPairing = Schema.decodeUnknownSync(StoredPairing)
 const decodeRemotePairingRecord = Schema.decodeUnknownSync(RemotePairingRecord)
 const decodeRemoteHost = Schema.decodeUnknownSync(RemoteHost)
 const decodeRemotePairedHost = Schema.decodeUnknownSync(RemotePairedHost)
@@ -136,7 +146,14 @@ export class TargetUnavailableError extends Schema.TaggedErrorClass<TargetUnavai
   },
 ) {}
 
-function redact(pairing: typeof RemotePairing.Type) {
+export class SelectionUnavailableError extends Schema.TaggedErrorClass<SelectionUnavailableError>()(
+  "RemotePairing.SelectionUnavailableError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+function redact(pairing: StoredPairingState) {
   return decodeRemotePairingRecord({
     version: pairing.version,
     id: pairing.id,
@@ -167,6 +184,15 @@ function pairingCode() {
 
 function pairingID() {
   return Schema.decodeUnknownSync(RemotePairingID)(`pair_${crypto.randomUUID().replaceAll("-", "")}`)
+}
+
+function selectionNonce() {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+  return Schema.decodeUnknownSync(RemoteSelectionNonce)(
+    Array.from({ length: 32 }, () => alphabet[crypto.getRandomValues(new Uint32Array(1))[0] % alphabet.length]).join(
+      "",
+    ),
+  )
 }
 
 function host(mode: WorkspaceMode) {
@@ -207,7 +233,7 @@ function sameWorkspace(left: typeof RemoteWorkspace.Type, right: typeof RemoteWo
 }
 
 function requireRegisteredTarget(
-  pairing: typeof RemotePairing.Type,
+  pairing: StoredPairingState,
   scope: ScopeState,
 ): typeof RemoteTarget.Type | TargetUnavailableError {
   const local = workspaceTarget(pairing.workspace)
@@ -243,7 +269,7 @@ export interface Interface {
   readonly select: (
     input: typeof RemoteWorkspaceSelectInput.Type,
     scope: PairingScope,
-  ) => Effect.Effect<typeof RemotePairingRecord.Type | undefined, TargetUnavailableError>
+  ) => Effect.Effect<typeof RemotePairingRecord.Type | undefined, TargetUnavailableError | SelectionUnavailableError>
   readonly target: (
     workspaceID: WorkspaceID,
     scope: PairingScope,
@@ -319,10 +345,16 @@ export const layer = Layer.effect(
           const existing = current.pairings.find(
             (pairing) => pairing.device.id === input.device.id && sameWorkspace(pairing.workspace, input.workspace),
           )
+          const code = pairingCode()
           const next = decodeRemotePairing({
             version: "v1",
             id: existing?.id ?? pairingID(),
-            code: pairingCode(),
+            code,
+            selection: {
+              nonce: selectionNonce(),
+              deviceID: input.device.id,
+              code,
+            },
             device: Schema.decodeUnknownSync(RemoteDevice)(input.device),
             host: existing?.host ?? host(input.workspace.mode),
             workspace: decodeRemoteWorkspace(input.workspace),
@@ -430,10 +462,34 @@ export const layer = Layer.effect(
           const stored = yield* load()
           const current = findScope(stored.store, scope)
           const pairing = current?.pairings.find((item) => item.id === input.pairingID)
-          if (!pairing || !current) return undefined
+          if (!pairing || !current) {
+            return yield* new SelectionUnavailableError({
+              message: "Remote pairing selection is invalid, expired, or already used",
+            })
+          }
+          const selection = pairing.selection
+          if (
+            !selection ||
+            selection.deviceID !== pairing.device.id ||
+            input.deviceID !== pairing.device.id ||
+            input.selectionNonce !== selection.nonce ||
+            input.selectionCode !== selection.code
+          ) {
+            return yield* new SelectionUnavailableError({
+              message: "Remote pairing selection is invalid, expired, or already used",
+            })
+          }
           const target = requireRegisteredTarget(pairing, current)
           if (target instanceof TargetUnavailableError) return yield* target
-          yield* save(stored.credential, putScope(stored.store, { ...current, selectedPairingID: pairing.id }))
+          const consumed = decodeStoredPairing({ ...pairing, selection: undefined })
+          yield* save(
+            stored.credential,
+            putScope(stored.store, {
+              ...current,
+              pairings: current.pairings.map((item) => (item.id === pairing.id ? consumed : item)),
+              selectedPairingID: pairing.id,
+            }),
+          )
           return redact(pairing)
         }),
       )
