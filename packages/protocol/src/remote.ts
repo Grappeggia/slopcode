@@ -43,6 +43,11 @@ export const RemoteMode = Schema.Union([Schema.Literal("local"), Schema.Literal(
 })
 export type RemoteMode = typeof RemoteMode.Type
 
+export const RemoteAgentMode = Schema.Union([Schema.Literal("local-slopcode"), Schema.Literal("codex-cli")]).annotate({
+  identifier: "RemoteV1.AgentMode",
+})
+export type RemoteAgentMode = typeof RemoteAgentMode.Type
+
 export const RemoteRequestID = Schema.String.check(Schema.isPattern(/^req_[a-zA-Z0-9._:-]+$/)).pipe(
   Schema.brand("RemoteV1.RequestID"),
 )
@@ -128,6 +133,165 @@ export const RemoteSshProfile = Schema.Struct({
 export type RemoteSshProfile = typeof RemoteSshProfile.Type
 export type RemoteSshProfileEncoded = typeof RemoteSshProfile.Encoded
 
+export const RemoteSshFolderLimits = {
+  maxEntries: 512,
+  maxNameLength: 255,
+  maxPathLength: 4096,
+  maxRecentFolders: 3,
+} as const
+
+const isSafePosixPath = (value: string) =>
+  value === "/" ||
+  (value.startsWith("/") &&
+    !value.endsWith("/") &&
+    !value.includes("\\") &&
+    !value.includes("\u0000") &&
+    !/[\u0001-\u001f\u007f]/.test(value) &&
+    value
+      .slice(1)
+      .split("/")
+      .every((segment) => segment.length > 0 && segment !== "." && segment !== ".."))
+
+export const RemoteSshAbsolutePath = AbsolutePath.check(
+  Schema.isMaxLength(RemoteSshFolderLimits.maxPathLength),
+  Schema.makeFilter((value: string) =>
+    isSafePosixPath(value) ? undefined : "SSH folder paths must be canonical absolute POSIX paths",
+  ),
+).annotate({ identifier: "RemoteV1.SshAbsolutePath" })
+export type RemoteSshAbsolutePath = typeof RemoteSshAbsolutePath.Type
+
+export const RemoteSshFolderName = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(RemoteSshFolderLimits.maxNameLength),
+  Schema.makeFilter((value: string) =>
+    value !== "." && value !== ".." && !/[\u0000-\u001f\u007f\\/]/.test(value)
+      ? undefined
+      : "SSH folder names must not contain path separators or traversal segments",
+  ),
+).annotate({ identifier: "RemoteV1.SshFolderName" })
+export type RemoteSshFolderName = typeof RemoteSshFolderName.Type
+
+export const RemoteSshFolderEntryKind = Schema.Union([
+  Schema.Literal("directory"),
+  Schema.Literal("file"),
+  Schema.Literal("symlink"),
+]).annotate({ identifier: "RemoteV1.SshFolderEntryKind" })
+export type RemoteSshFolderEntryKind = typeof RemoteSshFolderEntryKind.Type
+
+export const RemoteSshFolderEntry = exact(
+  Schema.Struct({
+    name: RemoteSshFolderName,
+    path: RemoteSshAbsolutePath,
+    kind: RemoteSshFolderEntryKind,
+  }),
+).annotate({ identifier: "RemoteV1.SshFolderEntry" })
+export type RemoteSshFolderEntry = typeof RemoteSshFolderEntry.Type
+export type RemoteSshFolderEntryEncoded = typeof RemoteSshFolderEntry.Encoded
+
+export const RemoteSshFolderListing = exact(
+  Schema.Struct({
+    path: RemoteSshAbsolutePath,
+    entries: Schema.Array(RemoteSshFolderEntry).check(Schema.isMaxLength(RemoteSshFolderLimits.maxEntries)),
+    recentFolders: Schema.Array(RemoteSshAbsolutePath).check(
+      Schema.isMaxLength(RemoteSshFolderLimits.maxRecentFolders),
+    ),
+  }),
+).annotate({ identifier: "RemoteV1.SshFolderListing" })
+export type RemoteSshFolderListing = typeof RemoteSshFolderListing.Type
+export type RemoteSshFolderListingEncoded = typeof RemoteSshFolderListing.Encoded
+
+const RemoteCodexCliText = (limit: number, label: string) =>
+  Schema.String.check(
+    Schema.isMaxLength(limit),
+    Schema.makeFilter((value: string) =>
+      value.includes("\u0000") ? `${label} must not contain NUL bytes` : undefined,
+    ),
+  )
+
+export const RemoteCodexCliPrompt = RemoteCodexCliText(64 * 1024, "Codex CLI prompt")
+  .check(Schema.isNonEmpty())
+  .annotate({ identifier: "RemoteV1.CodexCliPrompt" })
+export type RemoteCodexCliPrompt = typeof RemoteCodexCliPrompt.Type
+
+export const RemoteCodexCliModel = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/),
+).annotate({ identifier: "RemoteV1.CodexCliModel" })
+export type RemoteCodexCliModel = typeof RemoteCodexCliModel.Type
+
+export const RemoteCodexCliProfile = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+).annotate({ identifier: "RemoteV1.CodexCliProfile" })
+export type RemoteCodexCliProfile = typeof RemoteCodexCliProfile.Type
+
+export const RemoteCodexCliSandbox = Schema.Union([
+  Schema.Literal("read-only"),
+  Schema.Literal("workspace-write"),
+  Schema.Literal("danger-full-access"),
+]).annotate({ identifier: "RemoteV1.CodexCliSandbox" })
+export type RemoteCodexCliSandbox = typeof RemoteCodexCliSandbox.Type
+
+export const RemoteCodexCliApproval = Schema.Union([
+  Schema.Literal("untrusted"),
+  Schema.Literal("on-failure"),
+  Schema.Literal("on-request"),
+  Schema.Literal("never"),
+]).annotate({ identifier: "RemoteV1.CodexCliApproval" })
+export type RemoteCodexCliApproval = typeof RemoteCodexCliApproval.Type
+
+export const RemoteCodexCliConfig = exact(
+  Schema.Struct({
+    model: Schema.optional(RemoteCodexCliModel),
+    profile: Schema.optional(RemoteCodexCliProfile),
+    sandbox: Schema.optional(RemoteCodexCliSandbox),
+    approval: Schema.optional(RemoteCodexCliApproval),
+  }),
+).annotate({ identifier: "RemoteV1.CodexCliConfig" })
+export type RemoteCodexCliConfig = typeof RemoteCodexCliConfig.Type
+export type RemoteCodexCliConfigEncoded = typeof RemoteCodexCliConfig.Encoded
+
+export const RemoteCodexCliRequest = exact(
+  Schema.Struct({
+    prompt: RemoteCodexCliPrompt,
+    config: Schema.optional(RemoteCodexCliConfig),
+  }),
+).annotate({ identifier: "RemoteV1.CodexCliRequest" })
+export type RemoteCodexCliRequest = typeof RemoteCodexCliRequest.Type
+export type RemoteCodexCliRequestEncoded = typeof RemoteCodexCliRequest.Encoded
+
+export const RemoteCodexCliResultStatus = Schema.Union([
+  Schema.Literal("completed"),
+  Schema.Literal("failed"),
+  Schema.Literal("cancelled"),
+]).annotate({ identifier: "RemoteV1.CodexCliResultStatus" })
+export type RemoteCodexCliResultStatus = typeof RemoteCodexCliResultStatus.Type
+
+export const RemoteCodexCliResultMetadata = exact(
+  Schema.Struct({
+    status: RemoteCodexCliResultStatus,
+    exitCode: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(255))),
+    durationMs: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(86_400_000))),
+    model: Schema.optional(RemoteCodexCliModel),
+    profile: Schema.optional(RemoteCodexCliProfile),
+    sandbox: Schema.optional(RemoteCodexCliSandbox),
+    approval: Schema.optional(RemoteCodexCliApproval),
+  }),
+).annotate({ identifier: "RemoteV1.CodexCliResultMetadata" })
+export type RemoteCodexCliResultMetadata = typeof RemoteCodexCliResultMetadata.Type
+export type RemoteCodexCliResultMetadataEncoded = typeof RemoteCodexCliResultMetadata.Encoded
+
+export const RemoteCodexCliResult = exact(
+  Schema.Struct({
+    output: RemoteCodexCliText(1024 * 1024, "Codex CLI output"),
+    metadata: RemoteCodexCliResultMetadata,
+  }),
+).annotate({ identifier: "RemoteV1.CodexCliResult" })
+export type RemoteCodexCliResult = typeof RemoteCodexCliResult.Type
+export type RemoteCodexCliResultEncoded = typeof RemoteCodexCliResult.Encoded
+
 const RemoteWorkspaceLocalShape = Schema.Struct({
   id: Workspace.ID,
   name: Text,
@@ -142,6 +306,8 @@ const RemoteWorkspaceSshShape = Schema.Struct({
   id: Workspace.ID,
   name: Text,
   mode: Schema.Literal("ssh"),
+  // Omitted by legacy peers; absence means local-slopcode for compatibility.
+  agent: Schema.optional(RemoteAgentMode),
   directory: AbsolutePath,
   remoteDirectory: AbsolutePath,
   ssh: RemoteSshProfile,

@@ -5,6 +5,11 @@ import {
   RemoteEnvelopeJson,
   RemotePairing,
   RemotePairingSelection,
+  RemoteCodexCliConfig,
+  RemoteCodexCliRequest,
+  RemoteCodexCliResult,
+  RemoteSshFolderLimits,
+  RemoteSshFolderListing,
   RemoteWorkspace,
   RemoteWorkspaceJson,
   RemoteWorkspaceSelectInput,
@@ -163,6 +168,232 @@ describe("remote protocol contracts", () => {
           pairingID: "pair_ssh-1",
           deviceID: "dev_phone-1",
           selectionNonce: "0123456789abcdef",
+        }),
+      ),
+    ).rejects.toThrow()
+  })
+
+  test("supports explicit agent modes without breaking legacy ssh workspaces", async () => {
+    const legacy = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteWorkspace)({
+        id: "wrk_legacy-ssh",
+        name: "legacy",
+        mode: "ssh",
+        directory: "/Users/marcos/src/legacy",
+        remoteDirectory: "/srv/legacy",
+        ssh: {
+          host: "build-box.internal",
+          port: 22,
+          user: "marcos",
+        },
+      }),
+    )
+    const local = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteWorkspace)({
+        id: "wrk_local-agent",
+        name: "local agent",
+        mode: "ssh",
+        agent: "local-slopcode",
+        directory: "/Users/marcos/src/local-agent",
+        remoteDirectory: "/srv/local-agent",
+        ssh: {
+          host: "build-box.internal",
+          port: 22,
+          user: "marcos",
+        },
+      }),
+    )
+    const codex = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteWorkspace)({
+        id: "wrk_codex-agent",
+        name: "codex agent",
+        mode: "ssh",
+        agent: "codex-cli",
+        directory: "/Users/marcos/src/codex-agent",
+        remoteDirectory: "/srv/codex-agent",
+        ssh: {
+          host: "build-box.internal",
+          port: 22,
+          user: "marcos",
+        },
+      }),
+    )
+
+    if (legacy.mode !== "ssh" || local.mode !== "ssh" || codex.mode !== "ssh") {
+      throw new Error("expected ssh workspaces")
+    }
+    expect(legacy.mode).toBe("ssh")
+    expect(legacy.agent).toBeUndefined()
+    expect(local.agent).toBe("local-slopcode")
+    expect(codex.agent).toBe("codex-cli")
+
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteWorkspace)({
+          id: "wrk_bad-agent",
+          name: "bad agent",
+          mode: "ssh",
+          agent: "shell",
+          directory: "/Users/marcos/src/bad-agent",
+          remoteDirectory: "/srv/bad-agent",
+          ssh: {
+            host: "build-box.internal",
+            port: 22,
+            user: "marcos",
+          },
+        }),
+      ),
+    ).rejects.toThrow()
+  })
+
+  test("accepts bounded ssh folder listings and recent folders", async () => {
+    const listing = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteSshFolderListing)({
+        path: "/Users/marcos",
+        entries: [
+          { name: "src", path: "/Users/marcos/src", kind: "directory" },
+          { name: "README.md", path: "/Users/marcos/README.md", kind: "file" },
+          { name: "current", path: "/Users/marcos/current", kind: "symlink" },
+        ],
+        recentFolders: ["/Users/marcos/src", "/srv/slopcode", "/tmp/worktree"],
+      }),
+    )
+
+    expect(String(listing.path)).toBe("/Users/marcos")
+    expect(listing.entries).toHaveLength(3)
+    expect(listing.entries[2]?.kind).toBe("symlink")
+    expect(listing.recentFolders.map(String)).toEqual(["/Users/marcos/src", "/srv/slopcode", "/tmp/worktree"])
+  })
+
+  test("rejects unsafe or unbounded ssh folder data", async () => {
+    const decode = (value: unknown) => Effect.runPromise(Schema.decodeUnknownEffect(RemoteSshFolderListing)(value))
+    const base = {
+      path: "/srv/project",
+      entries: [{ name: "src", path: "/srv/project/src", kind: "directory" }],
+      recentFolders: ["/srv/project"],
+    }
+
+    await expect(decode({ ...base, path: "/srv/project/../secrets" })).rejects.toThrow()
+    await expect(
+      decode({ ...base, entries: [{ name: "..", path: "/srv/project/..", kind: "directory" }] }),
+    ).rejects.toThrow()
+    await expect(
+      decode({ ...base, entries: [{ name: "src", path: "/srv/project\\src", kind: "directory" }] }),
+    ).rejects.toThrow()
+    await expect(
+      decode({ ...base, path: `/${"a".repeat(RemoteSshFolderLimits.maxPathLength)}` }),
+    ).rejects.toThrow()
+    await expect(
+      decode({
+        ...base,
+        entries: [{ name: "src", path: "/srv/project/src", kind: "directory", extra: true }],
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode({
+        ...base,
+        entries: Array.from({ length: RemoteSshFolderLimits.maxEntries + 1 }, (_, index) => ({
+          name: `entry-${index}`,
+          path: `/srv/project/entry-${index}`,
+          kind: "file" as const,
+        })),
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode({
+        ...base,
+        entries: [{
+          name: "a".repeat(RemoteSshFolderLimits.maxNameLength + 1),
+          path: "/srv/project/src",
+          kind: "file",
+        }],
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode({
+        ...base,
+        recentFolders: ["/srv/project", "/srv/one", "/srv/two", "/srv/three"],
+      }),
+    ).rejects.toThrow()
+    await expect(decode({ ...base, extra: true })).rejects.toThrow()
+  })
+
+  test("accepts bounded Codex CLI requests and result metadata", async () => {
+    const request = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteCodexCliRequest)({
+        prompt: "Inspect the selected remote folder and summarize the failing tests.",
+        config: {
+          model: "gpt-5.1-codex",
+          profile: "remote-safe",
+          sandbox: "workspace-write",
+          approval: "on-request",
+        },
+      }),
+    )
+    const result = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteCodexCliResult)({
+        output: "The test suite has one failing assertion.",
+        metadata: {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 1200,
+          model: "gpt-5.1-codex",
+          profile: "remote-safe",
+          sandbox: "workspace-write",
+          approval: "on-request",
+        },
+      }),
+    )
+
+    expect(request.config?.sandbox).toBe("workspace-write")
+    expect(result.metadata.status).toBe("completed")
+    expect(result.output).toContain("failing assertion")
+  })
+
+  test("rejects unbounded or command-shaped Codex CLI data", async () => {
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteCodexCliRequest)({
+          prompt: "p".repeat(64 * 1024 + 1),
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteCodexCliConfig)({
+          executable: "codex",
+          argv: ["exec"],
+          env: { CODEX_HOME: "/tmp/codex" },
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteCodexCliConfig)({
+          model: "m".repeat(129),
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteCodexCliConfig)({
+          sandbox: "shell",
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteCodexCliRequest)({
+          prompt: "Run the check",
+          command: "codex exec",
+        }),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteCodexCliResult)({
+          output: "done",
+          metadata: { status: "completed", executable: "codex" },
         }),
       ),
     ).rejects.toThrow()
