@@ -200,10 +200,10 @@ export const browseRemoteFolder = Effect.fn("RemoteRuntime.browse")(function* (i
 
 export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "remote-runtime", (handlers) =>
   Effect.gen(function* () {
-    const browse = Effect.fn("RemoteRuntimeHttpApi.browse")(function* (ctx: { query: { path: string } }) {
+    const browse = Effect.fn("RemoteRuntimeHttpApi.browse")(function* (ctx: { query: { path?: string } }) {
       const instance = yield* InstanceRef
       if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
-      return yield* browseRemoteFolder({ root: instance.directory, current: ctx.query.path })
+      return yield* browseRemoteFolder({ root: instance.directory, current: ctx.query.path ?? instance.directory })
     })
 
     const prompt = Effect.fn("RemoteRuntimeHttpApi.prompt")(function* (ctx: { payload: RemoteAgentPrompt }) {

@@ -228,6 +228,7 @@ function sameWorkspace(left: typeof RemoteWorkspace.Type, right: typeof RemoteWo
   if (left.mode === "ssh" && right.mode === "ssh") {
     return (
       left.remoteDirectory === right.remoteDirectory &&
+      (left.agent ?? "local-slopcode") === (right.agent ?? "local-slopcode") &&
       left.ssh.host === right.ssh.host &&
       left.ssh.port === right.ssh.port &&
       left.ssh.user === right.ssh.user

@@ -31,7 +31,7 @@ describe("normalizeSshTarget", () => {
   })
 
   test("preserves explicit agent modes in the normalized workspace", () => {
-    for (const agent of ["local-slopcode", "codex-cli"] as const) {
+    for (const agent of ["local-slopcode", "codex-cli", "opencode-cli"] as const) {
       const target = normalizeSshTarget(fixtureTarget({ agent }))
 
       expect(target.workspace.agent).toBe(agent)
@@ -327,12 +327,15 @@ describe("workspaceIdentity", () => {
     expect(first.stateKey).toBe(workspaceStateKey(first.id))
   })
 
-  test("separates local Slopcode and Codex CLI identities", () => {
+  test("separates each SSH agent identity", () => {
     const local = normalizeSshTarget(fixtureTarget({ agent: "local-slopcode" }))
     const codex = normalizeSshTarget(fixtureTarget({ agent: "codex-cli" }))
+    const opencode = normalizeSshTarget(fixtureTarget({ agent: "opencode-cli" }))
 
     expect(local.id).not.toBe(codex.id)
+    expect(codex.id).not.toBe(opencode.id)
     expect(local.stateKey).not.toBe(codex.stateKey)
+    expect(codex.stateKey).not.toBe(opencode.stateKey)
   })
 })
 
@@ -1297,7 +1300,7 @@ describe("createSshRemoteHostService", () => {
 
 function fixtureTarget(
   overrides: {
-    agent?: "local-slopcode" | "codex-cli"
+    agent?: "local-slopcode" | "codex-cli" | "opencode-cli"
     remoteDirectory?: string
     sshHost?: string
   } = {},

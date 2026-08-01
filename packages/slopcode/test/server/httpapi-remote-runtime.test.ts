@@ -86,6 +86,22 @@ describe("remote runtime HttpApi", () => {
     expect(JSON.stringify(body)).not.toContain("not returned")
   })
 
+  test("starts at the authenticated instance directory when path is omitted", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    await mkdir(path.join(tmp.path, "src"))
+
+    const response = await request(RemoteRuntimePaths.browse, tmp.path, {})
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.root).toBe(tmp.path)
+    expect(body.current).toBe(tmp.path)
+    expect(body.entries).toContainEqual({
+      name: "src",
+      path: path.join(tmp.path, "src"),
+      type: "directory",
+    })
+  })
+
   test("rejects traversal, file paths, and symlink escapes", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     await using outside = await tmpdir({ config: { formatter: false, lsp: false } })

@@ -25,7 +25,7 @@ const SafeConfigValue = Schema.String.check(Schema.isMinLength(1))
 
 export const RemoteBrowseQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  path: BoundedPath,
+  path: Schema.optional(BoundedPath),
 })
 
 export const RemoteAgentConfig = Schema.Struct({
@@ -81,7 +81,8 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
           OpenApi.annotations({
             identifier: "remote.ssh.browse",
             summary: "Browse remote folders",
-            description: "List bounded metadata for folders within the current authenticated instance directory.",
+            description:
+              "List bounded metadata for folders within the current authenticated instance directory; an omitted path starts at that directory.",
           }),
         ),
         HttpApiEndpoint.post("prompt", RemoteRuntimePaths.prompt, {
