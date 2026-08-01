@@ -6,6 +6,7 @@ import {
   RemoteTransportBodyChunk,
   RemoteTransportChallenge,
   RemoteTransportError,
+  RemoteTransportEventReplayResponse,
   RemoteTransportEventReplayRequest,
   RemoteTransportFrame,
   RemoteTransportFrameJson,
@@ -18,11 +19,17 @@ import {
   RemoteTransportQuestionNotification,
   RemoteTransportRemoteDirectory,
   RemoteTransportTarget,
+  createRemoteTransportChallengeStore,
+  createRemoteTransportIdempotencyStore,
+  remoteTransportAcknowledgeStream,
   remoteTransportAdvanceStream,
+  remoteTransportClaimIdempotency,
   remoteTransportComputeRequestDigest,
   remoteTransportComputeTargetDigest,
-  remoteTransportConsumeChallenge,
+  remoteTransportEncodeBase64Url,
   remoteTransportChallengeIsFresh,
+  remoteTransportVerifyRequestDigest,
+  remoteTransportVerifySessionProof,
   remoteTransportSessionAuthMatches,
   remoteTransportSessionProofTranscript,
 } from "../src/remote-transport"
@@ -68,7 +75,7 @@ const open = {
     proof: {
       algorithm: "ed25519",
       encoding: "base64url",
-      signature: "qt_pairing_signature",
+      signature: "A".repeat(86),
     },
   },
 } as const
@@ -126,6 +133,27 @@ describe("remote transport protocol contracts", () => {
         target,
         sequence: 0,
         chunk: utf8("event: message\\ndata: hello\\n\\n"),
+        final: true,
+      },
+      {
+        ...request,
+        type: "http.upload",
+        requestID: "req_upload_1",
+        idempotencyKey: "idem_upload_1",
+        method: "PUT",
+        path: "/api/file",
+        contentLength: 131_072,
+      },
+      {
+        version: "v1",
+        kind: "stream",
+        type: "http.upload.chunk",
+        requestID: "req_upload_1",
+        idempotencyKey: "idem_upload_1",
+        requestDigest: digest,
+        target,
+        sequence: 0,
+        chunk: base64("AP+A"),
         final: true,
       },
       {
@@ -261,8 +289,17 @@ describe("remote transport protocol contracts", () => {
     })
 
     if (value.type !== "session.open") throw new Error("expected session.open")
-    expect(await remoteTransportSessionAuthMatches(value)).toBe(true)
-    expect(remoteTransportSessionProofTranscript(value)).toContain('"domain":"slopcode-remote-v1"')
+    const requestDigest = await remoteTransportComputeRequestDigest(value)
+    expect(
+      await remoteTransportComputeRequestDigest({
+        ...value,
+        auth: { ...value.auth, proof: { ...value.auth.proof, signature: "A".repeat(86) } },
+      }),
+    ).toBe(requestDigest)
+    const authenticated = await decode(RemoteTransportFrame, { ...value, requestDigest })
+    if (authenticated.type !== "session.open") throw new Error("expected session.open")
+    expect(await remoteTransportSessionAuthMatches(authenticated, authenticated.target)).toBe(true)
+    expect(remoteTransportSessionProofTranscript(authenticated)).toContain('"domain":"slopcode-remote-v1"')
     await expect(
       decode(RemoteTransportFrame, {
         ...open,
@@ -275,16 +312,53 @@ describe("remote transport protocol contracts", () => {
     ).rejects.toThrow()
     const wrongDigest = await decode(RemoteTransportFrame, {
       ...open,
+      requestDigest,
       auth: { ...open.auth, targetDigest: "c".repeat(64) },
     })
     if (wrongDigest.type !== "session.open") throw new Error("expected session.open")
     expect(await remoteTransportSessionAuthMatches(wrongDigest)).toBe(false)
 
     const challenge = await decode(RemoteTransportChallenge, open.auth.challenge)
-    const consumed = remoteTransportConsumeChallenge(new Set(), challenge, challenge.issuedAt)
-    expect(consumed?.has(challenge.id)).toBe(true)
-    expect(remoteTransportConsumeChallenge(consumed ?? new Set(), challenge, challenge.issuedAt)).toBeUndefined()
     expect(remoteTransportChallengeIsFresh(challenge, challenge.expiresAt)).toBe(false)
+  })
+
+  test("requires a registered target, fresh challenge, exact digest, and Ed25519 proof", async () => {
+    const now = 1_700_000_000_000
+    const challenges = createRemoteTransportChallengeStore()
+    const challenge = challenges.issue(now)
+    const keys = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"])
+    const typedTarget = await decode(RemoteTransportTarget, target)
+    const targetDigest = await remoteTransportComputeTargetDigest(typedTarget)
+    const unsigned = await decode(RemoteTransportFrame, {
+      ...open,
+      auth: { ...open.auth, challenge, targetDigest },
+    })
+    if (unsigned.type !== "session.open") throw new Error("expected session.open")
+    const requestDigest = await remoteTransportComputeRequestDigest(unsigned)
+    const request = await decode(RemoteTransportFrame, { ...unsigned, requestDigest })
+    if (request.type !== "session.open") throw new Error("expected session.open")
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      new TextEncoder().encode(remoteTransportSessionProofTranscript(request)),
+    )
+    const signed = await decode(RemoteTransportFrame, {
+      ...request,
+      auth: { ...request.auth, proof: { ...request.auth.proof, signature: remoteTransportEncodeBase64Url(new Uint8Array(signature)) } },
+    })
+    if (signed.type !== "session.open") throw new Error("expected session.open")
+    expect(await remoteTransportVerifySessionProof(signed, typedTarget, keys.publicKey, challenges, now)).toBe(true)
+    expect(await remoteTransportVerifySessionProof(signed, typedTarget, keys.publicKey, challenges, now)).toBe(false)
+
+    const other = createRemoteTransportChallengeStore()
+    const otherTarget = await decode(RemoteTransportTarget, { ...target, remoteDirectory: "/srv/other" })
+    expect(await remoteTransportVerifySessionProof(signed, otherTarget, keys.publicKey, other, now)).toBe(false)
+    await expect(
+      decode(RemoteTransportFrame, {
+        ...signed,
+        auth: { ...signed.auth, proof: { ...signed.auth.proof, signature: "A".repeat(84) } },
+      }),
+    ).rejects.toThrow()
   })
 
   test("binds request digests to canonical JSON and supports bounded query strings", async () => {
@@ -297,20 +371,44 @@ describe("remote transport protocol contracts", () => {
     }
     const computed = await remoteTransportComputeRequestDigest(requestValue)
     expect(computed).toMatch(/^[0-9a-f]{64}$/)
-    expect(await decode(RemoteTransportHttpRequest, { ...requestValue, requestDigest: computed })).toMatchObject({
+    const typedRequest = await decode(RemoteTransportHttpRequest, { ...requestValue, requestDigest: computed })
+    expect(typedRequest).toMatchObject({
       query: requestValue.query,
     })
+    expect(await remoteTransportVerifyRequestDigest(typedRequest)).toBe(true)
+    const wrongRequest = await decode(RemoteTransportHttpRequest, { ...requestValue, requestDigest: digest })
+    expect(await remoteTransportVerifyRequestDigest(wrongRequest)).toBe(false)
 
-    for (const query of ["a=%2fetc", "a=%252e%252e", "a=%2e%2e", "a=%ZZ"]) {
-      await expect(
-        decode(RemoteTransportHttpRequest, { ...requestValue, query }),
-      ).rejects.toThrow()
+    for (const query of ["a=%2fetc", "a=%252e%252e", "a=%2e%2e", "a=%26b%3Dc", "q=hello+world"]) {
+      await expect(decode(RemoteTransportHttpRequest, { ...requestValue, query })).resolves.toMatchObject({ query })
+    }
+    for (const query of ["a=%ZZ", "a=%", "a=%23fragment", "a=%0d%0aInjected: yes"]) {
+      await expect(decode(RemoteTransportHttpRequest, { ...requestValue, query })).rejects.toThrow()
     }
     for (const path of ["/api%2f..%2fetc", "/api%5c..%5cetc", "/api%252e%252e/etc"]) {
       await expect(
         decode(RemoteTransportHttpRequest, { ...requestValue, query: undefined, path }),
       ).rejects.toThrow()
     }
+
+    const store = createRemoteTransportIdempotencyStore()
+    const first = await remoteTransportClaimIdempotency(store, "ses_remote_1", typedRequest)
+    expect(first).toEqual({ status: "accepted", replay: false })
+    expect(await remoteTransportClaimIdempotency(store, "ses_remote_1", typedRequest)).toEqual({
+      status: "accepted",
+      replay: true,
+    })
+    const invalid = await remoteTransportClaimIdempotency(store, "ses_remote_1", wrongRequest)
+    expect(invalid).toMatchObject({ status: "invalid-digest" })
+    const changedDigest = await remoteTransportComputeRequestDigest({ ...typedRequest, query: "different=1" })
+    const changed = await decode(RemoteTransportHttpRequest, {
+      ...typedRequest,
+      query: "different=1",
+      requestDigest: changedDigest,
+    })
+    expect(await remoteTransportClaimIdempotency(store, "ses_remote_1", changed)).toMatchObject({
+      status: "conflict",
+    })
   })
 
   test("rejects unsafe duplicate and forwarding headers", async () => {
@@ -346,12 +444,61 @@ describe("remote transport protocol contracts", () => {
   })
 
   test("accepts ordered stream chunks and rejects duplicates, gaps, and post-final data", () => {
-    const first = remoteTransportAdvanceStream(RemoteTransportInitialStreamState, { sequence: 0, final: false })
-    expect(first).toEqual({ nextSequence: 1, final: false })
-    expect(remoteTransportAdvanceStream(first!, { sequence: 2, final: false })).toBeUndefined()
-    const done = remoteTransportAdvanceStream(first!, { sequence: 1, final: true })
-    expect(done).toEqual({ nextSequence: 2, final: true })
-    expect(remoteTransportAdvanceStream(done!, { sequence: 2, final: true })).toBeUndefined()
+    const first = remoteTransportAdvanceStream(RemoteTransportInitialStreamState, {
+      sequence: 0,
+      chunk: utf8("a"),
+      final: false,
+    })
+    expect(first).toMatchObject({ nextSequence: 1, final: false, totalBytes: 1, windowBytes: 1 })
+    expect(remoteTransportAdvanceStream(first!, { sequence: 2, chunk: utf8("gap"), final: false })).toBeUndefined()
+    const acknowledged = remoteTransportAcknowledgeStream(first!, 1)
+    expect(acknowledged).toMatchObject({ windowBytes: 0, totalBytes: 1 })
+    const done = remoteTransportAdvanceStream(acknowledged!, { sequence: 1, chunk: utf8("b"), final: true })
+    expect(done).toMatchObject({ nextSequence: 2, final: true, totalBytes: 2, windowBytes: 1 })
+    expect(remoteTransportAdvanceStream(done!, { sequence: 2, chunk: utf8("duplicate"), final: true })).toBeUndefined()
+    expect(
+      remoteTransportAdvanceStream(
+        { ...RemoteTransportInitialStreamState, maxWindowBytes: 1 },
+        { sequence: 0, chunk: utf8("ab"), final: false },
+      ),
+    ).toBeUndefined()
+  })
+
+  test("rejects duplicate JSON keys and duplicate replay cursors", async () => {
+    const duplicate = JSON.stringify(open).replace('"kind":"request"', '"kind":"request","kind":"request"')
+    await expect(Promise.resolve().then(() => decode(RemoteTransportFrameJson, duplicate))).rejects.toThrow()
+    await expect(
+      decode(RemoteTransportEventReplayResponse, {
+        version: "v1",
+        kind: "response",
+        type: "event.replay",
+        requestID: "req_replay_duplicate_1",
+        idempotencyKey: "idem_replay_duplicate_1",
+        requestDigest: digest,
+        target,
+        events: [
+          {
+            version: "v1",
+            kind: "event",
+            type: "event",
+            target,
+            cursor: "cur_duplicate_1",
+            event: "session.message",
+            data: utf8("one"),
+          },
+          {
+            version: "v1",
+            kind: "event",
+            type: "event",
+            target,
+            cursor: "cur_duplicate_1",
+            event: "session.message",
+            data: utf8("two"),
+          },
+        ],
+        hasMore: false,
+      }),
+    ).rejects.toThrow()
   })
 
   test("rejects unknown fields at every fixed object boundary", async () => {

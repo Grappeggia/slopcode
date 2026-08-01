@@ -21,12 +21,16 @@ export const RemoteTransportLimits = {
   maxMetadataKeyBytes: 128,
   maxMetadataValueBytes: 2 * 1024,
   maxMetadataBytes: 16 * 1024,
-  maxBodyBytes: 1024 * 1024,
+  // A regular HTTP body is carried in one JSON frame. Larger bodies must use
+  // http.upload/http.upload.chunk, whose aggregate stream limit is separate.
+  maxBodyBytes: 64 * 1024,
   maxChunkBytes: 64 * 1024,
   maxFrameBytes: 256 * 1024,
   maxQueryBytes: 8 * 1024,
   maxArrayBytes: 128 * 1024,
   maxReplayBytes: 128 * 1024,
+  maxStreamBytes: 16 * 1024 * 1024,
+  maxStreamWindowBytes: 256 * 1024,
   maxPathBytes: 4 * 1024,
   maxIdentifierBytes: 128,
   maxEventNameBytes: 128,
@@ -105,28 +109,33 @@ export type RemoteTransportPath = typeof RemoteTransportPath.Type
 
 const isWithin = (path: string, root: string) => root === "/" || path === root || path.startsWith(`${root}/`)
 
+const decodeUrlComponent = (value: string) => {
+  if (/%(?![0-9a-f]{2})/i.test(value)) return undefined
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return undefined
+  }
+}
+
 const isSafeHttpPath = (value: string) => {
   if (value === "/") return true
   if (!value.startsWith("/") || value.includes("\\") || value.includes("\u0000") || value.includes("//")) return false
-  if (/[?#\r\n]/.test(value) || !isSafeUrlEncoding(value)) return false
-  const segments = value
+  if (/[?#\r\n]/.test(value)) return false
+  const decoded = decodeUrlComponent(value)
+  if (
+    decoded === undefined ||
+    decoded.includes("%") ||
+    /[\\\u0000-\u001f\u007f-\u009f?#]/.test(decoded)
+  )
+    return false
+  const segments = decoded
     .slice(1)
     .split("/")
   return segments.every(
     (segment, index) =>
       (segment.length > 0 || index === segments.length - 1) && segment !== "." && segment !== "..",
   )
-}
-
-const isSafeUrlEncoding = (value: string) => {
-  if (/%(?![0-9a-f]{2})/i.test(value)) return false
-  if (/%25|%2e|%2f|%5c|%3f|%23/i.test(value)) return false
-  try {
-    const decoded = decodeURIComponent(value)
-    return !/[\\\u0000-\u001f\u007f-\u009f?#]/.test(decoded) && !decoded.includes("..")
-  } catch {
-    return false
-  }
 }
 
 const HttpPath = text(RemoteTransportLimits.maxPathBytes, "HTTP path is too large").check(
@@ -138,10 +147,11 @@ const HttpPath = text(RemoteTransportLimits.maxPathBytes, "HTTP path is too larg
 export const RemoteTransportQuery = bounded(RemoteTransportLimits.maxQueryBytes, "HTTP query is too large").check(
   noControl("HTTP query contains control characters"),
   Schema.makeFilter((value: string) => {
-    if (value.includes("?") || value.includes("#") || value.includes("\\") || !isSafeUrlEncoding(value)) {
-      return "HTTP query contains unsafe URL encoding"
-    }
-    return undefined
+    if (value.includes("?") || value.includes("#") || value.includes("\\")) return "HTTP query contains unsafe delimiters"
+    const decoded = decodeUrlComponent(value)
+    return decoded === undefined || /[\u0000-\u001f\u007f-\u009f#]/.test(decoded)
+      ? "HTTP query contains malformed encoding or unsafe decoded characters"
+      : undefined
   }),
 )
 export type RemoteTransportQuery = typeof RemoteTransportQuery.Type
@@ -337,13 +347,30 @@ export type RemoteTransportRequestDigest = typeof RemoteTransportRequestDigest.T
 export const remoteTransportComputeTargetDigest = async (target: RemoteTransportTargetEncoded) =>
   sha256(remoteTransportCanonicalJson(target))
 
-/** Computes SHA-256 after removing the wire requestDigest field itself. */
+/**
+ * These are the only request fields omitted from a request digest. In
+ * particular, the client proof is excluded so the digest can be computed
+ * before signing and the signature transcript can include the digest without
+ * becoming circular.
+ */
+export const remoteTransportRequestDigestInput = <T extends object>(request: T) => {
+  const input = Object.fromEntries(Object.entries(request).filter(([key]) => key !== "requestDigest")) as Record<
+    string,
+    unknown
+  >
+  const auth = input.auth
+  if (auth !== null && typeof auth === "object" && !Array.isArray(auth)) {
+    input.auth = Object.fromEntries(Object.entries(auth).filter(([key]) => key !== "proof"))
+  }
+  return input
+}
+
+/** Computes SHA-256 after applying the explicit request digest exclusions. */
 export const remoteTransportComputeRequestDigest = async <T extends object>(request: T) =>
-  sha256(
-    remoteTransportCanonicalJson(
-      Object.fromEntries(Object.entries(request).filter(([key]) => key !== "requestDigest")),
-    ),
-  )
+  sha256(remoteTransportCanonicalJson(remoteTransportRequestDigestInput(request)))
+
+export const remoteTransportVerifyRequestDigest = async <T extends { requestDigest: string }>(request: T) =>
+  request.requestDigest === (await remoteTransportComputeRequestDigest(request))
 
 /**
  * Idempotency is scoped by the authenticated session, exact target, and the
@@ -363,10 +390,89 @@ export const remoteTransportIdempotencyBinding = (
     requestDigest,
   })
 
+export type RemoteTransportIdempotencyClaim =
+  | Readonly<{ status: "accepted"; replay: boolean }>
+  | Readonly<{ status: "conflict"; requestDigest: RemoteTransportRequestDigest }>
+  | Readonly<{ status: "invalid-digest"; expected: string }>
+
+export type RemoteTransportIdempotencyStore = Readonly<{
+  /** This operation must be implemented as one atomic compare-and-set. */
+  claim: (
+    sessionID: string,
+    target: RemoteTransportTarget,
+    idempotencyKey: RemoteTransportIdempotencyKey,
+    requestDigest: RemoteTransportRequestDigest,
+  ) => RemoteTransportIdempotencyClaim
+}>
+
+/**
+ * Creates a process-local atomic idempotency store. A multi-process server
+ * should implement the same claim operation with a transactional unique key
+ * on (sessionID, target, idempotencyKey).
+ */
+export const createRemoteTransportIdempotencyStore = (): RemoteTransportIdempotencyStore => {
+  const records = new Map<string, RemoteTransportRequestDigest>()
+  return {
+    claim: (sessionID, target, idempotencyKey, requestDigest) => {
+      const key = remoteTransportCanonicalJson({ sessionID, target, idempotencyKey })
+      const previous = records.get(key)
+      if (previous !== undefined) {
+        return previous === requestDigest
+          ? { status: "accepted", replay: true }
+          : { status: "conflict", requestDigest: previous }
+      }
+      records.set(key, requestDigest)
+      return { status: "accepted", replay: false }
+    },
+  }
+}
+
+/** Verifies a request digest before atomically claiming its idempotency key. */
+export const remoteTransportClaimIdempotency = async <
+  T extends {
+    idempotencyKey: RemoteTransportIdempotencyKey
+    requestDigest: RemoteTransportRequestDigest
+    target: RemoteTransportTarget
+  },
+>(store: RemoteTransportIdempotencyStore, sessionID: string, request: T) => {
+  const expected = await remoteTransportComputeRequestDigest(request)
+  if (request.requestDigest !== expected) return { status: "invalid-digest", expected } as const
+  return store.claim(sessionID, request.target, request.idempotencyKey, request.requestDigest)
+}
+
 const Base64Url = text(512, "base64url value is too large").check(
   Schema.isPattern(/^[A-Za-z0-9_-]+$/),
   noControl("base64url value contains control characters"),
 )
+
+export const remoteTransportDecodeBase64Url = (value: string) => {
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) return undefined
+  try {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4)
+    const binary = atob(padded)
+    const bytes = Uint8Array.from(binary, (item) => item.charCodeAt(0))
+    return remoteTransportEncodeBase64Url(bytes) === value ? bytes : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const remoteTransportEncodeBase64Url = (value: Uint8Array) => {
+  let binary = ""
+  for (const item of value) binary += String.fromCharCode(item)
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+export const RemoteTransportSignature = Base64Url.check(
+  Schema.makeFilter((value: string) => {
+    const bytes = remoteTransportDecodeBase64Url(value)
+    return bytes !== undefined && bytes.byteLength === 64 && value.length === 86
+      ? undefined
+      : "Ed25519 signatures must be exactly 64 bytes of unpadded base64url"
+  }),
+).annotate({ identifier: "RemoteTransportV1.Ed25519Signature" })
+export type RemoteTransportSignature = typeof RemoteTransportSignature.Type
+
 const Nonce = Base64Url.check(Schema.isMinLength(16))
 const Timestamp = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(9_999_999_999_999))
 const ChallengeID = boundedID("chl_", "challenge ID is too large").pipe(Schema.brand("RemoteTransport.ChallengeID"))
@@ -393,7 +499,7 @@ export const RemoteTransportSessionProof = exact(
   Schema.Struct({
     algorithm: Schema.Literal("ed25519"),
     encoding: Schema.Literal("base64url"),
-    signature: Base64Url,
+    signature: RemoteTransportSignature,
   }),
 ).annotate({ identifier: "RemoteTransportV1.SessionProof" })
 export type RemoteTransportSessionProof = typeof RemoteTransportSessionProof.Type
@@ -459,9 +565,9 @@ export type RemoteTransportSessionOpen = typeof RemoteTransportSessionOpen.Type
 
 /**
  * The signature covers this canonical transcript. The server issues the
- * challenge; the client signs it once with its pairing key. Receivers must
- * reject expired or previously consumed challenge IDs before verifying the
- * Ed25519 signature and must compare both target copies byte-for-byte.
+ * challenge; the client signs it once with its pairing key. The requestDigest
+ * in the transcript is computed with auth.proof excluded, so signing cannot
+ * create a circular digest.
  */
 export const remoteTransportSessionProofTranscript = (open: RemoteTransportSessionOpen) =>
   remoteTransportCanonicalJson({
@@ -478,24 +584,89 @@ export const remoteTransportSessionProofTranscript = (open: RemoteTransportSessi
     challenge: open.auth.challenge,
   })
 
-export const remoteTransportSessionAuthMatches = async (open: RemoteTransportSessionOpen) =>
-  sameTarget(open.target, open.auth.target) &&
-  open.target.pairingID === open.auth.pairingID &&
-  open.auth.targetDigest === (await remoteTransportComputeTargetDigest(open.target))
+export const remoteTransportSessionAuthMatches = async (
+  open: RemoteTransportSessionOpen,
+  registeredTarget: RemoteTransportTarget = open.target,
+) =>
+  sameTarget(open.target, registeredTarget) &&
+  sameTarget(open.auth.target, registeredTarget) &&
+  open.auth.pairingID === registeredTarget.pairingID &&
+  open.auth.targetDigest === (await remoteTransportComputeTargetDigest(registeredTarget)) &&
+  (await remoteTransportVerifyRequestDigest(open))
 
 export const remoteTransportChallengeIsFresh = (
   challenge: RemoteTransportChallenge,
   now = Date.now(),
 ) => challenge.issuedAt <= now && now < challenge.expiresAt
 
-/** Returns a new replay set only when a challenge is fresh and unused. */
-export const remoteTransportConsumeChallenge = (
-  consumed: ReadonlySet<string>,
-  challenge: RemoteTransportChallenge,
+export type RemoteTransportChallengeStore = Readonly<{
+  /** This operation must atomically compare, validate, and consume a challenge. */
+  consume: (challenge: RemoteTransportChallenge, now?: number) => boolean
+}>
+
+export type RemoteTransportChallengeIssuer = RemoteTransportChallengeStore &
+  Readonly<{
+    issue: (now?: number, ttlMs?: number) => RemoteTransportChallenge
+  }>
+
+/**
+ * Creates a process-local challenge store with an atomic consume operation.
+ * A multi-process server should replace consume with a transactional
+ * compare-and-delete keyed by challenge ID and the complete challenge value.
+ */
+export const createRemoteTransportChallengeStore = (): RemoteTransportChallengeIssuer => {
+  const pending = new Map<string, RemoteTransportChallenge>()
+  return {
+    issue: (now = Date.now(), ttlMs = 60_000) => {
+      const expiresAt = now + Math.min(Math.max(ttlMs, 1), 5 * 60 * 1000)
+      const challenge = Schema.decodeUnknownSync(RemoteTransportChallenge)({
+        issuer: "server",
+        id: `chl_${remoteTransportEncodeBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(18)))}`,
+        nonce: remoteTransportEncodeBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(24))),
+        issuedAt: now,
+        expiresAt,
+        oneTime: true,
+      })
+      pending.set(challenge.id, challenge)
+      return challenge
+    },
+    consume: (challenge, now = Date.now()) => {
+      const stored = pending.get(challenge.id)
+      if (stored === undefined) return false
+      if (remoteTransportCanonicalJson(stored) !== remoteTransportCanonicalJson(challenge)) return false
+      if (!remoteTransportChallengeIsFresh(stored, now)) {
+        pending.delete(challenge.id)
+        return false
+      }
+      pending.delete(challenge.id)
+      return true
+    },
+  }
+}
+
+export type RemoteTransportPublicKeyVerifier =
+  | CryptoKey
+  | ((transcript: Uint8Array, signature: Uint8Array) => boolean | Promise<boolean>)
+
+/**
+ * Verifies a session open against the registered target, registered pairing
+ * public key/verifier, and a synchronized one-time challenge store.
+ */
+export const remoteTransportVerifySessionProof = async (
+  open: RemoteTransportSessionOpen,
+  registeredTarget: RemoteTransportTarget,
+  verifier: RemoteTransportPublicKeyVerifier,
+  challenges: RemoteTransportChallengeStore,
   now = Date.now(),
 ) => {
-  if (!remoteTransportChallengeIsFresh(challenge, now) || consumed.has(challenge.id)) return undefined
-  return new Set(consumed).add(challenge.id)
+  if (!(await remoteTransportSessionAuthMatches(open, registeredTarget))) return false
+  if (!challenges.consume(open.auth.challenge, now)) return false
+  const signature = remoteTransportDecodeBase64Url(open.auth.proof.signature)
+  if (signature === undefined || signature.byteLength !== 64) return false
+  const transcript = encoder.encode(remoteTransportSessionProofTranscript(open))
+  if (typeof verifier === "function") return await verifier(transcript, signature)
+  if (verifier.type !== "public" || verifier.algorithm.name !== "Ed25519") return false
+  return globalThis.crypto.subtle.verify("Ed25519", verifier, signature, transcript)
 }
 
 export const RemoteTransportSessionClose = exact(
@@ -561,7 +732,8 @@ const makeBody = (max: number, message: string) =>
  * Bodies are intentionally discriminated. utf8 is measured after UTF-8
  * encoding; base64 is canonical standard Base64 and measured after decode.
  * Receivers must decode once and never reinterpret either form as a URL or
- * another charset.
+ * another charset. The 64 KiB single-frame limit leaves room for the JSON
+ * envelope; use http.upload for larger binary operations.
  */
 export const RemoteTransportBody = makeBody(RemoteTransportLimits.maxBodyBytes, "HTTP body is too large")
 export type RemoteTransportBody = typeof RemoteTransportBody.Type
@@ -574,6 +746,24 @@ const bodyByteLength = (body: RemoteTransportBody | RemoteTransportBodyChunk) =>
 
 const HttpMethod = Schema.Literals(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 const HttpStatus = Schema.Int.check(Schema.isGreaterThanOrEqualTo(100), Schema.isLessThanOrEqualTo(599))
+const UploadLength = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(RemoteTransportLimits.maxStreamBytes),
+)
+
+/** Opens a bounded, ordered HTTP request-body stream. */
+export const RemoteTransportHttpUpload = exact(
+  Schema.Struct({
+    ...requestFields,
+    type: Schema.Literal("http.upload"),
+    method: HttpMethod,
+    path: HttpPath,
+    query: Schema.optional(RemoteTransportQuery),
+    headers: Schema.optional(RemoteTransportHeaders),
+    contentLength: Schema.optional(UploadLength),
+  }),
+).annotate({ identifier: "RemoteTransportV1.HttpUpload" })
+export type RemoteTransportHttpUpload = typeof RemoteTransportHttpUpload.Type
 
 export const RemoteTransportHttpRequest = exact(
   Schema.Struct({
@@ -609,6 +799,17 @@ export const RemoteTransportHttpChunk = exact(
   }),
 ).annotate({ identifier: "RemoteTransportV1.HttpChunk" })
 export type RemoteTransportHttpChunk = typeof RemoteTransportHttpChunk.Type
+
+export const RemoteTransportHttpUploadChunk = exact(
+  Schema.Struct({
+    ...streamFields,
+    type: Schema.Literal("http.upload.chunk"),
+    sequence: Sequence,
+    chunk: RemoteTransportBodyChunk,
+    final: Schema.Boolean,
+  }),
+).annotate({ identifier: "RemoteTransportV1.HttpUploadChunk" })
+export type RemoteTransportHttpUploadChunk = typeof RemoteTransportHttpUploadChunk.Type
 
 export const RemoteTransportEventReplayRequest = exact(
   Schema.Struct({
@@ -649,11 +850,21 @@ export const RemoteTransportEventReplayResponse = exact(eventReplayResponseShape
   .check(
     Schema.makeFilter<typeof eventReplayResponseShape.Type>((value) =>
       value.events.every((event) => sameTarget(event.target, value.target))
-        ? jsonBytes(value.events) <= RemoteTransportLimits.maxReplayBytes &&
-            value.events.reduce((sum, event) => sum + bodyByteLength(event.data), 0) <=
-              RemoteTransportLimits.maxReplayBytes
-          ? undefined
-          : "event replay is too large"
+        ? (() => {
+            const cursors = new Set<string>()
+            for (const event of value.events) {
+              if (cursors.has(event.cursor)) return "replayed event cursors must be unique"
+              cursors.add(event.cursor)
+            }
+            if (value.nextCursor !== undefined && cursors.has(value.nextCursor)) {
+              return "nextCursor must not duplicate a replayed event cursor"
+            }
+            return jsonBytes(value.events) <= RemoteTransportLimits.maxReplayBytes &&
+              value.events.reduce((sum, event) => sum + bodyByteLength(event.data), 0) <=
+                RemoteTransportLimits.maxReplayBytes
+              ? undefined
+              : "event replay data is too large"
+          })()
         : "replayed event target is outside response scope",
     ),
   )
@@ -736,12 +947,25 @@ export type RemoteTransportPtyOutput = typeof RemoteTransportPtyOutput.Type
 export type RemoteTransportStreamState = Readonly<{
   nextSequence: number
   final: boolean
+  totalBytes: number
+  windowBytes: number
+  maxBytes: number
+  maxWindowBytes: number
 }>
 
-export const RemoteTransportInitialStreamState: RemoteTransportStreamState = {
+export const remoteTransportCreateStreamState = (
+  maxBytes = RemoteTransportLimits.maxStreamBytes,
+  maxWindowBytes = RemoteTransportLimits.maxStreamWindowBytes,
+): RemoteTransportStreamState => ({
   nextSequence: 0,
   final: false,
-}
+  totalBytes: 0,
+  windowBytes: 0,
+  maxBytes: Math.min(maxBytes, RemoteTransportLimits.maxStreamBytes),
+  maxWindowBytes: Math.min(maxWindowBytes, RemoteTransportLimits.maxStreamWindowBytes),
+})
+
+export const RemoteTransportInitialStreamState = remoteTransportCreateStreamState()
 
 /**
  * Advances a stream only for the next sequence number. Once a final chunk is
@@ -750,13 +974,25 @@ export const RemoteTransportInitialStreamState: RemoteTransportStreamState = {
  */
 export const remoteTransportAdvanceStream = (
   state: RemoteTransportStreamState,
-  chunk: Pick<RemoteTransportHttpChunk | RemoteTransportPtyOutput, "sequence" | "final">,
+  chunk: Pick<RemoteTransportHttpChunk | RemoteTransportHttpUploadChunk | RemoteTransportPtyOutput, "sequence" | "final" | "chunk">,
 ) => {
   if (state.final || chunk.sequence !== state.nextSequence) return undefined
+  const bytes = bodyByteLength(chunk.chunk)
+  if (state.totalBytes + bytes > state.maxBytes || state.windowBytes + bytes > state.maxWindowBytes) return undefined
   return {
     nextSequence: state.nextSequence + 1,
     final: chunk.final,
+    totalBytes: state.totalBytes + bytes,
+    windowBytes: state.windowBytes + bytes,
+    maxBytes: state.maxBytes,
+    maxWindowBytes: state.maxWindowBytes,
   } satisfies RemoteTransportStreamState
+}
+
+/** Records downstream consumption so a producer can receive another window. */
+export const remoteTransportAcknowledgeStream = (state: RemoteTransportStreamState, bytes: number) => {
+  if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > state.windowBytes) return undefined
+  return { ...state, windowBytes: state.windowBytes - bytes } satisfies RemoteTransportStreamState
 }
 
 export const remoteTransportStreamComplete = (state: RemoteTransportStreamState) => state.final
@@ -910,6 +1146,7 @@ export const RemoteTransportRequest = Schema.Union([
   RemoteTransportSessionOpen,
   RemoteTransportSessionClose,
   RemoteTransportHttpRequest,
+  RemoteTransportHttpUpload,
   RemoteTransportEventReplayRequest,
   RemoteTransportPtyOpen,
   RemoteTransportPtyInput,
@@ -931,7 +1168,11 @@ export const RemoteTransportResponse = Schema.Union([
 ]).annotate({ identifier: "RemoteTransportV1.Response" })
 export type RemoteTransportResponse = typeof RemoteTransportResponse.Type
 
-export const RemoteTransportStream = Schema.Union([RemoteTransportHttpChunk, RemoteTransportPtyOutput]).annotate({
+export const RemoteTransportStream = Schema.Union([
+  RemoteTransportHttpChunk,
+  RemoteTransportHttpUploadChunk,
+  RemoteTransportPtyOutput,
+]).annotate({
   identifier: "RemoteTransportV1.Stream",
 })
 export type RemoteTransportStream = typeof RemoteTransportStream.Type
@@ -947,6 +1188,7 @@ export const RemoteTransportFrame = Schema.Union([
   RemoteTransportSessionOpen,
   RemoteTransportSessionClose,
   RemoteTransportHttpRequest,
+  RemoteTransportHttpUpload,
   RemoteTransportEventReplayRequest,
   RemoteTransportPtyOpen,
   RemoteTransportPtyInput,
@@ -962,6 +1204,7 @@ export const RemoteTransportFrame = Schema.Union([
   RemoteTransportPtyOpened,
   RemoteTransportPtyClosed,
   RemoteTransportHttpChunk,
+  RemoteTransportHttpUploadChunk,
   RemoteTransportPtyOutput,
   RemoteTransportSseEvent,
   RemoteTransportApprovalNotification,
@@ -970,6 +1213,117 @@ export const RemoteTransportFrame = Schema.Union([
 ]).annotate({ identifier: "RemoteTransportV1.Frame" })
 export type RemoteTransportFrame = typeof RemoteTransportFrame.Type
 export type RemoteTransportFrameEncoded = typeof RemoteTransportFrame.Encoded
+
+/** Scans JSON before parsing so last-key-wins semantics cannot hide duplicates. */
+const assertNoDuplicateJsonKeys = (source: string) => {
+  let index = 0
+  const fail = () => {
+    throw new Error("invalid JSON frame")
+  }
+  const skip = () => {
+    while (/\s/.test(source[index] ?? "")) index++
+  }
+  const string = () => {
+    if (source[index++] !== '"') fail()
+    let result = ""
+    while (index < source.length) {
+      const value = source[index++]
+      if (value === '"') return result
+      if (value === undefined || value < " ") fail()
+      if (value !== "\\") {
+        result += value
+        continue
+      }
+      const escaped = source[index++]
+      if (escaped === undefined) fail()
+      if (escaped === "u") {
+        const hex = source.slice(index, index + 4)
+        if (!/^[0-9a-f]{4}$/i.test(hex)) fail()
+        result += String.fromCharCode(Number.parseInt(hex, 16))
+        index += 4
+        continue
+      }
+      const replacements: Record<string, string> = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        b: "\b",
+        f: "\f",
+        n: "\n",
+        r: "\r",
+        t: "\t",
+      }
+      const replacement = replacements[escaped]
+      if (replacement === undefined) fail()
+      result += replacement
+    }
+    return fail()
+  }
+  const value = (depth: number): void => {
+    if (depth > 64) fail()
+    skip()
+    const current = source[index]
+    if (current === '"') {
+      string()
+      return
+    }
+    if (current === "{") {
+      index++
+      skip()
+      const keys = new Set<string>()
+      if (source[index] === "}") {
+        index++
+        return
+      }
+      while (true) {
+        skip()
+        const key = string()
+        if (keys.has(key)) fail()
+        keys.add(key)
+        skip()
+        if (source[index++] !== ":") fail()
+        value(depth + 1)
+        skip()
+        const delimiter = source[index++]
+        if (delimiter === "}") return
+        if (delimiter !== ",") fail()
+      }
+    }
+    if (current === "[") {
+      index++
+      skip()
+      if (source[index] === "]") {
+        index++
+        return
+      }
+      while (true) {
+        value(depth + 1)
+        skip()
+        const delimiter = source[index++]
+        if (delimiter === "]") return
+        if (delimiter !== ",") fail()
+      }
+    }
+    if (source.startsWith("true", index)) {
+      index += 4
+      return
+    }
+    if (source.startsWith("false", index)) {
+      index += 5
+      return
+    }
+    if (source.startsWith("null", index)) {
+      index += 4
+      return
+    }
+    const number = source.slice(index).match(/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/)
+    if (number === null) return fail()
+    index += number[0].length
+  }
+  value(0)
+  skip()
+  if (index !== source.length) fail()
+}
 
 const RemoteTransportFrameJsonSource = Schema.String.check(
   Schema.makeFilter((value: string) =>
@@ -986,7 +1340,10 @@ const RemoteTransportFrameJsonSource = Schema.String.check(
  */
 export const RemoteTransportFrameJson = RemoteTransportFrameJsonSource.pipe(
   Schema.decodeTo(RemoteTransportFrame, {
-    decode: SchemaGetter.transform((value: string) => JSON.parse(value) as RemoteTransportFrameEncoded),
+    decode: SchemaGetter.transform((value: string) => {
+      assertNoDuplicateJsonKeys(value)
+      return JSON.parse(value) as RemoteTransportFrameEncoded
+    }),
     encode: SchemaGetter.stringifyJson(),
   }),
 ).annotate({
