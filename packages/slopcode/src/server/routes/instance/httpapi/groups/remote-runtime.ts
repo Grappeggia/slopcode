@@ -35,7 +35,10 @@ export const RemoteAgentConfig = Schema.Struct({
   approval: Schema.optional(Schema.Literals(["untrusted", "on-failure", "on-request", "never"])),
 })
 
+export const RemoteAgent = Schema.Literals(["codex-cli", "opencode-cli"])
+
 export const RemoteAgentPrompt = Schema.Struct({
+  agent: RemoteAgent,
   prompt: Schema.String.check(Schema.isMinLength(1))
     .check(Schema.isMaxLength(MAX_CODEX_PROMPT_LENGTH))
     .check(Schema.isPattern(/^[^\0]*$/)),
@@ -84,14 +87,14 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
         HttpApiEndpoint.post("prompt", RemoteRuntimePaths.prompt, {
           query: WorkspaceRoutingQuery,
           payload: RemoteAgentPrompt,
-          success: described(RemoteAgentResult, "Codex CLI result"),
+          success: described(RemoteAgentResult, "Selected agent CLI result"),
           error: [InvalidRequestError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "remote.agent.prompt",
-            summary: "Run a Codex CLI prompt",
+            summary: "Run a selected agent CLI prompt",
             description:
-              "Run the fixed Codex CLI executable in the current instance directory with bounded output and allowlisted configuration.",
+              "Run the fixed Codex or OpenCode CLI executable selected by the caller in the current instance directory with bounded output and allowlisted configuration.",
           }),
         ),
       )
@@ -102,11 +105,12 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
   .annotateMerge(
     OpenApi.annotations({
       title: "remote runtime",
-      description: "Authenticated runtime endpoints for remote folder browsing and Codex CLI prompts.",
+      description: "Authenticated runtime endpoints for remote folder browsing and selected agent CLI prompts.",
     }),
   )
 
 export type RemoteAgentConfig = typeof RemoteAgentConfig.Type
+export type RemoteAgent = typeof RemoteAgent.Type
 export type RemoteAgentPrompt = typeof RemoteAgentPrompt.Type
 export type RemoteBrowseQuery = typeof RemoteBrowseQuery.Type
 export type RemoteBrowseResult = typeof RemoteBrowseResult.Type

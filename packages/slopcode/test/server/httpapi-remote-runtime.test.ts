@@ -10,7 +10,7 @@ import {
   MAX_REMOTE_ENTRIES,
   RemoteRuntimePaths,
 } from "../../src/server/routes/instance/httpapi/groups/remote-runtime"
-import { buildCodexArguments, runCodexPrompt } from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
+import { buildAgentCommand, runAgentPrompt } from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
 import { workspaceProxyURL } from "../../src/server/shared/workspace-routing"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
@@ -130,7 +130,7 @@ describe("remote runtime HttpApi", () => {
       {},
       {
         method: "POST",
-        body: JSON.stringify({ prompt: "x".repeat(MAX_CODEX_PROMPT_LENGTH + 1) }),
+        body: JSON.stringify({ agent: "codex-cli", prompt: "x".repeat(MAX_CODEX_PROMPT_LENGTH + 1) }),
       },
     )
     const nul = await request(
@@ -139,7 +139,7 @@ describe("remote runtime HttpApi", () => {
       {},
       {
         method: "POST",
-        body: JSON.stringify({ prompt: "safe\0unsafe" }),
+        body: JSON.stringify({ agent: "codex-cli", prompt: "safe\0unsafe" }),
       },
     )
     expect(response.status).toBe(400)
@@ -159,32 +159,60 @@ describe("remote runtime HttpApi", () => {
   })
 })
 
-describe("remote Codex runtime", () => {
+describe("remote agent runtime", () => {
+  test("requires an explicit supported agent at the HTTP route", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const missing = await request(
+      RemoteRuntimePaths.prompt,
+      tmp.path,
+      {},
+      {
+        method: "POST",
+        body: JSON.stringify({ prompt: "missing agent" }),
+      },
+    )
+    const unknown = await request(
+      RemoteRuntimePaths.prompt,
+      tmp.path,
+      {},
+      {
+        method: "POST",
+        body: JSON.stringify({ agent: "shell", prompt: "unknown agent" }),
+      },
+    )
+    expect(missing.status).toBe(400)
+    expect(unknown.status).toBe(400)
+  })
+
   test("builds fixed argv with validated allowlisted configuration", () => {
     const prompt = "$(touch /tmp/should-not-run) --model injected"
     expect(
-      buildCodexArguments(prompt, {
+      buildAgentCommand("codex-cli", prompt, {
         model: "gpt-5",
         profile: "safe-profile",
         sandbox: "workspace-write",
         approval: "on-request",
       }),
-    ).toEqual([
-      "exec",
-      "--model",
-      "gpt-5",
-      "--profile",
-      "safe-profile",
-      "--sandbox",
-      "workspace-write",
-      "--ask-for-approval",
-      "on-request",
-      "--",
-      prompt,
-    ])
+    ).toEqual({
+      executable: "codex",
+      args: [
+        "exec",
+        "--model",
+        "gpt-5",
+        "--profile",
+        "safe-profile",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "on-request",
+        "--",
+        prompt,
+      ],
+    })
+    expect(buildAgentCommand("opencode-cli", prompt)).toEqual({ executable: "opencode", args: ["run", "--", prompt] })
   })
 
-  test("runs with cwd and no client-controlled shell options", async () => {
+  test("runs both selected executables with cwd and no client-controlled shell options", async () => {
     const commands: Array<{ command: string; args: readonly string[]; options: Record<string, unknown> }> = []
     const process = Layer.mock(AppProcess.Service)({
       run: (command) => {
@@ -194,7 +222,8 @@ describe("remote Codex runtime", () => {
     })
 
     const result = await Effect.runPromise(
-      runCodexPrompt({
+      runAgentPrompt({
+        agent: "codex-cli",
         directory: "/authorized/project",
         prompt: "inspect the project",
         config: { model: "gpt-5" },
@@ -209,6 +238,17 @@ describe("remote Codex runtime", () => {
     })
     expect(commands[0].options.shell).toBeUndefined()
     expect(commands[0].options.env).toBeUndefined()
+
+    await Effect.runPromise(
+      runAgentPrompt({ agent: "opencode-cli", directory: "/authorized/project", prompt: "inspect with opencode" }).pipe(
+        Effect.provide(process),
+      ),
+    )
+    expect(commands[1]).toMatchObject({
+      command: "opencode",
+      args: ["run", "--", "inspect with opencode"],
+      options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
+    })
   })
 
   test("returns failed and timed-out statuses without exposing process command details", async () => {
@@ -227,8 +267,12 @@ describe("remote Codex runtime", () => {
     })
 
     const [failedResult, timeoutResult] = await Promise.all([
-      Effect.runPromise(runCodexPrompt({ directory: "/project", prompt: "fail" }).pipe(Effect.provide(failed))),
-      Effect.runPromise(runCodexPrompt({ directory: "/project", prompt: "wait" }).pipe(Effect.provide(timeout))),
+      Effect.runPromise(
+        runAgentPrompt({ agent: "codex-cli", directory: "/project", prompt: "fail" }).pipe(Effect.provide(failed)),
+      ),
+      Effect.runPromise(
+        runAgentPrompt({ agent: "codex-cli", directory: "/project", prompt: "wait" }).pipe(Effect.provide(timeout)),
+      ),
     ])
 
     expect(failedResult).toEqual({ output: "failed", status: "failed", exitCode: 7 })
@@ -248,7 +292,7 @@ describe("remote Codex runtime", () => {
     })
 
     const result = await Effect.runPromise(
-      runCodexPrompt({ directory: "/project", prompt: "large" }).pipe(Effect.provide(process)),
+      runAgentPrompt({ agent: "codex-cli", directory: "/project", prompt: "large" }).pipe(Effect.provide(process)),
     )
     expect(Buffer.byteLength(result.output)).toBeLessThanOrEqual(MAX_CODEX_OUTPUT_BYTES)
   })

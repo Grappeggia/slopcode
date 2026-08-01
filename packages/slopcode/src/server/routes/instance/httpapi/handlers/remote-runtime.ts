@@ -11,6 +11,7 @@ import {
   MAX_REMOTE_ENTRIES,
   MAX_REMOTE_ENTRY_NAME_LENGTH,
   MAX_REMOTE_PATH_LENGTH,
+  RemoteAgent,
   RemoteAgentConfig,
   RemoteAgentPrompt,
   RemoteBrowseResult,
@@ -18,8 +19,15 @@ import {
 } from "../groups/remote-runtime"
 import { ApiNotFoundError, ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "../errors"
 
-const CODEX_EXECUTABLE = "codex"
 const CODEX_FORCE_KILL_AFTER = Duration.seconds(2)
+const AGENT_EXECUTABLES = {
+  "codex-cli": "codex",
+  "opencode-cli": "opencode",
+} as const
+const AGENT_COMMANDS = {
+  "codex-cli": "exec",
+  "opencode-cli": "run",
+} as const
 const ENTRY_TYPE_RANK = {
   directory: 0,
   file: 1,
@@ -29,6 +37,7 @@ const ENTRY_TYPE_RANK = {
 
 type Entry = (typeof RemoteBrowseResult.Type.entries)[number]
 type Config = typeof RemoteAgentConfig.Type
+type Agent = typeof RemoteAgent.Type
 
 type FilesystemError = {
   readonly code?: string
@@ -65,29 +74,35 @@ function boundedOutput(stdout: Uint8Array, stderr: Uint8Array) {
   return output.toString("utf8")
 }
 
-function codexArguments(prompt: string, config?: Config) {
-  const args = ["exec"]
+function agentCommand(agent: Agent, prompt: string, config?: Config) {
+  const executable = AGENT_EXECUTABLES[agent]
+  const command = AGENT_COMMANDS[agent]
+  if (!executable || !command) return undefined
+  const args: Array<string> = [command]
   if (config?.model) args.push("--model", config.model)
   if (config?.profile) args.push("--profile", config.profile)
   if (config?.sandbox) args.push("--sandbox", config.sandbox)
   if (config?.approval) args.push("--ask-for-approval", config.approval)
   args.push("--", prompt)
-  return args
+  return { executable, args }
 }
 
 function timedOut(error: AppProcess.AppProcessError) {
   return error.message.includes("Timed out") || String(error.cause ?? "").includes("Timed out")
 }
 
-export const buildCodexArguments = codexArguments
+export const buildAgentCommand = agentCommand
 
-export const runCodexPrompt = Effect.fn("RemoteRuntime.codexPrompt")(function* (input: {
+export const runAgentPrompt = Effect.fn("RemoteRuntime.agentPrompt")(function* (input: {
+  readonly agent: Agent
   readonly directory: string
   readonly prompt: string
   readonly config?: Config
 }) {
   const process = yield* AppProcess.Service
-  const command = ChildProcess.make(CODEX_EXECUTABLE, codexArguments(input.prompt, input.config), {
+  const selected = agentCommand(input.agent, input.prompt, input.config)
+  if (!selected) return yield* new InvalidRequestError({ message: "unsupported agent", field: "agent" })
+  const command = ChildProcess.make(selected.executable, selected.args, {
     cwd: input.directory,
     extendEnv: true,
     stdin: "ignore",
@@ -194,7 +209,8 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
     const prompt = Effect.fn("RemoteRuntimeHttpApi.prompt")(function* (ctx: { payload: RemoteAgentPrompt }) {
       const instance = yield* InstanceRef
       if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
-      return yield* runCodexPrompt({
+      return yield* runAgentPrompt({
+        agent: ctx.payload.agent,
         directory: instance.directory,
         prompt: ctx.payload.prompt,
         config: ctx.payload.config,
