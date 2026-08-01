@@ -1,5 +1,5 @@
 import { AbsolutePath, PositiveInt, Workspace } from "@slopcode-ai/schema"
-import { Schema, SchemaParser } from "effect"
+import { Schema, SchemaGetter, SchemaParser } from "effect"
 import {
   RemoteEventCursor,
   RemoteHostID,
@@ -23,6 +23,10 @@ export const RemoteTransportLimits = {
   maxMetadataBytes: 16 * 1024,
   maxBodyBytes: 1024 * 1024,
   maxChunkBytes: 64 * 1024,
+  maxFrameBytes: 256 * 1024,
+  maxQueryBytes: 8 * 1024,
+  maxArrayBytes: 128 * 1024,
+  maxReplayBytes: 128 * 1024,
   maxPathBytes: 4 * 1024,
   maxIdentifierBytes: 128,
   maxEventNameBytes: 128,
@@ -38,7 +42,15 @@ const bounded = (max: number, message: string) =>
   Schema.String.check(Schema.makeFilter((value: string) => (byteLength(value) <= max ? undefined : message)))
 const text = (max: number, message: string) => bounded(max, message).check(Schema.isMinLength(1))
 const noControl = (message: string) =>
-  Schema.makeFilter<string>((value) => (value.includes("\u0000") ? message : undefined))
+  Schema.makeFilter<string>((value) => (/[\u0000-\u001f\u007f-\u009f]/.test(value) ? message : undefined))
+
+const jsonBytes = (value: unknown) => byteLength(JSON.stringify(value) ?? "")
+
+const boundedArray = <S extends Schema.Top>(schema: S, count: number, bytes: number, message: string) =>
+  Schema.Array(schema).check(
+    Schema.isMaxLength(count),
+    Schema.makeFilter((value) => (jsonBytes(value) <= bytes ? undefined : message)),
+  )
 
 const exact = <S extends Schema.Top>(schema: S) =>
   Schema.declareConstructor<S["Type"], S["Encoded"]>()([schema], ([codec]) => (u, _ast, options) =>
@@ -65,7 +77,13 @@ export type RemoteTransportEventCursor = typeof RemoteTransportEventCursor.Type
 
 const isSafeAbsolutePath = (value: string) => {
   if (value === "/") return true
-  if (!value.startsWith("/") || value.includes("\\") || value.includes("\u0000") || value.includes("//")) return false
+  if (
+    !value.startsWith("/") ||
+    value.includes("\\") ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(value) ||
+    value.includes("//")
+  )
+    return false
   return value
     .slice(1)
     .split("/")
@@ -90,7 +108,7 @@ const isWithin = (path: string, root: string) => root === "/" || path === root |
 const isSafeHttpPath = (value: string) => {
   if (value === "/") return true
   if (!value.startsWith("/") || value.includes("\\") || value.includes("\u0000") || value.includes("//")) return false
-  if (/[?#\r\n]/.test(value) || /%2e/i.test(value)) return false
+  if (/[?#\r\n]/.test(value) || !isSafeUrlEncoding(value)) return false
   const segments = value
     .slice(1)
     .split("/")
@@ -100,11 +118,33 @@ const isSafeHttpPath = (value: string) => {
   )
 }
 
+const isSafeUrlEncoding = (value: string) => {
+  if (/%(?![0-9a-f]{2})/i.test(value)) return false
+  if (/%25|%2e|%2f|%5c|%3f|%23/i.test(value)) return false
+  try {
+    const decoded = decodeURIComponent(value)
+    return !/[\\\u0000-\u001f\u007f-\u009f?#]/.test(decoded) && !decoded.includes("..")
+  } catch {
+    return false
+  }
+}
+
 const HttpPath = text(RemoteTransportLimits.maxPathBytes, "HTTP path is too large").check(
   Schema.makeFilter((value: string) =>
     isSafeHttpPath(value) ? undefined : "HTTP path must be a scoped absolute path without traversal",
   ),
 )
+
+export const RemoteTransportQuery = bounded(RemoteTransportLimits.maxQueryBytes, "HTTP query is too large").check(
+  noControl("HTTP query contains control characters"),
+  Schema.makeFilter((value: string) => {
+    if (value.includes("?") || value.includes("#") || value.includes("\\") || !isSafeUrlEncoding(value)) {
+      return "HTTP query contains unsafe URL encoding"
+    }
+    return undefined
+  }),
+)
+export type RemoteTransportQuery = typeof RemoteTransportQuery.Type
 
 const FieldName = text(RemoteTransportLimits.maxMetadataKeyBytes, "metadata key is too large").check(
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
@@ -121,9 +161,49 @@ const SafeHeaderName = HeaderName.check(
   Schema.makeFilter((value: string) => (secretField(value) ? "secret-shaped fields are not transport headers" : undefined)),
 )
 const HeaderValue = bounded(RemoteTransportLimits.maxHeaderValueBytes, "header value is too large").check(
-  Schema.isPattern(/^[^\r\n]*$/),
+  noControl("header value contains control characters"),
 )
-const MetadataValue = bounded(RemoteTransportLimits.maxMetadataValueBytes, "metadata value is too large")
+const MetadataValue = bounded(RemoteTransportLimits.maxMetadataValueBytes, "metadata value is too large").check(
+  noControl("metadata value contains control characters"),
+)
+
+const hopByHopHeaders = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+  "proxy-connection",
+])
+const forwardingHeaders = new Set([
+  "forward",
+  "forwarded",
+  "via",
+  "x-client-ip",
+  "x-cluster-client-ip",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-port",
+  "x-forwarded-proto",
+  "x-real-ip",
+  "true-client-ip",
+  "cf-connecting-ip",
+])
+const unsafeHeader = (name: string) => {
+  const normalized = name.toLowerCase()
+  return (
+    hopByHopHeaders.has(normalized) ||
+    forwardingHeaders.has(normalized) ||
+    normalized.startsWith("x-forwarded-") ||
+    normalized.startsWith("sec-websocket-")
+  )
+}
+const prototypeKey = (name: string) => name === "__proto__" || name === "constructor" || name === "prototype"
 
 const boundedRecord = <S extends Schema.Top>(
   schema: S,
@@ -135,6 +215,7 @@ const boundedRecord = <S extends Schema.Top>(
     Schema.makeFilter<S["Type"]>((value) => {
       const values = Object.entries(value as Record<string, string>)
       if (values.length > entries) return `too many entries: ${message}`
+      if (values.some(([key]) => prototypeKey(key))) return `prototype key is not allowed: ${message}`
       const size = values.reduce((sum, [key, item]) => sum + byteLength(key) + byteLength(item), 0)
       return size <= bytes ? undefined : message
     }),
@@ -146,8 +227,23 @@ export const RemoteTransportHeaders = boundedRecord(
   RemoteTransportLimits.maxHeaderCount *
     (RemoteTransportLimits.maxHeaderNameBytes + RemoteTransportLimits.maxHeaderValueBytes),
   "HTTP headers are too large",
+).check(
+  Schema.makeFilter((value) => {
+    const names = new Set<string>()
+    for (const [name] of Object.entries(value as Record<string, string>)) {
+      const normalized = name.toLowerCase()
+      if (names.has(normalized)) return "duplicate HTTP header names are not allowed"
+      if (unsafeHeader(name)) return "hop-by-hop or forwarding HTTP headers are not allowed"
+      names.add(normalized)
+    }
+    return undefined
+  }),
 )
 export type RemoteTransportHeaders = typeof RemoteTransportHeaders.Type
+
+/** Receivers should call this before forwarding a validated header map. */
+export const normalizeRemoteTransportHeaders = (headers: RemoteTransportHeaders) =>
+  Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]))
 
 export const RemoteTransportMetadata = boundedRecord(
   Schema.Record(SafeFieldName, MetadataValue),
@@ -164,7 +260,6 @@ const boundedID = (prefix: string, message: string) =>
 
 const SessionID = boundedID("ses_", "session ID is too large").pipe(Schema.brand("RemoteTransport.SessionID"))
 const PTYID = boundedID("pty_", "PTY ID is too large").pipe(Schema.brand("RemoteTransport.PTYID"))
-const ChallengeID = boundedID("chl_", "challenge ID is too large").pipe(Schema.brand("RemoteTransport.ChallengeID"))
 const NotificationID = boundedID("ntf_", "notification ID is too large").pipe(
   Schema.brand("RemoteTransport.NotificationID"),
 )
@@ -197,12 +292,120 @@ const sameTarget = (left: RemoteTransportTarget, right: RemoteTransportTarget) =
   left.workspaceID === right.workspaceID &&
   left.remoteDirectory === right.remoteDirectory
 
+const canonicalize = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalize(item)]),
+  )
+}
+
+/**
+ * Canonical JSON is UTF-8 JSON with recursively sorted object keys and no
+ * undefined properties. It is the transcript used for target and request
+ * digests; peers must hash this exact representation, not a local serializer.
+ */
+export const remoteTransportCanonicalJson = (value: unknown) => {
+  const result = JSON.stringify(canonicalize(value))
+  if (result === undefined) throw new Error("remote transport value is not canonicalizable")
+  return result
+}
+
+const sha256 = async (value: string) => {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", encoder.encode(value))
+  return Array.from(new Uint8Array(digest), (item) => item.toString(16).padStart(2, "0")).join("")
+}
+
+export const RemoteTransportTargetDigest = Schema.String.check(
+  Schema.isMinLength(64),
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[0-9a-f]{64}$/),
+).pipe(Schema.brand("RemoteTransport.TargetDigest"))
+export type RemoteTransportTargetDigest = typeof RemoteTransportTargetDigest.Type
+
+export const RemoteTransportRequestDigest = Schema.String.check(
+  Schema.isMinLength(64),
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[0-9a-f]{64}$/),
+).pipe(Schema.brand("RemoteTransport.RequestDigest"))
+export type RemoteTransportRequestDigest = typeof RemoteTransportRequestDigest.Type
+
+/** Computes the SHA-256 digest required in session auth.targetDigest. */
+export const remoteTransportComputeTargetDigest = async (target: RemoteTransportTargetEncoded) =>
+  sha256(remoteTransportCanonicalJson(target))
+
+/** Computes SHA-256 after removing the wire requestDigest field itself. */
+export const remoteTransportComputeRequestDigest = async <T extends object>(request: T) =>
+  sha256(
+    remoteTransportCanonicalJson(
+      Object.fromEntries(Object.entries(request).filter(([key]) => key !== "requestDigest")),
+    ),
+  )
+
+/**
+ * Idempotency is scoped by the authenticated session, exact target, and the
+ * canonical request digest. A receiver should use this value as its replay
+ * key and reject an existing key whose digest differs.
+ */
+export const remoteTransportIdempotencyBinding = (
+  sessionID: string,
+  target: RemoteTransportTarget,
+  idempotencyKey: RemoteTransportIdempotencyKey,
+  requestDigest: RemoteTransportRequestDigest,
+) =>
+  remoteTransportCanonicalJson({
+    sessionID,
+    target,
+    idempotencyKey,
+    requestDigest,
+  })
+
+const Base64Url = text(512, "base64url value is too large").check(
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+  noControl("base64url value contains control characters"),
+)
+const Nonce = Base64Url.check(Schema.isMinLength(16))
+const Timestamp = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(9_999_999_999_999))
+const ChallengeID = boundedID("chl_", "challenge ID is too large").pipe(Schema.brand("RemoteTransport.ChallengeID"))
+
+export const RemoteTransportChallenge = exact(
+  Schema.Struct({
+    issuer: Schema.Literal("server"),
+    id: ChallengeID,
+    nonce: Nonce,
+    issuedAt: Timestamp,
+    expiresAt: Timestamp,
+    oneTime: Schema.Literal(true),
+  }),
+).check(
+  Schema.makeFilter((value) =>
+    value.expiresAt > value.issuedAt && value.expiresAt - value.issuedAt <= 5 * 60 * 1000
+      ? undefined
+      : "challenge must expire within five minutes and after issuance",
+  ),
+).annotate({ identifier: "RemoteTransportV1.Challenge" })
+export type RemoteTransportChallenge = typeof RemoteTransportChallenge.Type
+
+export const RemoteTransportSessionProof = exact(
+  Schema.Struct({
+    algorithm: Schema.Literal("ed25519"),
+    encoding: Schema.Literal("base64url"),
+    signature: Base64Url,
+  }),
+).annotate({ identifier: "RemoteTransportV1.SessionProof" })
+export type RemoteTransportSessionProof = typeof RemoteTransportSessionProof.Type
+
 export const RemoteTransportSessionAuth = exact(
   Schema.Struct({
     method: Schema.Literal("pairing-signature"),
     pairingID: RemotePairingID,
-    challenge: ChallengeID,
-    assertion: text(2 * 1024, "session assertion is too large").check(noControl("session assertion contains NUL")),
+    target: RemoteTransportTarget,
+    targetDigest: RemoteTransportTargetDigest,
+    challenge: RemoteTransportChallenge,
+    proof: RemoteTransportSessionProof,
   }),
 ).annotate({ identifier: "RemoteTransportV1.SessionAuth" })
 export type RemoteTransportSessionAuth = typeof RemoteTransportSessionAuth.Type
@@ -212,18 +415,23 @@ const requestFields = {
   kind: Schema.Literal("request"),
   requestID: RemoteTransportRequestID,
   idempotencyKey: RemoteTransportIdempotencyKey,
+  requestDigest: RemoteTransportRequestDigest,
   target: RemoteTransportTarget,
 }
 const responseFields = {
   version: RemoteTransportVersion,
   kind: Schema.Literal("response"),
   requestID: RemoteTransportRequestID,
+  idempotencyKey: RemoteTransportIdempotencyKey,
+  requestDigest: RemoteTransportRequestDigest,
   target: RemoteTransportTarget,
 }
 const streamFields = {
   version: RemoteTransportVersion,
   kind: Schema.Literal("stream"),
   requestID: RemoteTransportRequestID,
+  idempotencyKey: RemoteTransportIdempotencyKey,
+  requestDigest: RemoteTransportRequestDigest,
   target: RemoteTransportTarget,
 }
 const eventFields = {
@@ -241,12 +449,54 @@ const sessionOpenShape = Schema.Struct({
 export const RemoteTransportSessionOpen = exact(sessionOpenShape)
   .check(
     Schema.makeFilter<typeof sessionOpenShape.Type>((value) => {
-      if (value.auth.pairingID === value.target.pairingID) return undefined
-      return "session auth pairingID is outside target scope"
+      if (value.auth.pairingID !== value.target.pairingID) return "session auth pairingID is outside target scope"
+      if (!sameTarget(value.auth.target, value.target)) return "session auth target copy does not match request target"
+      return undefined
     }),
   )
   .annotate({ identifier: "RemoteTransportV1.SessionOpen" })
 export type RemoteTransportSessionOpen = typeof RemoteTransportSessionOpen.Type
+
+/**
+ * The signature covers this canonical transcript. The server issues the
+ * challenge; the client signs it once with its pairing key. Receivers must
+ * reject expired or previously consumed challenge IDs before verifying the
+ * Ed25519 signature and must compare both target copies byte-for-byte.
+ */
+export const remoteTransportSessionProofTranscript = (open: RemoteTransportSessionOpen) =>
+  remoteTransportCanonicalJson({
+    domain: "slopcode-remote-v1",
+    version: open.version,
+    type: open.type,
+    requestID: open.requestID,
+    idempotencyKey: open.idempotencyKey,
+    requestDigest: open.requestDigest,
+    target: open.target,
+    authTarget: open.auth.target,
+    targetDigest: open.auth.targetDigest,
+    pairingID: open.auth.pairingID,
+    challenge: open.auth.challenge,
+  })
+
+export const remoteTransportSessionAuthMatches = async (open: RemoteTransportSessionOpen) =>
+  sameTarget(open.target, open.auth.target) &&
+  open.target.pairingID === open.auth.pairingID &&
+  open.auth.targetDigest === (await remoteTransportComputeTargetDigest(open.target))
+
+export const remoteTransportChallengeIsFresh = (
+  challenge: RemoteTransportChallenge,
+  now = Date.now(),
+) => challenge.issuedAt <= now && now < challenge.expiresAt
+
+/** Returns a new replay set only when a challenge is fresh and unused. */
+export const remoteTransportConsumeChallenge = (
+  consumed: ReadonlySet<string>,
+  challenge: RemoteTransportChallenge,
+  now = Date.now(),
+) => {
+  if (!remoteTransportChallengeIsFresh(challenge, now) || consumed.has(challenge.id)) return undefined
+  return new Set(consumed).add(challenge.id)
+}
 
 export const RemoteTransportSessionClose = exact(
   Schema.Struct({
@@ -276,11 +526,51 @@ export const RemoteTransportSessionClosed = exact(
 ).annotate({ identifier: "RemoteTransportV1.SessionClosed" })
 export type RemoteTransportSessionClosed = typeof RemoteTransportSessionClosed.Type
 
-export const RemoteTransportBody = bounded(RemoteTransportLimits.maxBodyBytes, "HTTP body is too large")
+const base64ByteLength = (value: string) => {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return -1
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0
+  return value.length / 4 * 3 - padding
+}
+
+const base64Data = (max: number, message: string) =>
+  bounded(Math.ceil(max * 4 / 3) + 4, message).check(
+    Schema.makeFilter((value: string) =>
+      base64ByteLength(value) >= 0 && base64ByteLength(value) <= max ? undefined : message,
+    ),
+  )
+
+const makeBody = (max: number, message: string) =>
+  exact(
+    Schema.Union([
+      exact(
+        Schema.Struct({
+          encoding: Schema.Literal("utf8"),
+          data: bounded(max, message),
+        }),
+      ),
+      exact(
+        Schema.Struct({
+          encoding: Schema.Literal("base64"),
+          data: base64Data(max, message),
+        }),
+      ),
+    ]),
+  )
+
+/**
+ * Bodies are intentionally discriminated. utf8 is measured after UTF-8
+ * encoding; base64 is canonical standard Base64 and measured after decode.
+ * Receivers must decode once and never reinterpret either form as a URL or
+ * another charset.
+ */
+export const RemoteTransportBody = makeBody(RemoteTransportLimits.maxBodyBytes, "HTTP body is too large")
 export type RemoteTransportBody = typeof RemoteTransportBody.Type
 
-export const RemoteTransportBodyChunk = bounded(RemoteTransportLimits.maxChunkBytes, "body chunk is too large")
+export const RemoteTransportBodyChunk = makeBody(RemoteTransportLimits.maxChunkBytes, "body chunk is too large")
 export type RemoteTransportBodyChunk = typeof RemoteTransportBodyChunk.Type
+
+const bodyByteLength = (body: RemoteTransportBody | RemoteTransportBodyChunk) =>
+  body.encoding === "utf8" ? byteLength(body.data) : base64ByteLength(body.data)
 
 const HttpMethod = Schema.Literals(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 const HttpStatus = Schema.Int.check(Schema.isGreaterThanOrEqualTo(100), Schema.isLessThanOrEqualTo(599))
@@ -291,6 +581,7 @@ export const RemoteTransportHttpRequest = exact(
     type: Schema.Literal("http.request"),
     method: HttpMethod,
     path: HttpPath,
+    query: Schema.optional(RemoteTransportQuery),
     headers: Schema.optional(RemoteTransportHeaders),
     body: Schema.optional(RemoteTransportBody),
   }),
@@ -345,8 +636,11 @@ export type RemoteTransportSseEvent = typeof RemoteTransportSseEvent.Type
 const eventReplayResponseShape = Schema.Struct({
   ...responseFields,
   type: Schema.Literal("event.replay"),
-  events: Schema.Array(RemoteTransportSseEvent).pipe(
-    Schema.check(Schema.isMaxLength(RemoteTransportLimits.maxReplayEvents)),
+  events: boundedArray(
+    RemoteTransportSseEvent,
+    RemoteTransportLimits.maxReplayEvents,
+    RemoteTransportLimits.maxReplayBytes,
+    "event replay is too large",
   ),
   nextCursor: Schema.optional(RemoteTransportEventCursor),
   hasMore: Schema.Boolean,
@@ -355,7 +649,11 @@ export const RemoteTransportEventReplayResponse = exact(eventReplayResponseShape
   .check(
     Schema.makeFilter<typeof eventReplayResponseShape.Type>((value) =>
       value.events.every((event) => sameTarget(event.target, value.target))
-        ? undefined
+        ? jsonBytes(value.events) <= RemoteTransportLimits.maxReplayBytes &&
+            value.events.reduce((sum, event) => sum + bodyByteLength(event.data), 0) <=
+              RemoteTransportLimits.maxReplayBytes
+          ? undefined
+          : "event replay is too large"
         : "replayed event target is outside response scope",
     ),
   )
@@ -366,7 +664,12 @@ const PtyCommand = text(2 * 1024, "PTY command is too large").check(noControl("P
 const PtyArgument = bounded(RemoteTransportLimits.maxPtyArgumentBytes, "PTY argument is too large").check(
   noControl("PTY argument contains NUL"),
 )
-const PtyArguments = Schema.Array(PtyArgument).check(Schema.isMaxLength(RemoteTransportLimits.maxPtyArguments))
+const PtyArguments = boundedArray(
+  PtyArgument,
+  RemoteTransportLimits.maxPtyArguments,
+  RemoteTransportLimits.maxArrayBytes,
+  "PTY arguments are too large",
+)
 
 const ptyOpenShape = Schema.Struct({
   ...requestFields,
@@ -430,6 +733,34 @@ export const RemoteTransportPtyOutput = exact(
 ).annotate({ identifier: "RemoteTransportV1.PtyOutput" })
 export type RemoteTransportPtyOutput = typeof RemoteTransportPtyOutput.Type
 
+export type RemoteTransportStreamState = Readonly<{
+  nextSequence: number
+  final: boolean
+}>
+
+export const RemoteTransportInitialStreamState: RemoteTransportStreamState = {
+  nextSequence: 0,
+  final: false,
+}
+
+/**
+ * Advances a stream only for the next sequence number. Once a final chunk is
+ * accepted, every later chunk is rejected, which makes duplicate finals and
+ * post-final data replay-safe.
+ */
+export const remoteTransportAdvanceStream = (
+  state: RemoteTransportStreamState,
+  chunk: Pick<RemoteTransportHttpChunk | RemoteTransportPtyOutput, "sequence" | "final">,
+) => {
+  if (state.final || chunk.sequence !== state.nextSequence) return undefined
+  return {
+    nextSequence: state.nextSequence + 1,
+    final: chunk.final,
+  } satisfies RemoteTransportStreamState
+}
+
+export const remoteTransportStreamComplete = (state: RemoteTransportStreamState) => state.final
+
 export const RemoteTransportPtyClose = exact(
   Schema.Struct({
     ...requestFields,
@@ -454,8 +785,11 @@ const NotificationFields = {
   notificationID: NotificationID,
   requestID: Schema.optional(RemoteTransportRequestID),
 }
-const NotificationItems = Schema.Array(text(2 * 1024, "notification item is too large")).pipe(
-  Schema.check(Schema.isMaxLength(RemoteTransportLimits.maxNotificationItems)),
+const NotificationItems = boundedArray(
+  text(2 * 1024, "notification item is too large"),
+  RemoteTransportLimits.maxNotificationItems,
+  RemoteTransportLimits.maxArrayBytes,
+  "notification items are too large",
 )
 
 export const RemoteTransportApprovalNotification = exact(
@@ -480,7 +814,7 @@ const QuestionPrompt = exact(
   Schema.Struct({
     question: text(2 * 1024, "question text is too large"),
     header: Schema.optional(text(128, "question header is too large")),
-    options: Schema.Array(QuestionOption).pipe(Schema.check(Schema.isMaxLength(16))),
+    options: boundedArray(QuestionOption, 16, RemoteTransportLimits.maxArrayBytes, "question options are too large"),
     multiple: Schema.Boolean,
   }),
 )
@@ -489,7 +823,7 @@ export const RemoteTransportQuestionNotification = exact(
   Schema.Struct({
     ...NotificationFields,
     type: Schema.Literal("question.request"),
-    questions: Schema.Array(QuestionPrompt).pipe(Schema.check(Schema.isMaxLength(8))),
+    questions: boundedArray(QuestionPrompt, 8, RemoteTransportLimits.maxArrayBytes, "questions are too large"),
     metadata: Schema.optional(RemoteTransportMetadata),
   }),
 ).annotate({ identifier: "RemoteTransportV1.QuestionNotification" })
@@ -505,8 +839,11 @@ export const RemoteTransportApprovalReply = exact(
 ).annotate({ identifier: "RemoteTransportV1.ApprovalReply" })
 export type RemoteTransportApprovalReply = typeof RemoteTransportApprovalReply.Type
 
-const Answers = Schema.Array(Schema.Array(text(2 * 1024, "question answer is too large")).pipe(Schema.check(Schema.isMaxLength(16)))).pipe(
-  Schema.check(Schema.isMaxLength(8)),
+const Answers = boundedArray(
+  boundedArray(text(2 * 1024, "question answer is too large"), 16, RemoteTransportLimits.maxArrayBytes, "answers are too large"),
+  8,
+  RemoteTransportLimits.maxArrayBytes,
+  "question answers are too large",
 )
 
 export const RemoteTransportQuestionReply = exact(
@@ -544,20 +881,29 @@ export const RemoteTransportErrorCode = Schema.Literals([
 ])
 export type RemoteTransportErrorCode = typeof RemoteTransportErrorCode.Type
 
-export const RemoteTransportError = exact(
-  Schema.Struct({
-    version: RemoteTransportVersion,
-    kind: Schema.Literal("error"),
-    type: Schema.Literal("error"),
-    requestID: Schema.optional(RemoteTransportRequestID),
-    idempotencyKey: Schema.optional(RemoteTransportIdempotencyKey),
-    target: Schema.optional(RemoteTransportTarget),
-    code: RemoteTransportErrorCode,
-    message: text(2 * 1024, "error message is too large"),
-    retryable: Schema.Boolean,
-    details: Schema.optional(RemoteTransportMetadata),
-  }),
-).annotate({ identifier: "RemoteTransportV1.Error" })
+const remoteTransportErrorShape = Schema.Struct({
+  version: RemoteTransportVersion,
+  kind: Schema.Literal("error"),
+  type: Schema.Literal("error"),
+  requestID: Schema.optional(RemoteTransportRequestID),
+  idempotencyKey: Schema.optional(RemoteTransportIdempotencyKey),
+  requestDigest: Schema.optional(RemoteTransportRequestDigest),
+  target: Schema.optional(RemoteTransportTarget),
+  code: RemoteTransportErrorCode,
+  message: text(2 * 1024, "error message is too large"),
+  retryable: Schema.Boolean,
+  details: Schema.optional(RemoteTransportMetadata),
+})
+export const RemoteTransportError = exact(remoteTransportErrorShape)
+  .check(
+    Schema.makeFilter<typeof remoteTransportErrorShape.Type>((value) =>
+      value.requestID === undefined ||
+      (value.idempotencyKey !== undefined && value.requestDigest !== undefined && value.target !== undefined)
+        ? undefined
+        : "request errors must echo idempotency, digest, and target",
+    ),
+  )
+  .annotate({ identifier: "RemoteTransportV1.Error" })
 export type RemoteTransportError = typeof RemoteTransportError.Type
 
 export const RemoteTransportRequest = Schema.Union([
@@ -625,7 +971,25 @@ export const RemoteTransportFrame = Schema.Union([
 export type RemoteTransportFrame = typeof RemoteTransportFrame.Type
 export type RemoteTransportFrameEncoded = typeof RemoteTransportFrame.Encoded
 
-export const RemoteTransportFrameJson = Schema.fromJsonString(RemoteTransportFrame).annotate({
+const RemoteTransportFrameJsonSource = Schema.String.check(
+  Schema.makeFilter((value: string) =>
+    byteLength(value) <= RemoteTransportLimits.maxFrameBytes
+      ? undefined
+      : "remote transport JSON frame exceeds the UTF-8 byte limit",
+  ),
+)
+
+/**
+ * The source string guard runs before parseJson during decoding and again on
+ * encoding. WebSocket and JSONL adapters should apply this schema to each
+ * complete text message/line before dispatch.
+ */
+export const RemoteTransportFrameJson = RemoteTransportFrameJsonSource.pipe(
+  Schema.decodeTo(RemoteTransportFrame, {
+    decode: SchemaGetter.transform((value: string) => JSON.parse(value) as RemoteTransportFrameEncoded),
+    encode: SchemaGetter.stringifyJson(),
+  }),
+).annotate({
   identifier: "RemoteTransportV1.FrameJson",
 })
 export type RemoteTransportFrameJson = typeof RemoteTransportFrameJson.Type

@@ -4,17 +4,27 @@ import {
   RemoteTransportApprovalNotification,
   RemoteTransportBody,
   RemoteTransportBodyChunk,
+  RemoteTransportChallenge,
   RemoteTransportError,
   RemoteTransportEventReplayRequest,
   RemoteTransportFrame,
   RemoteTransportFrameJson,
+  RemoteTransportHeaders,
   RemoteTransportHttpRequest,
+  RemoteTransportInitialStreamState,
   RemoteTransportLimits,
   RemoteTransportMetadata,
   RemoteTransportPtyOpen,
   RemoteTransportQuestionNotification,
   RemoteTransportRemoteDirectory,
   RemoteTransportTarget,
+  remoteTransportAdvanceStream,
+  remoteTransportComputeRequestDigest,
+  remoteTransportComputeTargetDigest,
+  remoteTransportConsumeChallenge,
+  remoteTransportChallengeIsFresh,
+  remoteTransportSessionAuthMatches,
+  remoteTransportSessionProofTranscript,
 } from "../src/remote-transport"
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
@@ -29,18 +39,37 @@ const target = {
   remoteDirectory: "/srv/slopcode",
 } as const
 
+const digest = "a".repeat(64)
+const targetDigest = "b".repeat(64)
+const utf8 = (data: string) => ({ encoding: "utf8" as const, data })
+const base64 = (data: string) => ({ encoding: "base64" as const, data })
+
 const open = {
   version: "v1",
   kind: "request",
   type: "session.open",
   requestID: "req_open_1",
   idempotencyKey: "idem_open_1",
+  requestDigest: digest,
   target,
   auth: {
     method: "pairing-signature",
     pairingID: "pair_android",
-    challenge: "chl_open_1",
-    assertion: "qt-pairing-signature",
+    target,
+    targetDigest,
+    challenge: {
+      issuer: "server",
+      id: "chl_open_1",
+      nonce: "server_nonce_123456",
+      issuedAt: 1_700_000_000_000,
+      expiresAt: 1_700_000_060_000,
+      oneTime: true,
+    },
+    proof: {
+      algorithm: "ed25519",
+      encoding: "base64url",
+      signature: "qt_pairing_signature",
+    },
   },
 } as const
 
@@ -49,6 +78,7 @@ const request = {
   kind: "request",
   requestID: "req_base_1",
   idempotencyKey: "idem_base_1",
+  requestDigest: digest,
   target,
 } as const
 
@@ -70,27 +100,32 @@ describe("remote transport protocol contracts", () => {
         idempotencyKey: "idem_http_1",
         method: "POST",
         path: "/api/session/ses_remote_1/message",
+        query: "page=1&cursor=cur_events_1",
         headers: { "content-type": "application/json" },
-        body: "{\"message\":\"hello\"}",
+        body: utf8("{\"message\":\"hello\"}"),
       },
       {
         version: "v1",
         kind: "response",
         type: "http.response",
         requestID: "req_http_1",
+        idempotencyKey: "idem_http_1",
+        requestDigest: digest,
         target,
         status: 200,
         headers: { "content-type": "application/json" },
-        body: "{\"ok\":true}",
+        body: utf8("{\"ok\":true}"),
       },
       {
         version: "v1",
         kind: "stream",
         type: "http.chunk",
         requestID: "req_http_1",
+        idempotencyKey: "idem_http_1",
+        requestDigest: digest,
         target,
         sequence: 0,
-        chunk: "event: message\\ndata: hello\\n\\n",
+        chunk: utf8("event: message\\ndata: hello\\n\\n"),
         final: true,
       },
       {
@@ -98,6 +133,7 @@ describe("remote transport protocol contracts", () => {
         type: "event.replay",
         requestID: "req_replay_1",
         idempotencyKey: "idem_replay_1",
+        requestDigest: digest,
         cursor: "cur_events_1",
         limit: 20,
       },
@@ -108,7 +144,7 @@ describe("remote transport protocol contracts", () => {
         target,
         cursor: "cur_events_2",
         event: "session.message",
-        data: "hello",
+        data: utf8("hello"),
         replayed: true,
       },
       {
@@ -129,7 +165,7 @@ describe("remote transport protocol contracts", () => {
         requestID: "req_pty_input_1",
         idempotencyKey: "idem_pty_input_1",
         ptyID: "pty_remote_1",
-        chunk: "ls\n",
+        chunk: utf8("ls\n"),
       },
       {
         ...request,
@@ -145,10 +181,12 @@ describe("remote transport protocol contracts", () => {
         kind: "stream",
         type: "pty.output",
         requestID: "req_pty_open_1",
+        idempotencyKey: "idem_pty_open_1",
+        requestDigest: digest,
         target,
         ptyID: "pty_remote_1",
         sequence: 0,
-        chunk: "ready\n",
+        chunk: utf8("ready\n"),
         final: false,
       },
       {
@@ -190,6 +228,8 @@ describe("remote transport protocol contracts", () => {
         kind: "error",
         type: "error",
         requestID: "req_http_1",
+        idempotencyKey: "idem_http_1",
+        requestDigest: digest,
         target,
         code: "out_of_scope",
         message: "The selected workspace does not own this path",
@@ -208,6 +248,110 @@ describe("remote transport protocol contracts", () => {
     const decoded = await decode(RemoteTransportFrameJson, encoded)
 
     expect(decoded).toEqual(value)
+  })
+
+  test("binds session proof transcripts and consumes challenges once", async () => {
+    const actualTargetDigest = await remoteTransportComputeTargetDigest(target)
+    const value = await decode(RemoteTransportFrame, {
+      ...open,
+      auth: {
+        ...open.auth,
+        targetDigest: actualTargetDigest,
+      },
+    })
+
+    if (value.type !== "session.open") throw new Error("expected session.open")
+    expect(await remoteTransportSessionAuthMatches(value)).toBe(true)
+    expect(remoteTransportSessionProofTranscript(value)).toContain('"domain":"slopcode-remote-v1"')
+    await expect(
+      decode(RemoteTransportFrame, {
+        ...open,
+        auth: {
+          ...open.auth,
+          target: { ...target, remoteDirectory: "/srv/other" },
+          targetDigest: actualTargetDigest,
+        },
+      }),
+    ).rejects.toThrow()
+    const wrongDigest = await decode(RemoteTransportFrame, {
+      ...open,
+      auth: { ...open.auth, targetDigest: "c".repeat(64) },
+    })
+    if (wrongDigest.type !== "session.open") throw new Error("expected session.open")
+    expect(await remoteTransportSessionAuthMatches(wrongDigest)).toBe(false)
+
+    const challenge = await decode(RemoteTransportChallenge, open.auth.challenge)
+    const consumed = remoteTransportConsumeChallenge(new Set(), challenge, challenge.issuedAt)
+    expect(consumed?.has(challenge.id)).toBe(true)
+    expect(remoteTransportConsumeChallenge(consumed ?? new Set(), challenge, challenge.issuedAt)).toBeUndefined()
+    expect(remoteTransportChallengeIsFresh(challenge, challenge.expiresAt)).toBe(false)
+  })
+
+  test("binds request digests to canonical JSON and supports bounded query strings", async () => {
+    const requestValue = {
+      ...request,
+      type: "http.request" as const,
+      method: "GET" as const,
+      path: "/api/location",
+      query: "cursor=abc%20def&limit=20",
+    }
+    const computed = await remoteTransportComputeRequestDigest(requestValue)
+    expect(computed).toMatch(/^[0-9a-f]{64}$/)
+    expect(await decode(RemoteTransportHttpRequest, { ...requestValue, requestDigest: computed })).toMatchObject({
+      query: requestValue.query,
+    })
+
+    for (const query of ["a=%2fetc", "a=%252e%252e", "a=%2e%2e", "a=%ZZ"]) {
+      await expect(
+        decode(RemoteTransportHttpRequest, { ...requestValue, query }),
+      ).rejects.toThrow()
+    }
+    for (const path of ["/api%2f..%2fetc", "/api%5c..%5cetc", "/api%252e%252e/etc"]) {
+      await expect(
+        decode(RemoteTransportHttpRequest, { ...requestValue, query: undefined, path }),
+      ).rejects.toThrow()
+    }
+  })
+
+  test("rejects unsafe duplicate and forwarding headers", async () => {
+    await expect(
+      decode(RemoteTransportHeaders, {
+        "Content-Type": "application/json",
+        "content-type": "application/json",
+      }),
+    ).rejects.toThrow()
+    await expect(decode(RemoteTransportHeaders, { Connection: "close" })).rejects.toThrow()
+    await expect(decode(RemoteTransportHeaders, { "X-Forwarded-For": "127.0.0.1" })).rejects.toThrow()
+    await expect(decode(RemoteTransportHeaders, { "x-safe": "ok\u0007" })).rejects.toThrow()
+    await expect(
+      decode(RemoteTransportHeaders, JSON.parse('{"__proto__":"polluted"}')),
+    ).rejects.toThrow()
+  })
+
+  test("enforces discriminated UTF-8/base64 bodies and frame byte limits", async () => {
+    await expect(decode(RemoteTransportBody, utf8("é"))).resolves.toEqual(utf8("é"))
+    await expect(decode(RemoteTransportBody, base64("AP+A"))).resolves.toEqual(base64("AP+A"))
+    await expect(decode(RemoteTransportBody, base64("not base64!"))).rejects.toThrow()
+    await expect(decode(RemoteTransportBody, { encoding: "base64", data: "Zm8" })).rejects.toThrow()
+
+    const oversized = JSON.stringify({
+      ...request,
+      type: "http.request",
+      method: "POST",
+      path: "/api/upload",
+      body: utf8("x".repeat(RemoteTransportLimits.maxFrameBytes)),
+    })
+    expect(new TextEncoder().encode(oversized).byteLength).toBeGreaterThan(RemoteTransportLimits.maxFrameBytes)
+    await expect(decode(RemoteTransportFrameJson, oversized)).rejects.toThrow()
+  })
+
+  test("accepts ordered stream chunks and rejects duplicates, gaps, and post-final data", () => {
+    const first = remoteTransportAdvanceStream(RemoteTransportInitialStreamState, { sequence: 0, final: false })
+    expect(first).toEqual({ nextSequence: 1, final: false })
+    expect(remoteTransportAdvanceStream(first!, { sequence: 2, final: false })).toBeUndefined()
+    const done = remoteTransportAdvanceStream(first!, { sequence: 1, final: true })
+    expect(done).toEqual({ nextSequence: 2, final: true })
+    expect(remoteTransportAdvanceStream(done!, { sequence: 2, final: true })).toBeUndefined()
   })
 
   test("rejects unknown fields at every fixed object boundary", async () => {
@@ -258,6 +402,8 @@ describe("remote transport protocol contracts", () => {
         kind: "response",
         type: "event.replay",
         requestID: "req_replay_scope_1",
+        idempotencyKey: "idem_replay_scope_1",
+        requestDigest: digest,
         target,
         events: [
           {
@@ -267,7 +413,7 @@ describe("remote transport protocol contracts", () => {
             target: { ...target, workspaceID: "wrk_other" },
             cursor: "cur_scope_1",
             event: "session.message",
-            data: "leak",
+            data: utf8("leak"),
           },
         ],
         hasMore: false,
@@ -279,6 +425,7 @@ describe("remote transport protocol contracts", () => {
         type: "http.request",
         requestID: "req_http_path_1",
         idempotencyKey: "idem_http_path_1",
+        requestDigest: digest,
         method: "GET",
         path: "/api/../etc/passwd",
       }),
@@ -302,9 +449,11 @@ describe("remote transport protocol contracts", () => {
         headers: { "x-large": "x".repeat(RemoteTransportLimits.maxHeaderValueBytes + 1) },
       }),
     ).rejects.toThrow()
-    await expect(decode(RemoteTransportBody, "x".repeat(RemoteTransportLimits.maxBodyBytes + 1))).rejects.toThrow()
     await expect(
-      decode(RemoteTransportBodyChunk, "x".repeat(RemoteTransportLimits.maxChunkBytes + 1)),
+      decode(RemoteTransportBody, utf8("x".repeat(RemoteTransportLimits.maxBodyBytes + 1))),
+    ).rejects.toThrow()
+    await expect(
+      decode(RemoteTransportBodyChunk, utf8("x".repeat(RemoteTransportLimits.maxChunkBytes + 1))),
     ).rejects.toThrow()
   })
 
