@@ -108,6 +108,7 @@ import { SessionGraph } from "@slopcode-ai/server/session-graph"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@slopcode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { remoteRuntimeHandlers } from "./handlers/remote-runtime"
+import { remoteSupervisorHandlers } from "./handlers/remote-supervisor"
 import { defaultLayer as remotePairingLayer } from "./remote-pairing"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { serverWorkspaceRoutingLayer } from "./middleware/server-workspace-routing"
@@ -151,9 +152,10 @@ const serverWorkspaceRoutingLive = serverWorkspaceRoutingLayer.pipe(
   Layer.provide(remotePairingLayer),
 )
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
-  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
+  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, remoteSupervisorHandlers]),
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
+  Layer.provide(remotePairingLayer),
 )
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),

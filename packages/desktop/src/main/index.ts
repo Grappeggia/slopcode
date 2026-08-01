@@ -49,7 +49,7 @@ import {
   isOldLayoutEligible,
 } from "./onboarding"
 import { safeWebContentsURL } from "./window-state"
-import { createSshRemoteHostService } from "./remote"
+import { createRemoteSupervisor, createSshRemoteHostService } from "./remote"
 
 const APP_NAMES: Record<string, string> = {
   dev: "SlopCode Dev",
@@ -67,6 +67,7 @@ const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 let logger: ReturnType<typeof initLogging>
 let mainWindow: BrowserWindow | null = null
 let server: SidecarListener | null = null
+let stopRemoteSupervisor: (() => void) | undefined
 const remoteHost = createSshRemoteHostService()
 
 const pendingDeepLinks: string[] = []
@@ -88,6 +89,8 @@ function emitDeepLinks(urls: string[]) {
 }
 
 async function killSidecar() {
+  stopRemoteSupervisor?.()
+  stopRemoteSupervisor = undefined
   if (!server) return
   const current = server
   server = null
@@ -341,6 +344,8 @@ const main = Effect.gen(function* () {
   const hostname = "127.0.0.1"
   const url = `http://${hostname}:${port}`
   const password = randomUUID()
+  const remoteHostID = `hst_${randomUUID().replaceAll("-", "")}`
+  const remoteSupervisorToken = randomUUID()
 
   const loadingTask = yield* Effect.gen(function* () {
     logger.log("sidecar connection started", { url })
@@ -352,6 +357,8 @@ const main = Effect.gen(function* () {
     const { listener, health } = yield* Effect.promise(() =>
       spawnLocalServer(hostname, port, password, {
         userDataPath: app.getPath("userData"),
+        remoteHostID,
+        remoteSupervisorToken,
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
@@ -363,6 +370,16 @@ const main = Effect.gen(function* () {
       username: "slopcode",
       password,
     })
+    const supervisor = createRemoteSupervisor({
+      service: remoteHost,
+      serverUrl: url,
+      username: "slopcode",
+      password,
+      token: remoteSupervisorToken,
+      hostID: remoteHostID,
+    })
+    stopRemoteSupervisor = supervisor.start()
+    void supervisor.reconcile().catch((error) => logger.warn("remote supervisor reconciliation failed", error))
 
     if (process.platform === "win32") {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))

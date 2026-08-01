@@ -21,7 +21,7 @@ import {
   RemoteWorkspaceTargetInput,
 } from "../../../../../../protocol/src/remote"
 import { asc, eq } from "drizzle-orm"
-import { Context, Effect, Layer, Schema, Semaphore, Struct } from "effect"
+import { Context, Effect, Layer, Option, Schema, Semaphore, Struct } from "effect"
 import path from "node:path"
 import os from "node:os"
 
@@ -128,6 +128,9 @@ const decodePairingStore = (input: string): PairingStore => {
 }
 const remotePairingIntegrationID = Schema.decodeUnknownSync(IntegrationSchema.ID)("remote.pairing")
 type WorkspaceMode = (typeof RemoteWorkspace.Type)["mode"]
+const fallbackHostID = Schema.decodeUnknownSync(RemoteHostID)(`hst_${crypto.randomUUID().replaceAll("-", "")}`)
+const configuredHostID = Schema.decodeUnknownOption(RemoteHostID)(process.env.SLOPCODE_REMOTE_HOST_ID)
+const supervisorHostID = Option.isSome(configuredHostID) ? configuredHostID.value : fallbackHostID
 
 export class SshValidationPendingError extends Schema.TaggedErrorClass<SshValidationPendingError>()(
   "RemotePairing.SshValidationPendingError",
@@ -201,7 +204,7 @@ function selectionNonce() {
 
 function host(mode: WorkspaceMode) {
   return decodeRemoteHost({
-    id: `hst_${crypto.randomUUID().replaceAll("-", "")}`,
+    id: supervisorHostID,
     name: os.hostname(),
     platform: process.platform,
     arch: process.arch,
@@ -210,8 +213,15 @@ function host(mode: WorkspaceMode) {
   })
 }
 
-function workspaceTarget(workspace: typeof RemoteWorkspace.Type) {
+function workspaceTarget(workspace: typeof RemoteWorkspace.Type, scope: PairingScope) {
   if (workspace.mode === "local") return decodeRemoteTarget({ type: "local", directory: workspace.directory })
+  if (path.resolve(scope.directory) === path.resolve(workspace.remoteDirectory)) {
+    // A server running in the authenticated instance directory is already the
+    // SSH host selected by the caller. Bind it only when the exact requested
+    // folder is this instance; arbitrary remote targets still require the
+    // authenticated desktop supervisor registration below.
+    return decodeRemoteTarget({ type: "local", directory: path.resolve(scope.directory) })
+  }
   return undefined
 }
 
@@ -241,7 +251,7 @@ function requireRegisteredTarget(
   pairing: StoredPairingState,
   scope: ScopeState,
 ): typeof RemoteTarget.Type | TargetUnavailableError {
-  const local = workspaceTarget(pairing.workspace)
+  const local = workspaceTarget(pairing.workspace, scope)
   if (local) return local
   const found = scope.targets.find(
     (target) =>
@@ -262,6 +272,7 @@ export type ResolvedTarget = {
 
 export interface Interface {
   readonly hosts: (scope: PairingScope) => Effect.Effect<ReadonlyArray<typeof RemotePairedHost.Type>>
+  readonly supervisorPairings: () => Effect.Effect<ReadonlyArray<typeof RemotePairingRecord.Type>>
   readonly create: (
     input: typeof RemotePairingCreateInput.Type,
     scope: PairingScope,
@@ -270,6 +281,9 @@ export interface Interface {
   readonly registerTarget: (
     input: typeof RemoteWorkspaceTargetInput.Type,
     scope: PairingScope,
+  ) => Effect.Effect<void, TargetRegistrationError>
+  readonly registerSupervisorTarget: (
+    input: typeof RemoteWorkspaceTargetInput.Type,
   ) => Effect.Effect<void, TargetRegistrationError>
   readonly select: (
     input: typeof RemoteWorkspaceSelectInput.Type,
@@ -384,6 +398,11 @@ export const layer = Layer.effect(
           pairings,
         }),
       )
+    })
+
+    const supervisorPairings = Effect.fn("RemotePairing.supervisorPairings")(function* () {
+      const store = (yield* load(db)).store
+      return store.scopes.flatMap((scope) => scope.pairings.map(redact))
     })
 
     const create = Effect.fn("RemotePairing.create")(function* (
@@ -513,6 +532,59 @@ export const layer = Layer.effect(
       )
     })
 
+    const registerSupervisorTarget = Effect.fn("RemotePairing.registerSupervisorTarget")(function* (
+      input: typeof RemoteWorkspaceTargetInput.Type,
+    ) {
+      return yield* mutationLock.withPermit(
+        atomic((connection) =>
+          Effect.gen(function* () {
+            if (!input.pairingID) {
+              return yield* new TargetRegistrationError({
+                message: "Remote target registration requires an exact pairing ID",
+              })
+            }
+            const stored = yield* load(connection)
+            const scope = stored.store.scopes.find((item) => item.pairings.some((pairing) => pairing.id === input.pairingID))
+            const pairing = scope?.pairings.find((item) => item.id === input.pairingID)
+            if (!scope || !pairing) {
+              return yield* new TargetRegistrationError({
+                message: `Remote pairing not found: ${input.pairingID}`,
+              })
+            }
+            if (!sameWorkspace(pairing.workspace, input.workspace)) {
+              return yield* new TargetRegistrationError({
+                message: "Registered remote target must match the exact paired workspace selection",
+              })
+            }
+            const target = Schema.decodeUnknownSync(RemoteTarget)(input.target)
+            yield* save(
+              connection,
+              stored.credential,
+              putScope(stored.store, {
+                ...scope,
+                targets: [
+                  ...scope.targets.filter(
+                    (item) =>
+                      !(
+                        item.pairingID === pairing.id &&
+                        item.hostID === pairing.host.id &&
+                        sameWorkspace(item.workspace, pairing.workspace)
+                      ),
+                  ),
+                  {
+                    pairingID: pairing.id,
+                    hostID: pairing.host.id,
+                    workspace: pairing.workspace,
+                    target,
+                  },
+                ],
+              }),
+            )
+          }),
+        ),
+      )
+    })
+
     const select = Effect.fn("RemotePairing.select")(function* (
       input: typeof RemoteWorkspaceSelectInput.Type,
       scope: PairingScope,
@@ -588,9 +660,11 @@ export const layer = Layer.effect(
 
     return Service.of({
       hosts,
+      supervisorPairings,
       create,
       revoke,
       registerTarget,
+      registerSupervisorTarget,
       select,
       target,
       validateSsh,

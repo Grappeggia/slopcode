@@ -23,6 +23,7 @@ import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
 import { RemoteRuntimeApi } from "./groups/remote-runtime"
+import { RemoteSupervisorApi } from "./groups/remote-supervisor"
 import { Api } from "@slopcode-ai/server/api"
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
@@ -47,6 +48,7 @@ export const RootHttpApi = HttpApi.make("slopcode-root")
   .addHttpApi(ControlApi)
   .addHttpApi(ControlPlaneApi)
   .addHttpApi(GlobalApi)
+  .addHttpApi(RemoteSupervisorApi)
   .middleware(SchemaErrorMiddleware)
   .middleware(Authorization)
 

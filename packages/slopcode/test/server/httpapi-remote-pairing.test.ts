@@ -7,6 +7,7 @@ import { HttpRouter } from "effect/unstable/http"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { disposeMiddleware } from "../../src/server/routes/instance/httpapi/lifecycle"
 import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/workspace"
+import { RemoteSupervisorPaths } from "../../src/server/routes/instance/httpapi/groups/remote-supervisor"
 import { ServerAuth } from "../../src/server/auth"
 import { RemoteTargetCapabilityHeader } from "../../../protocol/src/remote"
 import { resetDatabase } from "../fixture/db"
@@ -598,6 +599,117 @@ describe.serial("remote pairing HttpApi", () => {
         })
         const pairings = (await listed.json()).flatMap((host: { pairings: unknown[] }) => host.pairings)
         expect(pairings).toHaveLength(3)
+      }),
+    )
+  })
+
+  test.serial("allows an SSH pairing when this authenticated instance is the selected host", async () => {
+    Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES = true
+    await using remoteTmp = await tmpdir({ git: true })
+    await withAuthEnv(async () => {
+      const app = handler()
+      const pairingResponse = await requestWith(app, WorkspacePaths.remotePairing, remoteTmp.path, {
+        method: "POST",
+        headers: { authorization: auth(), "content-type": "application/json" },
+        body: JSON.stringify({
+          device: {
+            id: "dev_direct_instance",
+            name: "SSH Remote",
+            platform: "android",
+            arch: "arm64",
+            version: "15",
+          },
+          workspace: {
+            id: "wrk_direct_instance",
+            name: "Direct SSH",
+            mode: "ssh",
+            directory: remoteTmp.path,
+            remoteDirectory: remoteTmp.path,
+            ssh: { host: "example.test", port: 22, user: "marcos" },
+          },
+        }),
+      })
+      expect(pairingResponse.status).toBe(200)
+      const pairing = await pairingResponse.json()
+
+      const validate = await requestWith(app, WorkspacePaths.remoteSshValidate, remoteTmp.path, {
+        method: "POST",
+        headers: { authorization: auth(), "content-type": "application/json" },
+        body: JSON.stringify(pairing.workspace),
+      })
+      expect(validate.status).toBe(200)
+
+      const selected = await requestWith(app, WorkspacePaths.remoteSelect, remoteTmp.path, {
+        method: "POST",
+        headers: { authorization: auth(), "content-type": "application/json" },
+        body: JSON.stringify(selectionInput(pairing)),
+      })
+      expect(selected.status).toBe(200)
+    })
+  })
+
+  test.serial("lets the authenticated supervisor bind a pairing across instance scopes", async () => {
+    Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES = true
+    await using remoteTmp = await tmpdir({ git: true })
+    await withSupervisorToken(() =>
+      withAuthEnv(async () => {
+        const app = handler()
+        const pairingResponse = await requestWith(app, WorkspacePaths.remotePairing, remoteTmp.path, {
+          method: "POST",
+          headers: { authorization: auth(), "content-type": "application/json" },
+          body: JSON.stringify({
+            device: {
+              id: "dev_global_supervisor",
+              name: "SSH Remote",
+              platform: "android",
+              arch: "arm64",
+              version: "15",
+            },
+            workspace: {
+              id: "wrk_global_supervisor",
+              name: "Global SSH",
+              mode: "ssh",
+              directory: remoteTmp.path,
+              remoteDirectory: "/srv/global",
+              ssh: { host: "example.test", port: 22, user: "marcos" },
+            },
+          }),
+        })
+        expect(pairingResponse.status).toBe(200)
+        const pairing = await pairingResponse.json()
+
+        const denied = await requestWith(app, RemoteSupervisorPaths.pairings, remoteTmp.path, {
+          headers: { authorization: auth() },
+        })
+        expect(denied.status).toBe(403)
+
+        const listed = await requestWith(app, RemoteSupervisorPaths.pairings, remoteTmp.path, {
+          headers: { authorization: auth(), "x-slopcode-remote-supervisor-token": "supervisor-secret" },
+        })
+        expect(listed.status).toBe(200)
+        expect((await listed.json()).some((item: { id: string }) => item.id === pairing.id)).toBe(true)
+
+        const registered = await requestWith(app, RemoteSupervisorPaths.target, remoteTmp.path, {
+          method: "POST",
+          headers: {
+            authorization: auth(),
+            "content-type": "application/json",
+            "x-slopcode-remote-supervisor-token": "supervisor-secret",
+          },
+          body: JSON.stringify({
+            pairingID: pairing.id,
+            workspace: pairing.workspace,
+            target: { type: "local", directory: remoteTmp.path },
+          }),
+        })
+        expect(registered.status).toBe(204)
+
+        const validate = await requestWith(app, WorkspacePaths.remoteSshValidate, remoteTmp.path, {
+          method: "POST",
+          headers: { authorization: auth(), "content-type": "application/json" },
+          body: JSON.stringify(pairing.workspace),
+        })
+        expect(validate.status).toBe(200)
       }),
     )
   })
