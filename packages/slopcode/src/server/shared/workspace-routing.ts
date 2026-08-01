@@ -45,5 +45,9 @@ export function workspaceProxyURL(target: string | URL, requestURL: URL) {
 }
 
 function isClientCredentialQuery(key: string) {
-  return /(?:^|[_-])(auth|access|refresh|id|client|api|token|secret|password|passwd|credential)(?:$|[_-])/i.test(key)
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .toLowerCase()
+  return /(?:^|_)(auth|access|refresh|id|client|api|token|secret|password|passwd|credential)(?:$|_)/.test(normalized)
 }

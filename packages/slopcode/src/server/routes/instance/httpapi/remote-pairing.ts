@@ -1,4 +1,6 @@
 import { Credential } from "@slopcode-ai/core/credential"
+import { CredentialTable } from "@slopcode-ai/core/credential/sql"
+import { Database } from "@slopcode-ai/core/database/database"
 import { IntegrationSchema } from "@slopcode-ai/core/integration/schema"
 import {
   RemoteCapability,
@@ -18,6 +20,7 @@ import {
   RemoteWorkspaceSsh,
   RemoteWorkspaceTargetInput,
 } from "../../../../../../protocol/src/remote"
+import { asc, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema, Semaphore, Struct } from "effect"
 import path from "node:path"
 import os from "node:os"
@@ -113,6 +116,7 @@ const decodeRemotePairedHost = Schema.decodeUnknownSync(RemotePairedHost)
 const decodeRemoteTarget = Schema.decodeUnknownSync(RemoteTarget)
 const decodeRemoteWorkspace = Schema.decodeUnknownSync(RemoteWorkspace)
 const decodeRemoteWorkspaceSsh = Schema.decodeUnknownSync(RemoteWorkspaceSsh)
+const decodeCredential = Schema.decodeUnknownSync(Credential.Info)
 const decodePairingStore = (input: string): PairingStore => {
   try {
     return Schema.decodeUnknownSync(RemotePairingStore)(JSON.parse(input))
@@ -287,20 +291,41 @@ const mutationLock = Semaphore.makeUnsafe(1)
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const credential = yield* Credential.Service
+    const db = (yield* Database.Service).db
+    type Store = typeof db
+    type Transaction = Parameters<Parameters<Store["transaction"]>[0]>[0]
+    type Connection = Store | Transaction
 
-    const load = Effect.fn("RemotePairing.load")(function* () {
-      const stored = (yield* credential.list(remotePairingIntegrationID))[0]
-      if (!stored || stored.value.type !== "key") return { credential: stored, store: emptyStore() }
+    const load = Effect.fn("RemotePairing.load")(function* (connection: Connection) {
+      const row = yield* connection
+        .select()
+        .from(CredentialTable)
+        .where(eq(CredentialTable.integration_id, remotePairingIntegrationID))
+        .orderBy(asc(CredentialTable.time_created))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row || !row.integration_id) return { credential: undefined, store: emptyStore() }
+      const stored = new Credential.Stored({
+        id: row.id,
+        integrationID: row.integration_id,
+        label: row.label,
+        value: decodeCredential(row.value),
+      })
+      if (stored.value.type !== "key") return { credential: stored, store: emptyStore() }
       return { credential: stored, store: decodePairingStore(stored.value.key) }
     })
 
     const save = Effect.fn("RemotePairing.save")(function* (
+      connection: Connection,
       stored: typeof Credential.Stored.Type | undefined,
       store: PairingStore,
     ) {
       if (store.scopes.length === 0) {
-        if (stored) yield* credential.remove(stored.id)
+        yield* connection
+          .delete(CredentialTable)
+          .where(eq(CredentialTable.integration_id, remotePairingIntegrationID))
+          .run()
+          .pipe(Effect.orDie)
         return
       }
       const value = new Credential.Key({
@@ -308,18 +333,44 @@ export const layer = Layer.effect(
         key: JSON.stringify(store),
       })
       if (stored) {
-        yield* credential.update(stored.id, { label: "remote-pairings", value })
+        yield* connection
+          .update(CredentialTable)
+          .set({ label: "remote-pairings", value })
+          .where(eq(CredentialTable.id, stored.id))
+          .run()
+          .pipe(Effect.orDie)
         return
       }
-      yield* credential.create({
-        integrationID: remotePairingIntegrationID,
-        label: "remote-pairings",
-        value,
-      })
+      yield* connection
+        .delete(CredentialTable)
+        .where(eq(CredentialTable.integration_id, remotePairingIntegrationID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* connection
+        .insert(CredentialTable)
+        .values({
+          id: Credential.ID.create(),
+          integration_id: remotePairingIntegrationID,
+          label: "remote-pairings",
+          value,
+        })
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+    const atomic = Effect.fn("RemotePairing.atomic")(function* <A, E>(
+      effect: (connection: Transaction) => Effect.Effect<A, E>,
+    ) {
+      // The process-local lane avoids needless contention, while IMMEDIATE
+      // makes the read/modify/write transaction serialize with other SlopCode
+      // processes sharing this SQLite database.
+      return yield* db
+        .transaction(effect, { behavior: "immediate" })
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
     })
 
     const hosts = Effect.fn("RemotePairing.hosts")(function* (scope: PairingScope) {
-      const state = findScope((yield* load()).store, scope)
+      const state = findScope((yield* load(db)).store, scope)
       if (!state) return []
       const grouped = new Map<string, Array<typeof RemotePairingRecord.Type>>()
       for (const pairing of state.pairings) {
@@ -339,38 +390,41 @@ export const layer = Layer.effect(
       scope: PairingScope,
     ) {
       return yield* mutationLock.withPermit(
-        Effect.gen(function* () {
-          const stored = yield* load()
-          const current = findScope(stored.store, scope) ?? emptyScope(scope)
-          const existing = current.pairings.find(
-            (pairing) => pairing.device.id === input.device.id && sameWorkspace(pairing.workspace, input.workspace),
-          )
-          const code = pairingCode()
-          const next = decodeRemotePairing({
-            version: "v1",
-            id: existing?.id ?? pairingID(),
-            code,
-            selection: {
-              nonce: selectionNonce(),
-              deviceID: input.device.id,
+        atomic((connection) =>
+          Effect.gen(function* () {
+            const stored = yield* load(connection)
+            const current = findScope(stored.store, scope) ?? emptyScope(scope)
+            const existing = current.pairings.find(
+              (pairing) => pairing.device.id === input.device.id && sameWorkspace(pairing.workspace, input.workspace),
+            )
+            const code = pairingCode()
+            const next = decodeRemotePairing({
+              version: "v1",
+              id: existing?.id ?? pairingID(),
               code,
-            },
-            device: Schema.decodeUnknownSync(RemoteDevice)(input.device),
-            host: existing?.host ?? host(input.workspace.mode),
-            workspace: decodeRemoteWorkspace(input.workspace),
-            capability: input.capability ?? capability(input.workspace.mode),
-          })
-          const selectedPairingID = current.selectedPairingID === next.id ? next.id : current.selectedPairingID
-          yield* save(
-            stored.credential,
-            putScope(stored.store, {
-              ...current,
-              pairings: [...current.pairings.filter((pairing) => pairing.id !== next.id), next],
-              selectedPairingID,
-            }),
-          )
-          return next
-        }),
+              selection: {
+                nonce: selectionNonce(),
+                deviceID: input.device.id,
+                code,
+              },
+              device: Schema.decodeUnknownSync(RemoteDevice)(input.device),
+              host: existing?.host ?? host(input.workspace.mode),
+              workspace: decodeRemoteWorkspace(input.workspace),
+              capability: input.capability ?? capability(input.workspace.mode),
+            })
+            const selectedPairingID = current.selectedPairingID === next.id ? next.id : current.selectedPairingID
+            yield* save(
+              connection,
+              stored.credential,
+              putScope(stored.store, {
+                ...current,
+                pairings: [...current.pairings.filter((pairing) => pairing.id !== next.id), next],
+                selectedPairingID,
+              }),
+            )
+            return next
+          }),
+        ),
       )
     })
 
@@ -379,23 +433,26 @@ export const layer = Layer.effect(
       scope: PairingScope,
     ) {
       return yield* mutationLock.withPermit(
-        Effect.gen(function* () {
-          const stored = yield* load()
-          const current = findScope(stored.store, scope)
-          if (!current) return false
-          const pairings = current.pairings.filter((pairing) => pairing.id !== pairingID)
-          if (pairings.length === current.pairings.length) return false
-          yield* save(
-            stored.credential,
-            putScope(stored.store, {
-              ...current,
-              pairings,
-              targets: current.targets.filter((target) => target.pairingID !== pairingID),
-              selectedPairingID: current.selectedPairingID === pairingID ? undefined : current.selectedPairingID,
-            }),
-          )
-          return true
-        }),
+        atomic((connection) =>
+          Effect.gen(function* () {
+            const stored = yield* load(connection)
+            const current = findScope(stored.store, scope)
+            if (!current) return false
+            const pairings = current.pairings.filter((pairing) => pairing.id !== pairingID)
+            if (pairings.length === current.pairings.length) return false
+            yield* save(
+              connection,
+              stored.credential,
+              putScope(stored.store, {
+                ...current,
+                pairings,
+                targets: current.targets.filter((target) => target.pairingID !== pairingID),
+                selectedPairingID: current.selectedPairingID === pairingID ? undefined : current.selectedPairingID,
+              }),
+            )
+            return true
+          }),
+        ),
       )
     })
 
@@ -404,52 +461,54 @@ export const layer = Layer.effect(
       scope: PairingScope,
     ) {
       return yield* mutationLock.withPermit(
-        Effect.gen(function* () {
-          if (!input.pairingID) {
-            return yield* new TargetRegistrationError({
-              message: "Remote target registration requires an exact pairing ID",
-            })
-          }
-          const stored = yield* load()
-          const current = findScope(stored.store, scope)
-          if (!current) {
-            return yield* new TargetRegistrationError({
-              message: `Remote pairing not found: ${input.pairingID}`,
-            })
-          }
-          const pairing = current.pairings.find((item) => item.id === input.pairingID)
-          if (!pairing) {
-            return yield* new TargetRegistrationError({
-              message: `Remote pairing not found: ${input.pairingID}`,
-            })
-          }
-          if (!sameWorkspace(pairing.workspace, input.workspace)) {
-            return yield* new TargetRegistrationError({
-              message: "Registered remote target must match the exact paired workspace selection",
-            })
-          }
-          const target = Schema.decodeUnknownSync(RemoteTarget)(input.target)
-          const next: ScopeState = {
-            ...current,
-            targets: [
-              ...current.targets.filter(
-                (item) =>
-                  !(
-                    item.pairingID === pairing.id &&
-                    item.hostID === pairing.host.id &&
-                    sameWorkspace(item.workspace, pairing.workspace)
-                  ),
-              ),
-              {
-                pairingID: pairing.id,
-                hostID: pairing.host.id,
-                workspace: pairing.workspace,
-                target,
-              },
-            ],
-          }
-          yield* save(stored.credential, putScope(stored.store, next))
-        }),
+        atomic((connection) =>
+          Effect.gen(function* () {
+            if (!input.pairingID) {
+              return yield* new TargetRegistrationError({
+                message: "Remote target registration requires an exact pairing ID",
+              })
+            }
+            const stored = yield* load(connection)
+            const current = findScope(stored.store, scope)
+            if (!current) {
+              return yield* new TargetRegistrationError({
+                message: `Remote pairing not found: ${input.pairingID}`,
+              })
+            }
+            const pairing = current.pairings.find((item) => item.id === input.pairingID)
+            if (!pairing) {
+              return yield* new TargetRegistrationError({
+                message: `Remote pairing not found: ${input.pairingID}`,
+              })
+            }
+            if (!sameWorkspace(pairing.workspace, input.workspace)) {
+              return yield* new TargetRegistrationError({
+                message: "Registered remote target must match the exact paired workspace selection",
+              })
+            }
+            const target = Schema.decodeUnknownSync(RemoteTarget)(input.target)
+            const next: ScopeState = {
+              ...current,
+              targets: [
+                ...current.targets.filter(
+                  (item) =>
+                    !(
+                      item.pairingID === pairing.id &&
+                      item.hostID === pairing.host.id &&
+                      sameWorkspace(item.workspace, pairing.workspace)
+                    ),
+                ),
+                {
+                  pairingID: pairing.id,
+                  hostID: pairing.host.id,
+                  workspace: pairing.workspace,
+                  target,
+                },
+              ],
+            }
+            yield* save(connection, stored.credential, putScope(stored.store, next))
+          }),
+        ),
       )
     })
 
@@ -458,45 +517,48 @@ export const layer = Layer.effect(
       scope: PairingScope,
     ) {
       return yield* mutationLock.withPermit(
-        Effect.gen(function* () {
-          const stored = yield* load()
-          const current = findScope(stored.store, scope)
-          const pairing = current?.pairings.find((item) => item.id === input.pairingID)
-          if (!pairing || !current) {
-            return yield* new SelectionUnavailableError({
-              message: "Remote pairing selection is invalid, expired, or already used",
-            })
-          }
-          const selection = pairing.selection
-          if (
-            !selection ||
-            selection.deviceID !== pairing.device.id ||
-            input.deviceID !== pairing.device.id ||
-            input.selectionNonce !== selection.nonce ||
-            input.selectionCode !== selection.code
-          ) {
-            return yield* new SelectionUnavailableError({
-              message: "Remote pairing selection is invalid, expired, or already used",
-            })
-          }
-          const target = requireRegisteredTarget(pairing, current)
-          if (target instanceof TargetUnavailableError) return yield* target
-          const consumed = decodeStoredPairing({ ...pairing, selection: undefined })
-          yield* save(
-            stored.credential,
-            putScope(stored.store, {
-              ...current,
-              pairings: current.pairings.map((item) => (item.id === pairing.id ? consumed : item)),
-              selectedPairingID: pairing.id,
-            }),
-          )
-          return redact(pairing)
-        }),
+        atomic((connection) =>
+          Effect.gen(function* () {
+            const stored = yield* load(connection)
+            const current = findScope(stored.store, scope)
+            const pairing = current?.pairings.find((item) => item.id === input.pairingID)
+            if (!pairing || !current) {
+              return yield* new SelectionUnavailableError({
+                message: "Remote pairing selection is invalid, expired, or already used",
+              })
+            }
+            const selection = pairing.selection
+            if (
+              !selection ||
+              selection.deviceID !== pairing.device.id ||
+              input.deviceID !== pairing.device.id ||
+              input.selectionNonce !== selection.nonce ||
+              input.selectionCode !== selection.code
+            ) {
+              return yield* new SelectionUnavailableError({
+                message: "Remote pairing selection is invalid, expired, or already used",
+              })
+            }
+            const target = requireRegisteredTarget(pairing, current)
+            if (target instanceof TargetUnavailableError) return yield* target
+            const consumed = decodeStoredPairing({ ...pairing, selection: undefined })
+            yield* save(
+              connection,
+              stored.credential,
+              putScope(stored.store, {
+                ...current,
+                pairings: current.pairings.map((item) => (item.id === pairing.id ? consumed : item)),
+                selectedPairingID: pairing.id,
+              }),
+            )
+            return redact(pairing)
+          }),
+        ),
       )
     })
 
     const target = Effect.fn("RemotePairing.target")(function* (workspaceID: WorkspaceID, scope: PairingScope) {
-      const state = findScope((yield* load()).store, scope)
+      const state = findScope((yield* load(db)).store, scope)
       const pairing = state?.selectedPairingID
         ? state.pairings.find((item) => item.id === state.selectedPairingID)
         : undefined
@@ -511,7 +573,7 @@ export const layer = Layer.effect(
       scope: PairingScope,
     ) {
       decodeRemoteWorkspaceSsh(workspace)
-      const state = findScope((yield* load()).store, scope)
+      const state = findScope((yield* load(db)).store, scope)
       const pairing = state?.pairings.find(
         (item) =>
           sameWorkspace(item.workspace, workspace) &&
@@ -535,4 +597,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Credential.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))

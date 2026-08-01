@@ -1,6 +1,13 @@
 import { ProxyUtil } from "@/server/proxy-util"
 import { Effect, Stream } from "effect"
-import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import {
+  FetchHttpClient,
+  HttpBody,
+  HttpClient,
+  HttpClientRequest,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { WebSocketTracker } from "../websocket-tracker"
 import { WebSocket as WebSocketClient } from "ws"
@@ -100,12 +107,14 @@ export function http(
   request: HttpServerRequest.HttpServerRequest,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse> {
   return Effect.gen(function* () {
-    const response = yield* client.execute(
-      HttpClientRequest.make(request.method as never)(url, {
-        headers: ProxyUtil.headers(request.headers as HeadersInit, extra),
-        body: requestBody(request),
-      }),
-    )
+    const response = yield* client
+      .execute(
+        HttpClientRequest.make(request.method as never)(url, {
+          headers: ProxyUtil.headers(request.headers as HeadersInit, extra),
+          body: requestBody(request),
+        }),
+      )
+      .pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }))
     const headers = new Headers(response.headers as HeadersInit)
     headers.delete("content-encoding")
     headers.delete("content-length")

@@ -82,6 +82,19 @@ function credentialFromURL(url: URL, request: HttpServerRequest.HttpServerReques
   return Effect.succeed(emptyCredential())
 }
 
+function ticketMayBypassAuth(url: URL, request: HttpServerRequest.HttpServerRequest) {
+  if (!hasPtyConnectTicketURL(url)) return false
+  if (
+    url.searchParams.get("workspace") ||
+    url.searchParams.get("location[workspace]") ||
+    request.headers["x-slopcode-workspace"] ||
+    process.env.SLOPCODE_WORKSPACE_ID
+  ) {
+    return false
+  }
+  return true
+}
+
 function validateRawCredential<A, E, R>(
   effect: Effect.Effect<A, E, R>,
   credential: ServerAuth.DecodedCredentials,
@@ -140,7 +153,7 @@ export const ptyConnectAuthorizationLayer = Layer.effect(
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const url = new URL(request.url, "http://localhost")
-        if (hasPtyConnectTicketURL(url)) return yield* effect
+        if (ticketMayBypassAuth(url, request)) return yield* effect
         return yield* credentialFromURL(url, request).pipe(
           Effect.flatMap((credential) => validateCredential(effect, credential, config)),
         )

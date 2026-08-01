@@ -360,16 +360,19 @@ describe.serial("remote pairing HttpApi", () => {
             `/api/location?workspace=${sshWorkspaceID()}&auth_token=client-secret`,
             `/api/event?workspace=${sshWorkspaceID()}`,
             `/api/session/ses_remote_security/message?workspace=${sshWorkspaceID()}`,
-            `/api/pty/pty_remote/connect?workspace=${sshWorkspaceID()}&cursor=-1`,
-            `/pty/pty_remote/connect?workspace=${sshWorkspaceID()}&cursor=-1`,
           ]
           for (const route of unauthenticatedRoutes) {
-            const response = await requestWith(
-              app,
-              route,
-              remoteTmp.path,
-              route.includes("/pty/") ? { headers: { upgrade: "websocket", connection: "Upgrade" } } : undefined,
-            )
+            const response = await requestWith(app, route, remoteTmp.path)
+            expect(response.status).toBe(401)
+          }
+
+          for (const route of [
+            `/api/pty/pty_remote/connect?workspace=${sshWorkspaceID()}&cursor=-1&ticket=invalid`,
+            `/pty/pty_remote/connect?workspace=${sshWorkspaceID()}&cursor=-1&ticket=invalid`,
+          ]) {
+            const response = await requestWith(app, route, remoteTmp.path, {
+              headers: { upgrade: "websocket", connection: "Upgrade" },
+            })
             expect(response.status).toBe(401)
           }
 

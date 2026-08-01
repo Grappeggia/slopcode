@@ -38,6 +38,19 @@ function credentialFromRequest(request: HttpServerRequest.HttpServerRequest) {
   return Effect.succeed(emptyCredential())
 }
 
+function ticketMayBypassAuth(url: URL, request: HttpServerRequest.HttpServerRequest) {
+  if (!hasPtyConnectTicketURL(url)) return false
+  if (
+    url.searchParams.get("workspace") ||
+    url.searchParams.get("location[workspace]") ||
+    request.headers["x-slopcode-workspace"] ||
+    process.env.SLOPCODE_WORKSPACE_ID
+  ) {
+    return false
+  }
+  return true
+}
+
 export const authorizationLayer = Layer.effect(
   Authorization,
   Effect.gen(function* () {
@@ -46,7 +59,7 @@ export const authorizationLayer = Layer.effect(
     return Authorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        if (hasPtyConnectTicketURL(new URL(request.url, "http://localhost"))) return yield* effect
+        if (ticketMayBypassAuth(new URL(request.url, "http://localhost"), request)) return yield* effect
         const credential = yield* credentialFromRequest(request)
         if (ServerAuth.authorized(credential, config)) return yield* effect
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>

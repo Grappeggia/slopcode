@@ -112,6 +112,32 @@ describe("HttpApi workspace proxy", () => {
     }),
   )
 
+  it.live("does not follow redirects or forward capability headers to another host", () =>
+    Effect.gen(function* () {
+      const external: Array<Record<string, string>> = []
+      const externalURL = yield* listenTestServer((request) =>
+        Effect.sync(() => {
+          external.push(request.headers)
+          return HttpServerResponse.empty()
+        }),
+      )
+      const redirectURL = yield* listenTestServer(() =>
+        Effect.succeed(HttpServerResponse.redirect(`${externalURL}/escaped`)),
+      )
+      const request = HttpServerRequest.fromWeb(new Request("http://localhost/redirect"))
+      const httpClient = yield* HttpClient.HttpClient
+      const response = yield* HttpApiProxy.http(
+        httpClient,
+        `${redirectURL}/redirect`,
+        { "x-slopcode-remote-capability": "registered-secret" },
+        request,
+      )
+
+      expect(response.status).toBe(500)
+      expect(external).toEqual([])
+    }),
+  )
+
   it.live("proxies bodyless Web mutation requests as an empty body", () =>
     Effect.gen(function* () {
       const url = yield* listenServer(
