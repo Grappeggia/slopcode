@@ -16,54 +16,8 @@ type OpenAttachmentPickerOptions = {
   defaultPath?: string
 }
 type SaveFilePickerOptions = { title?: string; defaultPath?: string }
-type PlatformName = "web" | "desktop" | "android"
+type PlatformName = "web" | "desktop"
 type DesktopOS = "macos" | "windows" | "linux"
-
-export type AndroidNotificationPermission = "prompt" | "granted" | "denied"
-
-export type AndroidCapabilities = {
-  secureStorage: boolean
-  qrPairing: boolean
-  notifications: boolean
-  deepLinks: boolean
-  remoteTransport: boolean
-}
-
-export type AndroidSecureStorage = {
-  getItem(namespace: string, key: string): Promise<string | null>
-  setItem(namespace: string, key: string, value: string): Promise<void>
-  removeItem(namespace: string, key: string): Promise<void>
-  clear(namespace: string): Promise<void>
-  keys(namespace: string): Promise<string[]>
-  length(namespace: string): Promise<number>
-}
-
-export type AndroidQrPairing = {
-  scan(): Promise<string | null>
-}
-
-export type AndroidNotifications = {
-  permission(): Promise<AndroidNotificationPermission>
-  requestPermission(): Promise<AndroidNotificationPermission>
-}
-
-export type AndroidDeepLinks = {
-  consume(): Promise<string[]>
-  subscribe?(listener: (hrefs: string[]) => void): () => void
-}
-
-export type AndroidRemoteTransport = {
-  send(payload: string): Promise<string>
-}
-
-export type AndroidPlatformBridge = {
-  capabilities: AndroidCapabilities
-  secureStorage?: AndroidSecureStorage
-  qrPairing?: AndroidQrPairing
-  notifications?: AndroidNotifications
-  deepLinks?: AndroidDeepLinks
-  remoteTransport?: AndroidRemoteTransport
-}
 
 export type FatalRendererErrorLog = {
   error: string
@@ -154,15 +108,11 @@ type PlatformBase = {
 
   /** Record a fatal renderer error in platform logs (desktop only) */
   recordFatalRendererError?(error: FatalRendererErrorLog): Promise<void>
-
-  /** Android-specific native bridge boundaries */
-  android?: AndroidPlatformBridge
 }
 
 export type Platform = PlatformBase &
   (
     | { platform: "web"; os?: never }
-    | { platform: "android"; os?: never }
     | {
         platform: "desktop"
         os?: DesktopOS

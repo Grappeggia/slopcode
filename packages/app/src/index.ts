@@ -3,20 +3,7 @@ export { ACCEPTED_FILE_EXTENSIONS, ACCEPTED_FILE_TYPES, filePickerFilters } from
 export { useCommand } from "./context/command"
 export { loadLocaleDict, normalizeLocale, type Locale } from "./context/language"
 export { useWslServers } from "./wsl/context"
-export {
-  type AndroidCapabilities,
-  type AndroidDeepLinks,
-  type AndroidNotificationPermission,
-  type AndroidNotifications,
-  type AndroidPlatformBridge,
-  type AndroidQrPairing,
-  type AndroidRemoteTransport,
-  type AndroidSecureStorage,
-  type DisplayBackend,
-  type FatalRendererErrorLog,
-  type Platform,
-  PlatformProvider,
-} from "./context/platform"
+export { type DisplayBackend, type FatalRendererErrorLog, type Platform, PlatformProvider } from "./context/platform"
 export { type UpdaterPlatform, type UpdaterState } from "./updater"
 export {
   type WslDistroProbe,
@@ -32,6 +19,5 @@ export {
   type WslServersPlatform,
   type WslServersState,
 } from "./wsl/types"
-export { ServerConnection, useServer } from "./context/server"
-export { useTabs } from "./context/tabs"
+export { ServerConnection } from "./context/server"
 export { handleNotificationClick } from "./utils/notification-click"

@@ -120,7 +120,15 @@ export function resolveServerList(input: {
   )
 
   for (const value of input.stored) {
-    const conn = storedConnection(value)
+    const conn: ServerConnection.Http =
+      typeof value === "string"
+        ? {
+            type: "http" as const,
+            http: { url: value },
+          }
+        : "http" in value
+          ? value
+          : { type: "http", http: value }
     const key = ServerConnection.key(conn)
 
     const existing = deduped.get(key)
@@ -143,10 +151,6 @@ export namespace ServerConnection {
     url: string
     username?: string
     password?: string
-    /** Default workspace routing scope used by remote desktop/SSH hosts. */
-    workspaceID?: string
-    /** Default absolute directory used when the request does not provide one. */
-    directory?: string
   }
 
   // Regular web connections
@@ -185,10 +189,8 @@ export namespace ServerConnection {
 
   export const key = (conn: Any): Key => {
     switch (conn.type) {
-      case "http": {
-        const scope = [conn.http.workspaceID, conn.http.directory].filter(Boolean).join("\n")
-        return Key.make(scope ? `${conn.http.url}\n${scope}` : conn.http.url)
-      }
+      case "http":
+        return Key.make(conn.http.url)
       case "sidecar": {
         if (conn.variant === "wsl") return Key.make(`wsl:${conn.distro}`)
         return Key.make("sidecar")
@@ -206,12 +208,6 @@ export namespace ServerConnection {
     !!conn && (builtin(conn) || (conn.type === "http" && isLocalHost(conn.http.url) === "local"))
 }
 
-function storedConnection(value: StoredServer): ServerConnection.Any {
-  if (typeof value === "string") return { type: "http", http: { url: value } }
-  if ("type" in value) return value
-  return { type: "http", http: value }
-}
-
 export function nextServerAfterRemoval(
   servers: ServerConnection.Any[],
   removed: ServerConnection.Key,
@@ -222,10 +218,6 @@ export function nextServerAfterRemoval(
   return next ? ServerConnection.key(next) : fallback
 }
 
-export function isServerStateReady(persisted: boolean, external: boolean | undefined) {
-  return persisted && external !== false
-}
-
 export const { use: useServer, provider: ServerProvider } = createSimpleContext({
   name: "Server",
   gate: true,
@@ -233,7 +225,6 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     defaultServer: ServerConnection.Key
     canonicalLocalServer?: ServerConnection.Key
     servers?: Array<ServerConnection.Any>
-    serversReady?: () => boolean
   }) => {
     const [store, setStore, _, ready] = persisted(
       {
@@ -246,6 +237,8 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
         lastProject: {} as Record<string, string>,
       }),
     )
+
+    const url = (x: StoredServer) => (typeof x === "string" ? x : "type" in x ? x.http.url : x.url)
 
     const allServers = createMemo((): Array<ServerConnection.Any> => {
       return resolveServerList({ stored: store.list, props: props.servers })
@@ -264,7 +257,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       if (!url_) return
       const conn: ServerConnection.Http = { ...input, authToken: undefined, http: { ...input.http, url: url_ } }
       return batch(() => {
-        const existing = store.list.findIndex((x) => ServerConnection.key(storedConnection(x)) === ServerConnection.key(conn))
+        const existing = store.list.findIndex((x) => url(x) === url_)
         if (existing !== -1) {
           setStore("list", existing, conn)
         } else {
@@ -277,14 +270,14 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
 
     function remove(key: ServerConnection.Key) {
       const next = nextServerAfterRemoval(allServers(), key, props.defaultServer)
-      const list = store.list.filter((x) => ServerConnection.key(storedConnection(x)) !== key)
+      const list = store.list.filter((x) => url(x) !== key)
       batch(() => {
         setStore("list", list)
         if (state.active === key) setState("active", next)
       })
     }
 
-    const isReady = createMemo(() => isServerStateReady(ready() && !!state.active, props.serversReady?.()))
+    const isReady = createMemo(() => ready() && !!state.active)
 
     const scope = (key = state.active) => ServerScope.fromServerKey(key, props.canonicalLocalServer)
     const projects = createServerProjects({ scope, store, setStore })
