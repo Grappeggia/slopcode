@@ -437,7 +437,7 @@ export const SettingsGeneralV2: Component = () => {
           description={
             <>
               {language.t("settings.general.row.theme.description")}{" "}
-              <Link class="settings-v2-link" href="https://slopcode.ai/docs/themes/">
+              <Link class="settings-v2-link" href="https://slopcode.dev/docs/themes/">
                 {language.t("common.learnMore")}
               </Link>
             </>

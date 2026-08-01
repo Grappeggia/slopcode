@@ -360,7 +360,7 @@ function HomeDesign() {
           clearNotifications={clearNotifications}
           unseenCount={unseenCount}
           openSettings={openSettings}
-          openHelp={() => platform.openLink("https://slopcode.ai/desktop-feedback")}
+          openHelp={() => platform.openLink("https://slopcode.dev/desktop-feedback")}
           language={language}
         />
 

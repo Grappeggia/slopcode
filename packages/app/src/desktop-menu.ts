@@ -200,7 +200,7 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "help",
     label: "Help",
     items: [
-      { type: "item", label: "SlopCode Documentation", href: "https://slopcode.ai/docs" },
+      { type: "item", label: "SlopCode Documentation", href: "https://slopcode.dev/docs" },
       { type: "item", label: "Support Forum", href: "https://discord.com/invite/slopcode" },
       { type: "item", label: "Export Logs...", command: "logs.export" },
       { type: "separator" },

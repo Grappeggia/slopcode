@@ -428,7 +428,7 @@ export function DialogConnectProvider(props: { provider: string }) {
               <div class="text-14-regular text-text-base">{language.t("provider.connect.slopcodeZen.line2")}</div>
               <div class="text-14-regular text-text-base">
                 {language.t("provider.connect.slopcodeZen.visit.prefix")}
-                <Link href="https://slopcode.ai/zen" tabIndex={-1}>
+                <Link href="https://slopcode.dev/zen" tabIndex={-1}>
                   {language.t("provider.connect.slopcodeZen.visit.link")}
                 </Link>
                 {language.t("provider.connect.slopcodeZen.visit.suffix")}

@@ -139,7 +139,7 @@ export const dict = {
   "provider.connect.slopcodeZen.line1": "SlopCode Zen 為你提供一組精選的可靠最佳化模型，用於程式碼代理程式。",
   "provider.connect.slopcodeZen.line2": "只需一個 API 金鑰，你就能使用 Claude、GPT、Gemini、GLM 等模型。",
   "provider.connect.slopcodeZen.visit.prefix": "造訪 ",
-  "provider.connect.slopcodeZen.visit.link": "slopcode.ai/zen",
+  "provider.connect.slopcodeZen.visit.link": "slopcode.dev/zen",
   "provider.connect.slopcodeZen.visit.suffix": " 取得你的 API 金鑰。",
   "provider.connect.oauth.code.visit.prefix": "造訪 ",
   "provider.connect.oauth.code.visit.link": "此連結",

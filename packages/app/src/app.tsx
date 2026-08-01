@@ -9,11 +9,12 @@ import { Font } from "@slopcode-ai/ui/font"
 import { Splash } from "@slopcode-ai/ui/logo"
 import { ThemeProvider } from "@slopcode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router, useParams, useSearchParams } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
   type Component,
+  batch,
   createEffect,
   createMemo,
   createResource,
@@ -32,7 +33,7 @@ import { CommentsProvider } from "@/context/comments"
 import { FileProvider } from "@/context/file"
 import { ServerSDKProvider } from "@/context/server-sdk"
 import { ServerSyncProvider } from "@/context/server-sync"
-import { GlobalProvider } from "@/context/global"
+import { GlobalProvider, useGlobal } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
 import { LayoutProvider } from "@/context/layout"
@@ -50,6 +51,7 @@ import DirectoryLayout, { DirectoryDataProvider } from "@/pages/directory-layout
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
+import { legacySessionHref, serverRouteKey } from "./utils/session-route"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
@@ -123,6 +125,53 @@ function ResolvedDraftRoute(props: { draftID: string }) {
       )}
     </Show>
   )
+}
+
+function TargetSessionRoute() {
+  const params = useParams<{ serverKey: string; id: string }>()
+  const global = useGlobal()
+  const server = useServer()
+  const navigate = useNavigate()
+  const target = createMemo(() => {
+    const key = serverRouteKey(params.serverKey)
+    if (!key) return
+    const conn = global.servers.list().find((item) => ServerConnection.key(item) === key)
+    if (!conn) return
+    return { key, conn }
+  })
+
+  createEffect(() => {
+    const current = target()
+    const sessionID = params.id
+    if (!current || !sessionID) {
+      navigate("/", { replace: true })
+      return
+    }
+    let stale = false
+    void global
+      .createServerCtx(current.conn)
+      .sdk.client.session.get({ sessionID })
+      .then((result) => {
+        const directory = result.data?.directory
+        if (stale) return
+        if (!directory) {
+          navigate("/", { replace: true })
+          return
+        }
+        batch(() => {
+          server.setActive(current.key)
+          navigate(legacySessionHref(directory, sessionID), { replace: true })
+        })
+      })
+      .catch(() => {
+        if (!stale) navigate("/", { replace: true })
+      })
+    onCleanup(() => {
+      stale = true
+    })
+  })
+
+  return null
 }
 
 function UiI18nBridge(props: ParentProps) {
@@ -411,6 +460,7 @@ export function AppInterface(props: {
           >
             <Route path="/" component={HomeRoute} />
             <Route path="/new-session" component={DraftRoute} />
+            <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
             <Route path="/:dir" component={DirectoryLayout}>
               <Route path="/" component={() => <Navigate href="session" />} />
               <Route path="/session/:id?" component={SessionRoute} />

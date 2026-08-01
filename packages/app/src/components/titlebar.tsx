@@ -352,8 +352,16 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                   keybind: "mod+w",
                   hidden: true,
                   onSelect: () => {
-                    tabsStoreActions.removeTab(tabsStore.findIndex((tab) => current === tab))
+                    tabsStoreActions.closeTab(tabsStore.findIndex((tab) => current === tab))
                   },
+                },
+                {
+                  id: "tab.reopen",
+                  category: "tab",
+                  title: "Reopen closed tab",
+                  keybind: "mod+shift+t",
+                  hidden: true,
+                  onSelect: () => tabsStoreActions.reopenClosedTab(),
                 },
                 {
                   id: `tab.prev`,
@@ -472,7 +480,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                                     navigateTab(tab)
                                     ref.scrollIntoView({ behavior: "instant" })
                                   }}
-                                  onClose={() => tabsStoreActions.removeTab(i())}
+                                  onClose={() => tabsStoreActions.closeTab(i())}
                                 />
                               </>
                             )
@@ -492,7 +500,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
 
                                   ref.scrollIntoView({ behavior: "instant" })
                                 }}
-                                onClose={() => tabsStoreActions.removeTab(i())}
+                                onClose={() => tabsStoreActions.closeTab(i())}
                                 active={currentTab() === tab}
                                 activeServer={tab.server === server.key}
                                 forceTruncate={tabsAreOverflowing()}
