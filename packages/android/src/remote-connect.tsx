@@ -28,7 +28,7 @@ function validPort(value: string) {
 
 function validWorkspaceID(value: string) {
   const next = clean(value)
-  if (!next) return `wrk_android_${crypto.randomUUID().replaceAll("-", "")}`
+  if (!next) return
   if (!/^wrk[a-zA-Z0-9._:-]+$/.test(next)) return
   return next
 }
@@ -64,7 +64,7 @@ export function RemoteConnect(props: Props) {
       return setError("Remote folder must be an absolute POSIX path.")
     }
     if (!sshHost || !sshUser || !sshPort) return setError("Enter the SSH host, user, and port.")
-    if (!workspaceID) return setError("Workspace IDs must start with wrk.")
+    if (clean(workspace()) && !workspaceID) return setError("Workspace IDs must start with wrk.")
 
     setBusy(true)
     setError("")
@@ -102,7 +102,7 @@ export function RemoteConnect(props: Props) {
               mode: "ssh",
             },
             workspace: {
-              id: workspaceID,
+              ...(workspaceID ? { id: workspaceID } : {}),
               name: clean(name()) || remoteDirectory,
               mode: "ssh",
               directory: remoteDirectory,
@@ -189,7 +189,7 @@ export function RemoteConnect(props: Props) {
         </label>
 
         <label class="flex flex-col gap-1 text-14-medium">
-          Workspace ID (optional)
+          Workspace ID (optional; use one provisioned by the desktop host)
           <input
             type="text"
             placeholder="wrk_project"
