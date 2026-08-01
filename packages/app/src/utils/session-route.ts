@@ -1,0 +1,38 @@
+import { base64Encode } from "@slopcode-ai/core/util/encode"
+import { ServerConnection } from "@/context/server"
+import { decode64 } from "@/utils/base64"
+
+export const canonicalSessionRoute = "/server/:serverKey/:dir/session/:id"
+
+export function sessionHref(server: ServerConnection.Key, dirBase64: string, sessionID: string) {
+  return `/server/${base64Encode(server)}/${dirBase64}/session/${sessionID}`
+}
+
+export function legacySessionRedirect(server: ServerConnection.Key, directory: string, sessionID: string) {
+  return sessionHref(server, base64Encode(directory), sessionID)
+}
+
+export function legacySessionHref(directory: string, sessionID: string) {
+  return `/${base64Encode(directory)}/session/${sessionID}`
+}
+
+export function serverRouteKey(segment: string | undefined) {
+  const key = decode64(segment)
+  if (!key || base64Encode(key) !== segment) return
+  return ServerConnection.Key.make(key)
+}
+
+export function requireServerKey(segment: string | undefined) {
+  const key = serverRouteKey(segment)
+  if (!key) throw new Error("Invalid server route")
+  return key
+}
+
+export function legacySessionServer(
+  tabs: readonly { type: "session"; server: ServerConnection.Key; sessionId: string }[],
+  sessionID: string,
+  active: ServerConnection.Key,
+) {
+  const matches = tabs.filter((tab) => tab.sessionId === sessionID)
+  return matches.find((tab) => tab.server === active)?.server ?? (matches.length === 1 ? matches[0]?.server : active)
+}
