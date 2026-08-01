@@ -47,4 +47,19 @@ test("adds default remote workspace routing headers without overriding request s
   expect(url.searchParams.get("workspace")).toBe("ws_remote")
   expect(url.searchParams.get("directory")).toBe("/srv/project")
   expect(request?.headers.get("authorization")).toBe(`Basic ${btoa("slopcode:secret")}`)
+
+  await createSdkForServer({
+    server: {
+      url: "https://desktop.example.test",
+      workspaceID: "ws_default",
+      directory: "/srv/default",
+    },
+    directory: "/srv/override",
+    experimental_workspaceID: "ws_override",
+    fetch,
+  }).global.health()
+
+  const override = new URL(request?.url ?? "https://invalid")
+  expect(override.searchParams.get("workspace")).toBe("ws_override")
+  expect(override.searchParams.get("directory")).toBe("/srv/override")
 })
