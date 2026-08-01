@@ -183,8 +183,19 @@ public:
     "Content-Type: application/json\r\nX-Trace: local\r\nSet-Cookie: secret\r\n");
   bool close = false;
   bool hold = false;
+  bool contentLength = true;
+  bool stream = false;
   int disconnects = 0;
   QPointer<QTcpSocket> socket_;
+
+  void resume()
+  {
+    if (!socket_) {
+      return;
+    }
+    socket_->write(body.mid(64 * 1024));
+    socket_->disconnectFromHost();
+  }
 
 private:
   void read(QTcpSocket *socket)
@@ -210,8 +221,14 @@ private:
     if (hold) {
       return;
     }
-    socket->write(QByteArrayLiteral("HTTP/1.1 201 Created\r\n") + responseHeaders + QByteArrayLiteral("Content-Length: ") +
-                  QByteArray::number(body.size()) + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
+    const QByteArray response = QByteArrayLiteral("HTTP/1.1 201 Created\r\n") + responseHeaders +
+                                (contentLength ? QByteArrayLiteral("Content-Length: ") + QByteArray::number(body.size()) + QByteArrayLiteral("\r\n")
+                                               : QByteArray()) +
+                                QByteArrayLiteral("Connection: close\r\n\r\n");
+    socket->write(response + (stream ? body.left(64 * 1024) : body));
+    if (stream) {
+      return;
+    }
     socket->disconnectFromHost();
   }
 
@@ -320,6 +337,8 @@ private slots:
   void rejectsUnsupportedBody();
   void returnsBoundedNetworkError();
   void rejectsOversizedResponse();
+  void rejectsCloseDelimitedOversizedResponse();
+  void rejectsMalformedResponseHeaders_data();
   void rejectsMalformedResponseHeaders();
   void abortsInFlightReplyOnCleanup();
 };
@@ -471,14 +490,45 @@ void HttpBridgeTest::rejectsOversizedResponse()
   QTRY_VERIFY(test.http.disconnects > 0);
 }
 
-void HttpBridgeTest::rejectsMalformedResponseHeaders()
+void HttpBridgeTest::rejectsCloseDelimitedOversizedResponse()
 {
   Harness test;
-  test.http.responseHeaders.clear();
+  test.http.body = QByteArray(64 * 1024 + 1, 'x');
+  test.http.contentLength = false;
+  test.http.stream = true;
+  test.control.send(request());
+
+  QTRY_COMPARE(test.http.requests.size(), 1);
+  QTRY_VERIFY(!test.forwarder.findChildren<QNetworkReply *>().isEmpty());
+  QNetworkReply *reply = test.forwarder.findChild<QNetworkReply *>();
+  QVERIFY(reply != nullptr);
+  QCOMPARE(reply->readBufferSize(), qint64(64 * 1024));
+  test.http.resume();
+  QTRY_COMPARE(test.control.frames.size(), 2);
+  QCOMPARE(response(test.control).kind, FrameKind::Error);
+  QCOMPARE(response(test.control).object.value(QStringLiteral("code")).toString(), QStringLiteral("too_large"));
+  QTRY_VERIFY(test.http.disconnects > 0);
+}
+
+void HttpBridgeTest::rejectsMalformedResponseHeaders_data()
+{
+  QTest::addColumn<QByteArray>("headers");
+
+  QByteArray many;
   for (int index = 0; index < 65; ++index) {
-    test.http.responseHeaders += QByteArrayLiteral("X-Response-") + QByteArray::number(index) +
-                                 QByteArrayLiteral(": value\r\n");
+    many += QByteArrayLiteral("X-Response-") + QByteArray::number(index) + QByteArrayLiteral(": value\r\n");
   }
+  QTest::newRow("too-many") << many;
+  QTest::newRow("invalid-name") << QByteArrayLiteral("X Response: value\r\n");
+  QTest::newRow("invalid-utf8-value") << QByteArray("X-Response: \xff\r\n");
+  QTest::newRow("control-value") << QByteArray("X-Response: value\x01\r\n");
+}
+
+void HttpBridgeTest::rejectsMalformedResponseHeaders()
+{
+  QFETCH(QByteArray, headers);
+  Harness test;
+  test.http.responseHeaders = headers;
   test.control.send(request());
 
   QTRY_COMPARE(test.http.requests.size(), 1);

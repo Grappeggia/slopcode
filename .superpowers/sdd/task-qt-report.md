@@ -55,3 +55,64 @@ Added `slopcode_remote_qt_http_bridge_test`, which uses a real TLS
 
 Only `packages/remote-qt` and this report were changed. Protocol, server,
 Android, and desktop sources were not modified.
+
+## Review fix
+
+### Changed files
+
+- `packages/remote-qt/src/http_bridge.cpp`
+  - Set each local `QNetworkReply` read buffer to the existing 64 KiB RemoteV1
+    response-body bound before connecting response handlers. This prevents the
+    default unlimited Qt reply buffer from accumulating unknown-length or
+    chunked response data while retaining the existing incremental body,
+    progress, and error handling.
+- `packages/remote-qt/tests/http_bridge_test.cpp`
+  - Added a close-delimited (no `Content-Length`) oversized-response regression
+    that holds the response after 64 KiB, asserts the reply read-buffer bound,
+    releases one additional byte, and expects `too_large`.
+  - Expanded local raw HTTP response-header coverage to deterministically test
+    over-count, malformed-name, invalid-UTF-8-value, and control-byte-value
+    responses.
+
+### Verification
+
+Command:
+
+```sh
+git diff --check -- packages/remote-qt && git diff --check -- .superpowers/sdd/task-qt-report.md
+```
+
+Output: no output (exit 0).
+
+Command:
+
+```sh
+cmake -S packages/remote-qt -B /tmp/slopcode-remote-qt-review-build -G Ninja -DSLOPCODE_REMOTE_QT_BUILD_TESTS=ON
+```
+
+Output:
+
+```text
+CMake Error at CMakeLists.txt:14 (find_package):
+  By not providing "FindQt6.cmake" in CMAKE_MODULE_PATH this project has
+  asked CMake to find a package configuration file provided by "Qt6", but
+  CMake did not find one.
+
+  Could not find a package configuration file provided by "Qt6" (requested
+  version 6.5) with any of the following names:
+
+    Qt6Config.cmake
+    qt6-config.cmake
+
+  Add the installation prefix of "Qt6" to CMAKE_PREFIX_PATH or set "Qt6_DIR"
+  to a directory containing one of the above files.  If "Qt6" provides a
+  separate development package or SDK, be sure it has been installed.
+
+
+-- Configuring incomplete, errors occurred!
+```
+
+### Limitation
+
+Qt 6.5+ is unavailable in this environment, so the focused Qt build and
+`slopcode_remote_qt_http_bridge_test` could not be compiled or run.

@@ -266,6 +266,7 @@ void RemoteHttpBridge::dispatch(const Frame &request)
            true);
     return;
   }
+  reply->setReadBufferSize(kMaxBodyBytes);
   replies_.insert(reply);
   bodies_.insert(reply, QByteArray());
   connect(reply, &QObject::destroyed, this, [this, reply]() {
