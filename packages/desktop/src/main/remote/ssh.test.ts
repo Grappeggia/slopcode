@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { describe, expect, test } from "bun:test"
 import {
   buildSshBootstrapScript,
@@ -99,13 +100,25 @@ describe("SSH workspace scripts", () => {
     expect(bootstrap).not.toContain('. "$state_file"')
     expect(bootstrap).not.toContain('DIRECTORY="$dir"')
     expect(stop).toContain('if ! matches_server "$state_pid" "$state_port"; then')
+    expect(stop).toContain('comm="$(ps -p "$pid" -o comm= 2>/dev/null || true)"')
     expect(stop).toContain('cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"')
+    expect(stop).toContain('case "$1" in')
+    expect(stop).toContain('slopcode|*/slopcode) ;;')
     expect(stop).not.toContain('. "$state_file"')
     expect(guardedStop).toContain('if [ "$state_password" != "$expected_password" ]; then')
     expect(guardedStop).toContain('while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do')
     expect(guardedStop).toContain('if ! wait_for_server 20; then')
     expect(bootstrap).toContain("cd \"$dir\"")
     expect(stop).not.toContain("/srv/slopcode")
+  })
+
+  test("matches_server rejects helper commands and accepts exact slopcode paths", () => {
+    const stop = buildSshStopScript(normalizeSshTarget(fixtureTarget()))
+
+    expect(runMatcher(stop, { comm: "slopcode", command: "slopcode serve --hostname 127.0.0.1 --port 4200" })).toBe(0)
+    expect(runMatcher(stop, { comm: "slopcode", command: "/usr/bin/slopcode serve --hostname 127.0.0.1 --port 4200" })).toBe(0)
+    expect(runMatcher(stop, { comm: "slopcode-helper", command: "/usr/bin/slopcode-helper serve --hostname 127.0.0.1 --port 4200" })).toBe(1)
+    expect(runMatcher(stop, { comm: "slopcode", command: "/usr/bin/slopcode-helper serve --hostname 127.0.0.1 --port 4200" })).toBe(1)
   })
 
   test("keep selected directory out of raw shell commands", () => {
@@ -547,6 +560,45 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+function runMatcher(
+  script: string,
+  opts: {
+    pid?: string
+    port?: string
+    comm: string
+    command: string
+  },
+) {
+  const pid = opts.pid ?? "4321"
+  const port = opts.port ?? "4200"
+  const fn = match(script, /(^matches_server\(\) \{[\s\S]*?^})/m)
+  const input = [
+    "set -eu",
+    `pid=${shellQuote(pid)}`,
+    `port=${shellQuote(port)}`,
+    `comm=${shellQuote(opts.comm)}`,
+    `command=${shellQuote(opts.command)}`,
+    "ps() {",
+    '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "comm=" ]; then',
+    '    printf \'%s\\n\' "$comm"',
+    "    return 0",
+    "  fi",
+    '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "command=" ]; then',
+    '    printf \'%s\\n\' "$command"',
+    "    return 0",
+    "  fi",
+    "  return 1",
+    "}",
+    fn,
+    'matches_server "$pid" "$port"',
+  ].join("\n")
+  const result = spawnSync("sh", ["-se"], {
+    input,
+    encoding: "utf8",
+  })
+  return result.status ?? 1
+}
+
 function createRemoteMachine(
   opts: {
     state?: {
@@ -641,4 +693,8 @@ function matchOptional(value: string, pattern: RegExp) {
 
 function testAbortError() {
   return Object.assign(new Error("SSH workspace start aborted"), { name: "AbortError" })
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`
 }
