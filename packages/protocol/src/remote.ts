@@ -43,9 +43,11 @@ export const RemoteMode = Schema.Union([Schema.Literal("local"), Schema.Literal(
 })
 export type RemoteMode = typeof RemoteMode.Type
 
-export const RemoteAgentMode = Schema.Union([Schema.Literal("local-slopcode"), Schema.Literal("codex-cli")]).annotate({
-  identifier: "RemoteV1.AgentMode",
-})
+export const RemoteAgentMode = Schema.Union([
+  Schema.Literal("local-slopcode"),
+  Schema.Literal("codex-cli"),
+  Schema.Literal("opencode-cli"),
+]).annotate({ identifier: "RemoteV1.AgentMode" })
 export type RemoteAgentMode = typeof RemoteAgentMode.Type
 
 export const RemoteRequestID = Schema.String.check(Schema.isPattern(/^req_[a-zA-Z0-9._:-]+$/)).pipe(
@@ -255,6 +257,8 @@ export type RemoteCodexCliConfigEncoded = typeof RemoteCodexCliConfig.Encoded
 
 export const RemoteCodexCliRequest = exact(
   Schema.Struct({
+    // Omitted by legacy peers; absence means local-slopcode for compatibility.
+    agent: Schema.optional(RemoteAgentMode),
     prompt: RemoteCodexCliPrompt,
     config: Schema.optional(RemoteCodexCliConfig),
   }),
@@ -285,12 +289,38 @@ export type RemoteCodexCliResultMetadataEncoded = typeof RemoteCodexCliResultMet
 
 export const RemoteCodexCliResult = exact(
   Schema.Struct({
+    // Omitted by legacy peers; absence means local-slopcode for compatibility.
+    agent: Schema.optional(RemoteAgentMode),
     output: RemoteCodexCliText(1024 * 1024, "Codex CLI output"),
     metadata: RemoteCodexCliResultMetadata,
   }),
 ).annotate({ identifier: "RemoteV1.CodexCliResult" })
 export type RemoteCodexCliResult = typeof RemoteCodexCliResult.Type
 export type RemoteCodexCliResultEncoded = typeof RemoteCodexCliResult.Encoded
+
+export const RemoteAgentPrompt = RemoteCodexCliPrompt.annotate({ identifier: "RemoteV1.AgentPrompt" })
+export type RemoteAgentPrompt = typeof RemoteAgentPrompt.Type
+
+export const RemoteAgentConfig = RemoteCodexCliConfig.annotate({ identifier: "RemoteV1.AgentConfig" })
+export type RemoteAgentConfig = typeof RemoteAgentConfig.Type
+export type RemoteAgentConfigEncoded = typeof RemoteAgentConfig.Encoded
+
+export const RemoteAgentRequest = RemoteCodexCliRequest.annotate({ identifier: "RemoteV1.AgentRequest" })
+export type RemoteAgentRequest = typeof RemoteAgentRequest.Type
+export type RemoteAgentRequestEncoded = typeof RemoteAgentRequest.Encoded
+
+export const RemoteAgentResultStatus = RemoteCodexCliResultStatus.annotate({ identifier: "RemoteV1.AgentResultStatus" })
+export type RemoteAgentResultStatus = typeof RemoteAgentResultStatus.Type
+
+export const RemoteAgentResultMetadata = RemoteCodexCliResultMetadata.annotate({
+  identifier: "RemoteV1.AgentResultMetadata",
+})
+export type RemoteAgentResultMetadata = typeof RemoteAgentResultMetadata.Type
+export type RemoteAgentResultMetadataEncoded = typeof RemoteAgentResultMetadata.Encoded
+
+export const RemoteAgentResult = RemoteCodexCliResult.annotate({ identifier: "RemoteV1.AgentResult" })
+export type RemoteAgentResult = typeof RemoteAgentResult.Type
+export type RemoteAgentResultEncoded = typeof RemoteAgentResult.Encoded
 
 const RemoteWorkspaceLocalShape = Schema.Struct({
   id: Workspace.ID,

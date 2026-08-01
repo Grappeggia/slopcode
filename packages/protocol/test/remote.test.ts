@@ -8,6 +8,9 @@ import {
   RemoteCodexCliConfig,
   RemoteCodexCliRequest,
   RemoteCodexCliResult,
+  RemoteAgentMode,
+  RemoteAgentRequest,
+  RemoteAgentResult,
   RemoteSshFolderLimits,
   RemoteSshFolderListing,
   RemoteWorkspace,
@@ -174,6 +177,8 @@ describe("remote protocol contracts", () => {
   })
 
   test("supports explicit agent modes without breaking legacy ssh workspaces", async () => {
+    const openCodeMode = await Effect.runPromise(Schema.decodeUnknownEffect(RemoteAgentMode)("opencode-cli"))
+
     const legacy = await Effect.runPromise(
       Schema.decodeUnknownEffect(RemoteWorkspace)({
         id: "wrk_legacy-ssh",
@@ -226,6 +231,11 @@ describe("remote protocol contracts", () => {
     expect(legacy.agent).toBeUndefined()
     expect(local.agent).toBe("local-slopcode")
     expect(codex.agent).toBe("codex-cli")
+    expect(openCodeMode).toBe("opencode-cli")
+
+    await expect(
+      Effect.runPromise(Schema.decodeUnknownEffect(RemoteAgentMode)("open-code")),
+    ).rejects.toThrow()
 
     await expect(
       Effect.runPromise(
@@ -348,6 +358,29 @@ describe("remote protocol contracts", () => {
     expect(request.config?.sandbox).toBe("workspace-write")
     expect(result.metadata.status).toBe("completed")
     expect(result.output).toContain("failing assertion")
+
+    const openCodeRequest = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteAgentRequest)({
+        agent: "opencode-cli",
+        prompt: "Summarize the selected remote folder.",
+        config: {
+          model: "open-model",
+          profile: "remote-safe",
+          sandbox: "read-only",
+          approval: "never",
+        },
+      }),
+    )
+    const openCodeResult = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteAgentResult)({
+        agent: "opencode-cli",
+        output: "The folder is clean.",
+        metadata: { status: "completed", model: "open-model", sandbox: "read-only", approval: "never" },
+      }),
+    )
+
+    expect(openCodeRequest.agent).toBe("opencode-cli")
+    expect(openCodeResult.agent).toBe("opencode-cli")
   })
 
   test("rejects unbounded or command-shaped Codex CLI data", async () => {
