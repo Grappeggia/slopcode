@@ -5,6 +5,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
+#include <QFileInfo>
+#include <QHostAddress>
+#include <QNetworkReply>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QUrl>
 #include <QtTest/QtTest>
 
@@ -22,11 +29,41 @@ private slots:
   void validatesDigestsCapabilitiesIdempotencyAndStreams();
   void validatesSessionNegotiationBindings();
   void hardensLocalForwarding();
+  void followsValidatedHttpRedirects();
   void requestsAnOsAssignedSshPort();
   void makesSshTeardownIdempotent();
+  void restartsAfterSshFailure();
 };
 
 namespace {
+
+#ifndef Q_OS_WIN
+class ScopedPath final {
+public:
+  explicit ScopedPath(const QByteArray &prefix)
+    : previous_(qgetenv("PATH"))
+    , wasSet_(qEnvironmentVariableIsSet("PATH"))
+  {
+    QByteArray value = prefix;
+    value += ':';
+    value += previous_;
+    qputenv("PATH", value);
+  }
+
+  ~ScopedPath()
+  {
+    if (wasSet_) {
+      qputenv("PATH", previous_);
+      return;
+    }
+    qunsetenv("PATH");
+  }
+
+private:
+  QByteArray previous_;
+  bool wasSet_ = false;
+};
+#endif
 
 QJsonObject target()
 {
@@ -550,6 +587,65 @@ void FrameTest::hardensLocalForwarding()
   }
 }
 
+void FrameTest::followsValidatedHttpRedirects()
+{
+  QTcpServer server;
+  QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+
+  int redirectRequests = 0;
+  int unsafeRequests = 0;
+  int finalRequests = 0;
+  connect(&server, &QTcpServer::newConnection, &server, [&server, &redirectRequests, &unsafeRequests, &finalRequests] {
+    while (server.hasPendingConnections()) {
+      QTcpSocket *socket = server.nextPendingConnection();
+      connect(socket, &QTcpSocket::readyRead, socket,
+              [socket, &redirectRequests, &unsafeRequests, &finalRequests, request = QByteArray()]() mutable {
+                request += socket->readAll();
+                if (!request.contains(QByteArrayLiteral("\r\n\r\n"))) {
+                  return;
+                }
+
+                if (request.startsWith(QByteArrayLiteral("GET /redirect "))) {
+                  ++redirectRequests;
+                  socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+                } else if (request.startsWith(QByteArrayLiteral("GET /unsafe "))) {
+                  ++unsafeRequests;
+                  socket->write(QByteArrayLiteral(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+                } else if (request.startsWith(QByteArrayLiteral("GET /final "))) {
+                  ++finalRequests;
+                  const QByteArray response = QByteArrayLiteral("redirected");
+                  socket->write(QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Length: "));
+                  socket->write(QByteArray::number(response.size()));
+                  socket->write(QByteArrayLiteral("\r\nConnection: close\r\n\r\n"));
+                  socket->write(response);
+                }
+                socket->disconnectFromHost();
+              });
+    }
+  });
+
+  LocalSlopcodeForwarder forwarder(QUrl(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort())));
+  QString error;
+  QNetworkReply *reply = forwarder.forwardHTTP(QByteArrayLiteral("GET"), QStringLiteral("/redirect"), {}, {}, &error);
+  QVERIFY2(reply != nullptr, qPrintable(error));
+  QTRY_VERIFY_WITH_TIMEOUT(reply->isFinished(), 3000);
+  QCOMPARE(reply->error(), QNetworkReply::NoError);
+  QCOMPARE(reply->readAll(), QByteArrayLiteral("redirected"));
+  QCOMPARE(redirectRequests, 1);
+  QCOMPARE(finalRequests, 1);
+  delete reply;
+
+  QNetworkReply *unsafeReply = forwarder.forwardHTTP(QByteArrayLiteral("GET"), QStringLiteral("/unsafe"), {}, {}, &error);
+  QVERIFY2(unsafeReply != nullptr, qPrintable(error));
+  QTRY_VERIFY_WITH_TIMEOUT(unsafeReply->isFinished(), 3000);
+  QVERIFY(unsafeReply->error() != QNetworkReply::NoError);
+  QCOMPARE(unsafeRequests, 1);
+  QCOMPARE(finalRequests, 1);
+  delete unsafeReply;
+}
+
 void FrameTest::requestsAnOsAssignedSshPort()
 {
   SshTarget targetValue;
@@ -577,6 +673,99 @@ void FrameTest::makesSshTeardownIdempotent()
   supervisor.stop();
   QCOMPARE(supervisor.state(), SshState::Stopped);
   QCOMPARE(supervisor.localPort(), quint16(0));
+}
+
+void FrameTest::restartsAfterSshFailure()
+{
+#ifdef Q_OS_WIN
+  QSKIP("the deterministic OpenSSH test helper requires a POSIX shell");
+#else
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+
+  const QString scriptPath = directory.filePath(QStringLiteral("ssh"));
+  QFile script(scriptPath);
+  QVERIFY(script.open(QIODevice::WriteOnly));
+  QVERIFY(script.write(R"(#!/bin/sh
+state="$0.count"
+known_hosts="$0.known_hosts_path"
+is_tunnel=0
+for arg in "$@"; do
+  case "$arg" in
+    UserKnownHostsFile=*) printf '%s\n' "${arg#UserKnownHostsFile=}" > "$known_hosts" ;;
+    -N) is_tunnel=1 ;;
+  esac
+done
+if [ -f "$state" ]; then
+  count=$(cat "$state")
+else
+  count=0
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$state"
+if [ "$count" -eq 1 ]; then
+  exit 1
+fi
+if [ "$is_tunnel" -eq 1 ]; then
+  exec tail -f /dev/null
+fi
+cat >/dev/null
+exec tail -f /dev/null
+)
+"));
+  QVERIFY(script.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+  script.close();
+  ScopedPath path(directory.path().toLocal8Bit());
+
+  SshTarget targetValue;
+  targetValue.host = QStringLiteral("127.0.0.1");
+  targetValue.user = QStringLiteral("remote");
+  targetValue.remoteFolder = QStringLiteral("/srv/slopcode");
+  targetValue.remotePort = 43123;
+  targetValue.pinnedHostKey = QStringLiteral("ssh-ed25519 AAAA");
+
+  SshTargetSupervisor supervisor;
+  bool restarted = false;
+  bool restartSucceeded = false;
+  QString restartError;
+  connect(&supervisor, &SshTargetSupervisor::failed, &supervisor, [&] {
+    if (restarted) {
+      return;
+    }
+    restarted = true;
+    supervisor.stop();
+    restartSucceeded = supervisor.start(targetValue, &restartError);
+  });
+
+  QString error;
+  QVERIFY2(supervisor.start(targetValue, &error), qPrintable(error));
+  QTRY_VERIFY_WITH_TIMEOUT(restarted, 5000);
+  QVERIFY2(restartSucceeded, qPrintable(restartError));
+
+  QFile countFile(scriptPath + QStringLiteral(".count"));
+  auto count = [&countFile] {
+    if (!countFile.isOpen() && !countFile.open(QIODevice::ReadOnly)) {
+      return 0;
+    }
+    countFile.seek(0);
+    bool ok = false;
+    const int value = countFile.readAll().trimmed().toInt(&ok);
+    return ok ? value : 0;
+  };
+  QTRY_VERIFY_WITH_TIMEOUT(count() >= 3, 5000);
+
+  QFile knownHostsFile(scriptPath + QStringLiteral(".known_hosts_path"));
+  QVERIFY(knownHostsFile.open(QIODevice::ReadOnly));
+  const QString knownHostsPath = QString::fromLocal8Bit(knownHostsFile.readAll()).trimmed();
+  QVERIFY(!knownHostsPath.isEmpty());
+  QVERIFY2(QFileInfo::exists(knownHostsPath), qPrintable(knownHostsPath));
+  QCOMPARE(supervisor.state(), SshState::Starting);
+  QCOMPARE(supervisor.remotePort(), targetValue.remotePort);
+
+  supervisor.stop();
+  QCOMPARE(supervisor.state(), SshState::Stopped);
+  QVERIFY(!QFileInfo::exists(knownHostsPath));
+#endif
 }
 
 QTEST_MAIN(FrameTest)

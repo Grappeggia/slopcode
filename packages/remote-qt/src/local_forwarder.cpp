@@ -293,7 +293,7 @@ QNetworkReply *LocalSlopcodeForwarder::forwardHTTPWithQuery(const QByteArray &me
   if (!applyHeaders(request, headers, error)) {
     return nullptr;
   }
-  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
   const QUrl origin = baseURL_;
   const QUrl requestBase = url;
   QNetworkReply *reply = manager_->sendCustomRequest(request, method, body);

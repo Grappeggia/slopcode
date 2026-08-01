@@ -379,11 +379,17 @@ void SshTargetSupervisor::failClosed(const QString &message)
     teardownProcesses();
     return;
   }
-  if (state_ != SshState::Failed) {
-    setState(SshState::Failed);
-    emit failed(message);
-  }
+
+  const bool notify = state_ != SshState::Failed;
+  // Failure handlers may stop and immediately restart this supervisor. Clear
+  // the old generation before exposing the failure to those handlers.
+  state_ = SshState::Failed;
   teardownProcesses();
+  if (!notify) {
+    return;
+  }
+  emit stateChanged(state_);
+  emit failed(message);
 }
 
 void SshTargetSupervisor::handleRemoteStarted()
