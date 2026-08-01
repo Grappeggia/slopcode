@@ -14,7 +14,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
   type Component,
-  batch,
   createEffect,
   createMemo,
   createResource,
@@ -51,7 +50,7 @@ import DirectoryLayout, { DirectoryDataProvider } from "@/pages/directory-layout
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
-import { legacySessionHref, serverRouteKey } from "./utils/session-route"
+import { serverRouteKey } from "./utils/session-route"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
@@ -132,6 +131,7 @@ function TargetSessionRoute() {
   const global = useGlobal()
   const server = useServer()
   const navigate = useNavigate()
+  const [directory, setDirectory] = createSignal<string>()
   const target = createMemo(() => {
     const key = serverRouteKey(params.serverKey)
     if (!key) return
@@ -147,7 +147,9 @@ function TargetSessionRoute() {
       navigate("/", { replace: true })
       return
     }
+    setDirectory()
     let stale = false
+    if (server.key !== current.key) server.setActive(current.key)
     void global
       .createServerCtx(current.conn)
       .sdk.client.session.get({ sessionID })
@@ -158,10 +160,7 @@ function TargetSessionRoute() {
           navigate("/", { replace: true })
           return
         }
-        batch(() => {
-          server.setActive(current.key)
-          navigate(legacySessionHref(directory, sessionID), { replace: true })
-        })
+        setDirectory(directory)
       })
       .catch(() => {
         if (!stale) navigate("/", { replace: true })
@@ -171,7 +170,19 @@ function TargetSessionRoute() {
     })
   })
 
-  return null
+  return (
+    <Show when={directory()} keyed>
+      {(directory) => (
+        <SDKProvider directory={directory}>
+          <DirectoryDataProvider directory={directory}>
+            <SessionProviders>
+              <Session />
+            </SessionProviders>
+          </DirectoryDataProvider>
+        </SDKProvider>
+      )}
+    </Show>
+  )
 }
 
 function UiI18nBridge(props: ParentProps) {
