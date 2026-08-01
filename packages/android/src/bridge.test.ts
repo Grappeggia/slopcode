@@ -71,16 +71,36 @@ describe("android bridge parsing helpers", () => {
   })
 
   test("accepts only bounded structured Slopcode deep links", () => {
+    const nonce = "0123456789abcdef"
     expect(parseSupportedDeepLinks(["slopcode://open-project?directory=%2Fa", "https://evil.example"])).toEqual([
       "slopcode://open-project?directory=%2Fa",
     ])
     expect(parseSupportedDeepLinks(["slopcode://open-project?directory=/a&token=secret"])).toEqual([])
     expect(
       parseDeepLinkMessage(
-        JSON.stringify({ type: "slopcode.deep-links", urls: ["slopcode://new-session?directory=/a&prompt=hi"] }),
+        JSON.stringify({
+          type: "slopcode.deep-links",
+          channel: "slopcode.android.deep-links",
+          nonce,
+          ready: true,
+          urls: ["slopcode://new-session?directory=/a&prompt=hi"],
+        }),
+        nonce,
       ),
     ).toEqual(["slopcode://new-session?directory=/a&prompt=hi"])
-    expect(parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }))).toEqual([])
+    expect(parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }), nonce)).toEqual([])
+    expect(
+      parseDeepLinkMessage(
+        JSON.stringify({
+          type: "slopcode.deep-links",
+          channel: "slopcode.android.deep-links",
+          nonce: "wrong",
+          ready: true,
+          urls: ["slopcode://open-project?directory=/a"],
+        }),
+        nonce,
+      ),
+    ).toEqual([])
   })
 
   test("normalizes notification permission values", () => {

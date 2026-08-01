@@ -1,5 +1,6 @@
 import {
   canOpenExternalUrl,
+  ANDROID_TRUSTED_ORIGIN,
   detectAndroidCapabilities,
   getAndroidBridge,
   parseDeepLinkMessage,
@@ -36,7 +37,7 @@ function secureStorage(bridge: Bridge = getAndroidBridge()): AndroidSecureStorag
   if (!bridge) return
   return {
     getItem: async (namespace, key) => {
-      const value = await bridge.storageGet(namespace, key).catch(() => null)
+      const value = await bridge.storageGet(namespace, key)
       return typeof value === "string" ? value : null
     },
     setItem: async (namespace, key, value) => {
@@ -134,6 +135,13 @@ export type AndroidWorkspaceBootstrap = Awaited<ReturnType<typeof readInitialWor
 export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
   const native = bridge ?? undefined
   const capabilities = await detectAndroidCapabilities(native)
+  const nonce = native && capabilities.deepLinks ? crypto.randomUUID().replaceAll("-", "") : undefined
+  let ready: Promise<boolean> | undefined
+  const prepareDeepLinks = () => {
+    if (!bridge || !nonce) return Promise.resolve(false)
+    ready ??= bridge.deepLinksReady(nonce).then((value) => value === true)
+    return ready
+  }
 
   return {
     capabilities,
@@ -141,13 +149,26 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
     notificationPermission: async () => parsePermission(await bridge?.notificationPermission().catch(() => "prompt")),
     requestNotificationPermission: async () =>
       parsePermission(await bridge?.requestNotificationPermission().catch(() => "prompt")),
-    deepLinks: async () => parseSupportedDeepLinks(await bridge?.consumeDeepLinks().catch(() => [])),
+    deepLinks: async () => {
+      if (!bridge || !nonce || !(await prepareDeepLinks().catch(() => false))) return []
+      return parseSupportedDeepLinks(await bridge.consumeDeepLinks(nonce).catch(() => []))
+    },
     subscribeDeepLinks(listener: (hrefs: string[]) => void) {
+      if (!bridge || !nonce) return () => undefined
       const handler = (event: Event) => {
-        const urls = parseDeepLinkMessage((event as MessageEvent).data)
+        const message = event as MessageEvent
+        if (message.origin !== ANDROID_TRUSTED_ORIGIN || message.source !== window) return
+        const urls = parseDeepLinkMessage(message.data, nonce)
         if (urls.length > 0) listener(urls)
       }
       window.addEventListener("message", handler)
+      void prepareDeepLinks()
+        .then(async (ok) => {
+          if (!ok) return
+          const urls = parseSupportedDeepLinks(await bridge.consumeDeepLinks(nonce).catch(() => []))
+          if (urls.length > 0) listener(urls)
+        })
+        .catch(() => undefined)
       return () => window.removeEventListener("message", handler)
     },
     openLink(url: string) {

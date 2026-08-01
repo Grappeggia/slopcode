@@ -55,9 +55,13 @@ class MainActivity : AppCompatActivity() {
         return true
       }
 
+      override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+        super.onPageStarted(view, url, favicon)
+        bridge.onRendererNavigation()
+      }
+
       override fun onPageFinished(view: WebView, url: String) {
         super.onPageFinished(view, url)
-        if (isTrustedAppUrl(Uri.parse(url))) bridge.flushDeepLinks()
       }
     }
 

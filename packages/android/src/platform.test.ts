@@ -31,6 +31,8 @@ function native(permission: NotificationPermission = "granted", result: Notifica
     storageLength: async (namespace: string) =>
       [...values.keys()].filter((item) => item.startsWith(`${namespace}:`)).length,
     scanQrPairing: async () => null,
+    deepLinksReady: async () => true,
+    consumeDeepLinks: async () => [],
     notificationPermission: async () => {
       calls.push("permission")
       return permission
@@ -42,7 +44,6 @@ function native(permission: NotificationPermission = "granted", result: Notifica
     showNotification: async () => {
       calls.push("show")
     },
-    consumeDeepLinks: async () => [],
     openLink: async () => false,
   } satisfies AndroidNativeBridge
   return { bridge, calls, values }

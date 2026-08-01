@@ -11,13 +11,28 @@ import "@slopcode-ai/app/index.css"
 import pkg from "../package.json"
 import { appStorage, persistServerSelection, readInitialWorkspaceState, shellBridge } from "./platform"
 import { RemoteConnect } from "./remote-connect"
+import { remoteCapabilityEnabled } from "./remote-workspace-state"
+
+function emitDeepLinks(urls: string[]) {
+  if (urls.length === 0) return
+  window.__SLOPCODE__ ??= {}
+  const pending = window.__SLOPCODE__.deepLinks ?? []
+  window.__SLOPCODE__.deepLinks = [...pending, ...urls]
+  window.dispatchEvent(new CustomEvent("slopcode:deep-link", { detail: { urls } }))
+}
 
 export async function mountAndroidApp() {
   const root = document.getElementById("root")
   if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
 
   const [shell, initial] = await Promise.all([shellBridge(), readInitialWorkspaceState()])
-  if (!initial.state.serverUrl) {
+  if (shell.capabilities.deepLinks) shell.subscribeDeepLinks(emitDeepLinks)
+  const workspace = initial.state.workspace?.workspace
+  if (
+    !initial.state.serverUrl ||
+    workspace?.mode !== "ssh" ||
+    !remoteCapabilityEnabled(initial.state.workspace, "sshWorkspace")
+  ) {
     render(() => <RemoteConnect onConnected={() => window.location.reload()} />, root)
     return
   }

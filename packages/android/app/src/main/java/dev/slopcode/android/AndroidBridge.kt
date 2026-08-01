@@ -26,9 +26,12 @@ class AndroidBridge(
   private val notificationState = activity.getSharedPreferences("slopcode.permission", android.content.Context.MODE_PRIVATE)
   private val deepLinks = CopyOnWriteArrayList<String>()
   private val permission = CopyOnWriteArrayList<(String) -> Unit>()
+  private val storageLock = Any()
   private val channelId = "slopcode.android"
   private val manager = activity.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as NotificationManager
   private val key = MasterKey.Builder(activity).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+  @Volatile private var rendererReady = false
+  @Volatile private var rendererNonce: String? = null
 
   init {
     val channel = NotificationChannel(channelId, "SlopCode", NotificationManager.IMPORTANCE_DEFAULT)
@@ -144,6 +147,12 @@ class AndroidBridge(
   private fun storageValue(args: JSONArray, index: Int): String =
     argText(args, index, MAX_VALUE_BYTES) ?: error("Invalid storage value")
 
+  private fun deepLinkNonce(args: JSONArray, index: Int): String {
+    val value = argText(args, index, MAX_NONCE_BYTES) ?: error("Invalid deep-link nonce")
+    check(value.matches(Regex("[A-Za-z0-9_-]{16,128}"))) { "Invalid deep-link nonce" }
+    return value
+  }
+
   private fun allowedNamespace(value: String) =
     value == "default.dat" ||
       value == "slopcode.global.dat" ||
@@ -190,14 +199,30 @@ class AndroidBridge(
     }
   }
 
+  fun onRendererNavigation() {
+    rendererReady = false
+    rendererNonce = null
+  }
+
   fun flushDeepLinks() {
+    if (!rendererReady) return
+    val nonce = rendererNonce ?: return
     val urls = consumeLinks()
     if (urls.isEmpty()) return
     val payload = JSONObject()
       .put("type", "slopcode.deep-links")
+      .put("channel", DEEP_LINK_CHANNEL)
+      .put("nonce", nonce)
+      .put("ready", true)
       .put("urls", JSONArray(urls))
       .toString()
     webView.post {
+      if (!rendererReady || rendererNonce != nonce) {
+        synchronized(deepLinks) {
+          urls.forEach { deepLinks.add(0, it) }
+        }
+        return@post
+      }
       WebViewCompat.postWebMessage(webView, WebMessageCompat(payload), Uri.parse(TRUSTED_ORIGIN))
     }
   }
@@ -217,7 +242,7 @@ class AndroidBridge(
       .put("remoteTransport", false)
 
   fun listener() = WebViewCompat.WebMessageListener { _, message, sourceOrigin, isMainFrame, replyProxy ->
-    if (!isMainFrame || sourceOrigin.scheme != "https" || sourceOrigin.host != TRUSTED_HOST) {
+    if (!isMainFrame || sourceOrigin.toString() != TRUSTED_ORIGIN) {
       reply(replyProxy, bridgeError(null, "untrusted_origin", "Bridge calls require the trusted local app origin"))
       return@WebMessageListener
     }
@@ -247,31 +272,48 @@ class AndroidBridge(
         }
         "storageGet" -> {
           arity(args, 2)
-          reply(replyProxy, bridgeResult(id, preferences(namespace(args, 0)).getString(storageKey(args, 1), null)))
+          val value = synchronized(storageLock) {
+            preferences(namespace(args, 0)).getString(storageKey(args, 1), null)
+          }
+          reply(replyProxy, bridgeResult(id, value))
         }
         "storageSet" -> {
           arity(args, 3)
-          preferences(namespace(args, 0)).edit().putString(storageKey(args, 1), storageValue(args, 2)).apply()
+          val saved = synchronized(storageLock) {
+            preferences(namespace(args, 0)).edit().putString(storageKey(args, 1), storageValue(args, 2)).commit()
+          }
+          check(saved) { "Native storage write failed" }
           reply(replyProxy, bridgeResult(id))
         }
         "storageRemove" -> {
           arity(args, 2)
-          preferences(namespace(args, 0)).edit().remove(storageKey(args, 1)).apply()
+          val saved = synchronized(storageLock) {
+            preferences(namespace(args, 0)).edit().remove(storageKey(args, 1)).commit()
+          }
+          check(saved) { "Native storage write failed" }
           reply(replyProxy, bridgeResult(id))
         }
         "storageClear" -> {
           arity(args, 1)
-          preferences(namespace(args, 0)).edit().clear().apply()
+          val saved = synchronized(storageLock) {
+            preferences(namespace(args, 0)).edit().clear().commit()
+          }
+          check(saved) { "Native storage write failed" }
           reply(replyProxy, bridgeResult(id))
         }
         "storageKeys" -> {
           arity(args, 1)
-          val keys = preferences(namespace(args, 0)).all.keys.filter { it.length <= MAX_KEY_BYTES }.take(MAX_STORAGE_KEYS)
+          val keys = synchronized(storageLock) {
+            preferences(namespace(args, 0)).all.keys.filter { it.length <= MAX_KEY_BYTES }.take(MAX_STORAGE_KEYS)
+          }
           reply(replyProxy, bridgeResult(id, JSONArray(keys)))
         }
         "storageLength" -> {
           arity(args, 1)
-          reply(replyProxy, bridgeResult(id, preferences(namespace(args, 0)).all.size.coerceAtMost(MAX_STORAGE_KEYS)))
+          val length = synchronized(storageLock) {
+            preferences(namespace(args, 0)).all.size.coerceAtMost(MAX_STORAGE_KEYS)
+          }
+          reply(replyProxy, bridgeResult(id, length))
         }
         "scanQrPairing" -> {
           arity(args, 0)
@@ -293,8 +335,16 @@ class AndroidBridge(
           showNotification(title, description, href?.toString())
           reply(replyProxy, bridgeResult(id))
         }
+        "deepLinksReady" -> {
+          arity(args, 1)
+          rendererNonce = deepLinkNonce(args, 0)
+          rendererReady = true
+          reply(replyProxy, bridgeResult(id, true))
+        }
         "consumeDeepLinks" -> {
-          arity(args, 0)
+          arity(args, 1)
+          val nonce = deepLinkNonce(args, 0)
+          check(rendererReady && rendererNonce == nonce) { "Renderer is not ready for deep links" }
           reply(replyProxy, bridgeResult(id, JSONArray(consumeLinks())))
         }
         "openLink" -> {
@@ -351,8 +401,8 @@ class AndroidBridge(
   }
 
   companion object {
-    private const val TRUSTED_HOST = "appassets.androidplatform.net"
     private const val TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
+    private const val DEEP_LINK_CHANNEL = "slopcode.android.deep-links"
     private const val MAX_MESSAGE_BYTES = 256 * 1024
     private const val MAX_ID_BYTES = 128
     private const val MAX_METHOD_BYTES = 64
@@ -363,6 +413,7 @@ class AndroidBridge(
     private const val MAX_URL_BYTES = 8 * 1024
     private const val MAX_DIRECTORY_CHARS = 4 * 1024
     private const val MAX_PROMPT_CHARS = 16 * 1024
+    private const val MAX_NONCE_BYTES = 128
     private const val MAX_ARGS = 8
     private const val MAX_STORAGE_KEYS = 512
     private const val MAX_DEEP_LINKS = 32

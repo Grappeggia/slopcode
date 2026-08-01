@@ -3,6 +3,7 @@ import { persistRemoteWorkspace } from "./platform"
 import {
   normalizeHttpsUrl,
   normalizeRemoteWorkspaceState,
+  type RemoteWorkspaceCapability,
   type RemoteWorkspaceRecord,
   type RemoteWorkspaceState,
 } from "./remote-workspace-state"
@@ -15,6 +16,10 @@ type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>
 
 function clean(value: string) {
   return value.trim()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function validUrl(value: string) {
@@ -32,6 +37,29 @@ function validWorkspaceID(value: string) {
   if (!next) return
   if (!/^wrk[a-zA-Z0-9._:-]+$/.test(next)) return
   return next
+}
+
+function validDeviceID(value: string | undefined) {
+  if (value === undefined) return `dev_android_${crypto.randomUUID().replaceAll("-", "")}`
+  const next = clean(value)
+  if (!/^dev_[a-zA-Z0-9._:-]+$/.test(next)) return
+  return next
+}
+
+function selectionBinding(value: unknown) {
+  if (!isRecord(value)) return
+  const nonce = value.nonce
+  const deviceID = value.deviceID
+  const code = value.code
+  if (
+    typeof nonce !== "string" ||
+    !/^[A-Za-z0-9_-]{16,128}$/.test(nonce) ||
+    typeof deviceID !== "string" ||
+    !/^dev_[a-zA-Z0-9._:-]+$/.test(deviceID) ||
+    typeof code !== "string" ||
+    !/^[A-Z0-9]{6}$/.test(code)
+  ) return
+  return { nonce, deviceID, code }
 }
 
 function basic(username: string, password: string) {
@@ -55,11 +83,14 @@ function validDirectory(value: string) {
 }
 
 function record(value: unknown, code: boolean) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return
-  const raw = value as Record<string, unknown>
+  if (!isRecord(value)) return
+  const raw = value
   if (raw.version !== "v1" || typeof raw.id !== "string" || !/^pair_[a-zA-Z0-9._:-]+$/.test(raw.id)) return
   if (code && (typeof raw.code !== "string" || !/^[A-Z0-9]{6}$/.test(raw.code))) return
   if (!code && Object.prototype.hasOwnProperty.call(raw, "code")) return
+  const selection = code ? selectionBinding(raw.selection) : undefined
+  if (code && raw.selection !== undefined && !selection) return
+  if (!code && raw.selection !== undefined) return
   const capability = raw.capability
   if (!capability || typeof capability !== "object" || Array.isArray(capability)) return
   const capabilities = capability as Record<string, unknown>
@@ -72,6 +103,9 @@ function record(value: unknown, code: boolean) {
   if (typeof (host as Record<string, unknown>).id !== "string" || !/^hst_[a-zA-Z0-9._:-]+$/.test((host as Record<string, unknown>).id as string)) return
   const normalized = normalizeRemoteWorkspaceState({ workspace: raw }).workspace
   const workspace = normalized?.workspace
+  const deviceRecord = normalized?.device
+  const hostRecord = normalized?.host
+  const capabilityRecord = normalized?.capability
   if (
     !workspace?.id ||
     !workspace.name ||
@@ -80,13 +114,32 @@ function record(value: unknown, code: boolean) {
     !workspace.remoteDirectory ||
     !workspace.ssh?.host ||
     !workspace.ssh.user ||
-    !workspace.ssh.port
+    !workspace.ssh.port ||
+    !deviceRecord?.id ||
+    !deviceRecord.name ||
+    !deviceRecord.platform ||
+    !deviceRecord.arch ||
+    !deviceRecord.version ||
+    !hostRecord?.id ||
+    !hostRecord.name ||
+    !hostRecord.platform ||
+    !hostRecord.arch ||
+    !hostRecord.version ||
+    !hostRecord.mode ||
+    !capabilityRecord
   ) return
+  if (capabilityRecord.localWorkspace !== false || capabilityRecord.sshWorkspace !== true) return
   return {
     id: raw.id,
+    code: code ? (raw.code as string) : undefined,
+    selection,
+    capability: capabilityRecord,
+    device: deviceRecord,
+    host: hostRecord,
     workspace,
     record: {
       version: "v1",
+      capability: capabilityRecord,
       device: normalized?.device,
       host: normalized?.host,
       workspace,
@@ -123,6 +176,44 @@ function sameWorkspace(left: NonNullable<RemoteWorkspaceRecord["workspace"]>, ri
   )
 }
 
+function sameDevice(left: RemoteWorkspaceRecord["device"], right: RemoteWorkspaceRecord["device"]) {
+  return (
+    !!left &&
+    !!right &&
+    left.id === right.id &&
+    left.name === right.name &&
+    left.platform === right.platform &&
+    left.arch === right.arch &&
+    left.version === right.version
+  )
+}
+
+function sameHost(left: RemoteWorkspaceRecord["host"], right: RemoteWorkspaceRecord["host"]) {
+  return (
+    !!left &&
+    !!right &&
+    left.id === right.id &&
+    left.name === right.name &&
+    left.platform === right.platform &&
+    left.arch === right.arch &&
+    left.version === right.version &&
+    left.mode === right.mode
+  )
+}
+
+function sameCapability(left: RemoteWorkspaceCapability | undefined, right: RemoteWorkspaceCapability | undefined) {
+  return (
+    !!left &&
+    !!right &&
+    left.fs === right.fs &&
+    left.command === right.command &&
+    left.pty === right.pty &&
+    left.events === right.events &&
+    left.localWorkspace === right.localWorkspace &&
+    left.sshWorkspace === right.sshWorkspace
+  )
+}
+
 function message(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
   const raw = value as Record<string, unknown>
@@ -134,8 +225,33 @@ function message(value: unknown) {
 }
 
 async function body(response: Response) {
-  const raw = await response.text()
-  if (new TextEncoder().encode(raw).byteLength > 256 * 1024) throw new Error("Desktop response exceeded the Android limit.")
+  const length = Number(response.headers.get("content-length"))
+  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error("Desktop response exceeded the Android limit.")
+  if (!response.body) return
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) break
+      size += next.value.byteLength
+      if (size > MAX_RESPONSE_BYTES) {
+        void reader.cancel()
+        throw new Error("Desktop response exceeded the Android limit.")
+      }
+      chunks.push(next.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  chunks.forEach((chunk) => {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  })
+  const raw = new TextDecoder().decode(bytes)
   if (!raw) return
   try {
     return JSON.parse(raw) as unknown
@@ -144,15 +260,27 @@ async function body(response: Response) {
   }
 }
 
+async function fetchBounded(fetcher: Fetcher, url: string, init: RequestInit) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const response = await fetcher(url, { ...init, signal: controller.signal })
+    return { response, data: await body(response) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function request(fetcher: Fetcher, url: string, headers: Headers, payload: unknown) {
-  const response = await fetcher(url, {
+  const result = await fetchBounded(fetcher, url, {
     method: "POST",
     headers: new Headers({ ...Object.fromEntries(headers.entries()), "content-type": "application/json" }),
     body: JSON.stringify(payload),
     credentials: "omit",
     redirect: "error",
   })
-  const data = await body(response)
+  const response = result.response
+  const data = result.data
   if (response.ok) return data
   const detail = message(data)
   if (response.status === 409) {
@@ -168,6 +296,15 @@ export class RemoteSupervisorPendingError extends Error {
   constructor(detail: string) {
     super(detail)
     this.name = "RemoteSupervisorPendingError"
+  }
+}
+
+export class RemoteSelectionBindingRequiredError extends Error {
+  readonly code = "remote_selection_binding_required"
+
+  constructor() {
+    super("The desktop select endpoint is not device/session/code-bound; no connection was saved.")
+    this.name = "RemoteSelectionBindingRequiredError"
   }
 }
 
@@ -206,13 +343,14 @@ export async function connectRemoteWorkspace(
     throw new Error("Enter the SSH host, user, and port.")
   }
   if (!workspaceID) throw new Error("Enter a workspace ID provisioned by the desktop host.")
+  const deviceID = validDeviceID(input.deviceID)
+  if (!deviceID) throw new Error("Android device identity is invalid.")
 
   const headers = new Headers({ authorization: basic(clean(input.username), input.password) })
-  const health = await fetcher(`${serverUrl}/global/health`, { headers, credentials: "omit", redirect: "error" })
-  await body(health)
-  if (!health.ok) {
-    if (health.status === 401 || health.status === 403) throw new Error("Desktop authentication failed for remote pairing.")
-    throw new Error(`Desktop health check failed (${health.status}).`)
+  const health = await fetchBounded(fetcher, `${serverUrl}/global/health`, { headers, credentials: "omit", redirect: "error" })
+  if (!health.response.ok) {
+    if (health.response.status === 401 || health.response.status === 403) throw new Error("Desktop authentication failed for remote pairing.")
+    throw new Error(`Desktop health check failed (${health.response.status}).`)
   }
 
   const requestedWorkspace = {
@@ -223,35 +361,58 @@ export async function connectRemoteWorkspace(
     remoteDirectory,
     ssh: { host: sshHost, port: input.port, user: sshUser },
   }
+  const requestedDevice = {
+    id: deviceID,
+    name: "Slopcode Android",
+    platform: "android",
+    arch: "arm64",
+    version: "1",
+  }
   const created = record(
     await request(fetcher, `${serverUrl}/experimental/workspace/remote/pairing`, headers, {
       device: {
-        id: input.deviceID ?? `dev_android_${crypto.randomUUID().replaceAll("-", "")}`,
-        name: "Slopcode Android",
-        platform: "android",
-        arch: "arm64",
-        version: "1",
+        ...requestedDevice,
       },
       workspace: requestedWorkspace,
     }),
     true,
   )
-  if (!created) throw new Error("Desktop returned an invalid pairing; no connection was saved.")
+  if (
+    !created ||
+    !created.workspace ||
+    !sameWorkspace(created.workspace, requestedWorkspace) ||
+    !sameDevice(created.device, requestedDevice) ||
+    !created.capability
+  ) throw new Error("Desktop returned a pairing outside the requested device and workspace; no connection was saved.")
 
   const validated = workspace(
     await request(fetcher, `${serverUrl}/experimental/workspace/remote/ssh/validate`, headers, created.workspace),
   )
-  if (!validated || !sameWorkspace(validated, created.workspace)) {
-    throw new RemoteSupervisorPendingError("The desktop supervisor has not registered the exact SSH host and folder yet.")
+  if (!validated || !sameWorkspace(validated, requestedWorkspace) || !sameWorkspace(validated, created.workspace)) {
+    throw new Error("Desktop validation did not return the exact requested workspace; no connection was saved.")
   }
 
+  if (!created.selection || created.selection.deviceID !== requestedDevice.id) throw new RemoteSelectionBindingRequiredError()
+
   const selected = record(
-    await request(fetcher, `${serverUrl}/experimental/workspace/remote/select`, headers, { pairingID: created.id }),
+    await request(fetcher, `${serverUrl}/experimental/workspace/remote/select`, headers, {
+      pairingID: created.id,
+      deviceID: created.selection.deviceID,
+      selectionNonce: created.selection.nonce,
+      selectionCode: created.selection.code,
+    }),
     false,
   )
-  if (!selected || selected.id !== created.id || !sameWorkspace(selected.workspace, validated)) {
-    throw new Error("Desktop did not return an authoritative selected pairing; no connection was saved.")
-  }
+  if (
+    !selected ||
+    selected.id !== created.id ||
+    !selected.workspace ||
+    !sameWorkspace(selected.workspace, requestedWorkspace) ||
+    !sameWorkspace(selected.workspace, validated) ||
+    !sameDevice(selected.device, requestedDevice) ||
+    !sameHost(selected.host, created.host) ||
+    !sameCapability(selected.capability, created.capability)
+  ) throw new Error("Desktop did not return the exact authoritative selected pairing; no connection was saved.")
 
   const secret = { username: clean(input.username) || "slopcode", password: input.password }
   const state: RemoteWorkspaceState = {
@@ -268,6 +429,9 @@ export async function connectRemoteWorkspace(
   await save(state, secret)
   return { state, secret, pairing: selected.record }
 }
+
+const MAX_RESPONSE_BYTES = 256 * 1024
+const REQUEST_TIMEOUT_MS = 15_000
 
 export function RemoteConnect(props: Props) {
   const [url, setUrl] = createSignal("")

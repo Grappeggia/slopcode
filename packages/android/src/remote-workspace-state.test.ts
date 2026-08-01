@@ -48,6 +48,10 @@ const pairing = {
   capability: {
     fs: true,
     command: true,
+    pty: true,
+    events: true,
+    localWorkspace: false,
+    sshWorkspace: true,
   },
 } as const
 
@@ -122,6 +126,14 @@ describe("remote workspace state persistence", () => {
       workspace: {
         version: "v1",
         pairingId: "pair_demo123",
+        capability: {
+          fs: true,
+          command: true,
+          pty: true,
+          events: true,
+          localWorkspace: false,
+          sshWorkspace: true,
+        },
         device: {
           id: "dev_phone123",
           name: "Pixel 9",
@@ -159,7 +171,7 @@ describe("remote workspace state persistence", () => {
     })
     const raw = storage.values.get("slopcode.android.remote.dat:remote.workspace.v2")!
     expect(raw).not.toContain("ABC123")
-    expect(raw).not.toContain("capability")
+    expect(raw).toContain('"capability"')
     expect(raw).toContain("secret")
     expect(storage.values.has("slopcode.android.remote.dat:remote.workspace")).toBeFalse()
     expect(storage.values.has("slopcode.android.remote.dat:remote.workspace.secret")).toBeFalse()
@@ -210,8 +222,17 @@ describe("remote workspace state persistence", () => {
       }),
     )
 
-    await expect(readRemoteWorkspace(storage)).resolves.toEqual({ state: { version: 1 }, secret: undefined })
-    expect(storage.values.size).toBe(0)
+    await expect(readRemoteWorkspace(storage)).resolves.toEqual({
+      state: {
+        version: 1,
+        serverUrl: "https://new.example.test",
+        serverSelection: { url: "https://new.example.test", workspaceID: undefined, directory: undefined },
+        workspace: undefined,
+        savedAt: undefined,
+      },
+      secret: undefined,
+    })
+    expect(storage.values.get("slopcode.android.remote.dat:remote.workspace.v2")).not.toContain('"secret"')
   })
 
   test("removes empty state instead of persisting blank shells", async () => {
@@ -221,5 +242,58 @@ describe("remote workspace state persistence", () => {
     await writeRemoteWorkspaceSecret(storage)
 
     expect(storage.values.size).toBe(0)
+  })
+
+  test("migrates a valid legacy state and secret after writing the durable record", async () => {
+    const storage = memoryStorage()
+    await storage.setItem(
+      "slopcode.android.remote.dat",
+      "remote.workspace",
+      JSON.stringify({
+        version: 1,
+        serverUrl: "https://legacy.example.test",
+        workspace: pairing,
+        savedAt: "2026-08-01T00:00:00.000Z",
+      }),
+    )
+    await storage.setItem(
+      "slopcode.android.remote.dat",
+      "remote.workspace.secret",
+      JSON.stringify({ username: "slopcode", password: "secret" }),
+    )
+
+    await expect(readRemoteWorkspace(storage)).resolves.toMatchObject({
+      state: { serverUrl: "https://legacy.example.test" },
+      secret: { username: "slopcode", password: "secret" },
+    })
+    expect(storage.values.has("slopcode.android.remote.dat:remote.workspace.v2")).toBeTrue()
+    expect(storage.values.has("slopcode.android.remote.dat:remote.workspace")).toBeFalse()
+    expect(storage.values.has("slopcode.android.remote.dat:remote.workspace.secret")).toBeFalse()
+  })
+
+  test("preserves state when a secret is cleared or storage reads fail", async () => {
+    const storage = memoryStorage()
+    await writeRemoteWorkspaceState(storage, { version: 1, serverUrl: "https://remote.example.test", savedAt: "now" })
+    await writeRemoteWorkspaceSecret(storage, { username: "slopcode", password: "secret" })
+    await writeRemoteWorkspaceSecret(storage)
+    await expect(readRemoteWorkspaceState(storage)).resolves.toMatchObject({
+      version: 1,
+      serverUrl: "https://remote.example.test",
+      savedAt: "now",
+    })
+
+    const readFailure = memoryStorage()
+    await readFailure.setItem(
+      "slopcode.android.remote.dat",
+      "remote.workspace.v2",
+      JSON.stringify({ version: 1, state: { version: 1, serverUrl: "https://remote.example.test" } }),
+    )
+    const get = readFailure.getItem
+    readFailure.getItem = async (namespace, key) => {
+      if (key === "remote.workspace.v2") throw new Error("transient read")
+      return get(namespace, key)
+    }
+    await expect(readRemoteWorkspace(readFailure)).rejects.toThrow("transient read")
+    expect(readFailure.values.has("slopcode.android.remote.dat:remote.workspace.v2")).toBeTrue()
   })
 })

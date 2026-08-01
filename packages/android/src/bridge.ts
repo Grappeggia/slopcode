@@ -2,6 +2,9 @@ import type { AndroidCapabilities } from "./types"
 
 export type NotificationPermission = "granted" | "denied" | "prompt"
 
+export const ANDROID_TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
+export const ANDROID_DEEP_LINK_CHANNEL = "slopcode.android.deep-links"
+
 type AndroidBridgePort = {
   postMessage(message: string): void
   onmessage: ((event: { data?: string }) => void) | null
@@ -42,7 +45,8 @@ export type AndroidNativeBridge = {
   notificationPermission(): Promise<unknown>
   requestNotificationPermission(): Promise<unknown>
   showNotification(title: string, description?: string, href?: string): Promise<unknown>
-  consumeDeepLinks(): Promise<unknown>
+  deepLinksReady(nonce: string): Promise<unknown>
+  consumeDeepLinks(nonce: string): Promise<unknown>
   openLink(url: string): Promise<unknown>
 }
 
@@ -110,7 +114,8 @@ export function getAndroidBridge(target: Pick<Window, "SlopcodeAndroid"> = typeo
     notificationPermission: () => call("notificationPermission"),
     requestNotificationPermission: () => call("requestNotificationPermission"),
     showNotification: (title, description, href) => call("showNotification", title, description, href),
-    consumeDeepLinks: () => call("consumeDeepLinks"),
+    deepLinksReady: (nonce) => call("deepLinksReady", nonce),
+    consumeDeepLinks: (nonce) => call("consumeDeepLinks", nonce),
     openLink: (url) => call("openLink", url),
   } satisfies AndroidNativeBridge
 
@@ -120,19 +125,19 @@ export function getAndroidBridge(target: Pick<Window, "SlopcodeAndroid"> = typeo
 
 export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Promise<AndroidCapabilities> {
   const fallback: AndroidCapabilities = {
-    secureStorage: !!bridge,
-    qrPairing: !!bridge,
-    notifications: !!bridge,
-    deepLinks: !!bridge,
+    secureStorage: false,
+    qrPairing: false,
+    notifications: false,
+    deepLinks: false,
     remoteTransport: false,
   }
   const raw = bridge ? await bridge.capabilities().catch(() => null) : null
   if (!isRecord(raw)) return fallback
   return {
-    secureStorage: enabled(raw.secureStorage) || fallback.secureStorage,
+    secureStorage: enabled(raw.secureStorage),
     qrPairing: enabled(raw.qrPairing),
-    notifications: enabled(raw.notifications) || fallback.notifications,
-    deepLinks: enabled(raw.deepLinks) || fallback.deepLinks,
+    notifications: enabled(raw.notifications),
+    deepLinks: enabled(raw.deepLinks),
     remoteTransport: false,
   }
 }
@@ -174,9 +179,15 @@ export function parseSupportedDeepLinks(value: unknown) {
   return parseStringArray(value).filter(supportedDeepLink)
 }
 
-export function parseDeepLinkMessage(value: unknown) {
+export function parseDeepLinkMessage(value: unknown, nonce: string) {
   const parsed = typeof value === "string" ? parseJson<unknown>(value, null) : value
-  if (!isRecord(parsed) || parsed.type !== "slopcode.deep-links") return []
+  if (
+    !isRecord(parsed) ||
+    parsed.type !== "slopcode.deep-links" ||
+    parsed.channel !== ANDROID_DEEP_LINK_CHANNEL ||
+    parsed.nonce !== nonce ||
+    parsed.ready !== true
+  ) return []
   return parseSupportedDeepLinks(parsed.urls)
 }
 
