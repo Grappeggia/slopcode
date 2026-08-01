@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { AndroidSecureStorage } from "./types"
 import {
+  normalizeHttpsUrl,
+  normalizeRemoteWorkspaceState,
   readRemoteWorkspaceSecret,
   readRemoteWorkspaceState,
   writeRemoteWorkspaceSecret,
@@ -74,6 +76,26 @@ function memoryStorage(): AndroidSecureStorage & { values: Map<string, string> }
 }
 
 describe("remote workspace state persistence", () => {
+  test("rejects secret-bearing HTTPS URLs instead of persisting them", async () => {
+    const storage = memoryStorage()
+    const urls = [
+      "https://slopcode:secret@remote.example.test",
+      "https://remote.example.test?token=secret",
+      "https://remote.example.test#token=secret",
+    ]
+
+    urls.forEach((url) => expect(normalizeHttpsUrl(url)).toBeUndefined())
+    expect(normalizeRemoteWorkspaceState({ serverUrl: urls[0] }).serverUrl).toBeUndefined()
+    await expect(
+      writeRemoteWorkspaceState(storage, {
+        version: 1,
+        serverUrl: urls[1],
+        savedAt: "2026-08-01T00:00:00.000Z",
+      }),
+    ).rejects.toThrow("without credentials")
+    expect(storage.values.size).toBe(0)
+  })
+
   test("round-trips an allowlisted remote workspace record and separate secret", async () => {
     const storage = memoryStorage()
 
@@ -160,6 +182,7 @@ describe("remote workspace state persistence", () => {
 
     await expect(readRemoteWorkspaceState(storage)).resolves.toEqual({ version: 1 })
     await expect(readRemoteWorkspaceSecret(storage)).resolves.toBeUndefined()
+    expect(storage.values.has("slopcode.android.remote.dat:remote.workspace")).toBeFalse()
   })
 
   test("removes empty state instead of persisting blank shells", async () => {

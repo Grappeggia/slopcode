@@ -69,13 +69,13 @@ function port(value: unknown) {
   return value
 }
 
-function httpsUrl(value: unknown) {
+export function normalizeHttpsUrl(value: unknown) {
   const raw = text(value)
   if (!raw) return
   try {
     const url = new URL(raw)
     if (url.protocol !== "https:") return
-    url.hash = ""
+    if (url.username || url.password || url.search || url.hash) return
     return url.toString().replace(/\/+$/, "")
   } catch {
     return
@@ -169,7 +169,7 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
   if (!isRecord(value)) return { version: 1 }
   return {
     version: 1,
-    serverUrl: httpsUrl(value.serverUrl),
+    serverUrl: normalizeHttpsUrl(value.serverUrl),
     workspace: normalizeWorkspaceRecord(value.workspace ?? value.pairing),
     savedAt: text(value.savedAt),
   }
@@ -179,7 +179,13 @@ export async function readRemoteWorkspaceState(storage: AndroidSecureStorage) {
   const raw = await storage.getItem(NAMESPACE, STATE_KEY)
   if (!raw) return { version: 1 } satisfies RemoteWorkspaceState
   try {
-    return normalizeRemoteWorkspaceState(JSON.parse(raw))
+    const value = JSON.parse(raw)
+    const next = normalizeRemoteWorkspaceState(value)
+    if (isRecord(value) && text(value.serverUrl) && !next.serverUrl) {
+      await storage.removeItem(NAMESPACE, STATE_KEY)
+      return { version: 1 } satisfies RemoteWorkspaceState
+    }
+    return next
   } catch {
     return { version: 1 } satisfies RemoteWorkspaceState
   }
@@ -197,6 +203,10 @@ export async function readRemoteWorkspaceSecret(storage: AndroidSecureStorage) {
 
 export async function writeRemoteWorkspaceState(storage: AndroidSecureStorage, state: RemoteWorkspaceState) {
   const next = normalizeRemoteWorkspaceState(state)
+  if (text(state.serverUrl) && !next.serverUrl) {
+    await storage.removeItem(NAMESPACE, STATE_KEY)
+    throw new Error("Remote server URL must be HTTPS without credentials, query, or fragment")
+  }
   if (!next.serverUrl && !next.workspace && !next.savedAt) {
     await storage.removeItem(NAMESPACE, STATE_KEY)
     return

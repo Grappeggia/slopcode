@@ -1,5 +1,7 @@
 import type { AndroidCapabilities } from "./types"
 
+export type NotificationPermission = "granted" | "denied" | "prompt"
+
 type AndroidBridgePort = {
   postMessage(message: string): void
   onmessage: ((event: { data?: string }) => void) | null
@@ -124,7 +126,7 @@ export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Pr
     qrPairing: !!bridge,
     notifications: !!bridge,
     deepLinks: !!bridge,
-    remoteTransport: !!bridge,
+    remoteTransport: false,
   }
   const raw = bridge ? await bridge.capabilities().catch(() => null) : null
   if (!isRecord(raw)) return fallback

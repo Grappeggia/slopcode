@@ -26,7 +26,7 @@ class AndroidBridge(
   private val activity: MainActivity,
   private val webView: WebView,
 ) {
-  private val state = activity.getSharedPreferences("slopcode.permission", android.content.Context.MODE_PRIVATE)
+  private val notificationState = activity.getSharedPreferences("slopcode.permission", android.content.Context.MODE_PRIVATE)
   private val deepLinks = CopyOnWriteArrayList<String>()
   private val permission = CopyOnWriteArrayList<(String) -> Unit>()
   private val channelId = "slopcode.android"
@@ -37,6 +37,7 @@ class AndroidBridge(
   init {
     val channel = NotificationChannel(channelId, "SlopCode", NotificationManager.IMPORTANCE_DEFAULT)
     manager.createNotificationChannel(channel)
+    permissionState()
   }
 
   private fun prefs(namespace: String) = EncryptedSharedPreferences.create(
@@ -47,49 +48,52 @@ class AndroidBridge(
     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
   )
 
-  private fun notificationRequested() = state.getBoolean("notification_requested", false)
-
-  @Suppress("DEPRECATION")
-  private fun upgradedInstall() = runCatching {
-    val info = activity.packageManager.getPackageInfo(activity.packageName, 0)
-    info.lastUpdateTime > info.firstInstallTime
-  }.getOrDefault(false)
-
-  private fun permissionState(granted: Boolean, requested: Boolean, rationale: Boolean, enabled: Boolean, upgraded: Boolean): String {
-    if (granted) return "granted"
-    if (requested || rationale) return "denied"
-    if (!enabled && upgraded) return "denied"
-    return "prompt"
-  }
-
   private fun permissionState(): String {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return "granted"
-    return permissionState(
-      activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
-      notificationRequested(),
-      activity.shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS),
-      NotificationManagerCompat.from(activity).areNotificationsEnabled(),
-      // Android 13+ keeps notifications off for fresh installs until the first grant, so only
-      // treat disabled notifications as an upgrade denial when this install has actually been updated.
-      upgradedInstall(),
+    val observedApi = notificationState.getInt("notification_observed_api", -1).takeIf { it >= 0 }
+    val observedPermission = notificationState.getString("notification_observed_permission", null)
+    val enabled = NotificationManagerCompat.from(activity).areNotificationsEnabled()
+    val next = notificationPermissionState(
+      NotificationPermissionFacts(
+        api = Build.VERSION.SDK_INT,
+        observedApi = observedApi,
+        observedPermission = observedPermission,
+        granted = activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+        enabled = enabled,
+        rationale = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+          activity.shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS),
+        denied = notificationState.getBoolean("notification_denied", false),
+      ),
     )
+    notificationState.edit()
+      .putInt("notification_observed_api", Build.VERSION.SDK_INT)
+      .putString("notification_observed_permission", next)
+      .putBoolean("notification_denied", next == "denied")
+      .apply()
+    return next
   }
 
   private fun remoteBaseUrl(): URL? {
     val raw = BuildConfig.SLOPCODE_REMOTE_BASE_URL.trim()
     if (raw.isBlank()) return null
     val url = runCatching { URL(raw) }.getOrNull() ?: return null
-    return url.takeIf { it.protocol == "https" }
+    if (url.protocol != "https") return null
+    if (url.userInfo != null || url.query != null || url.ref != null) return null
+    return url
   }
 
   private fun requestNotificationPermission(done: (String) -> Unit) {
     val state = permissionState()
-    if (state == "granted" || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+    if (state != "prompt" || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
       done(state)
       return
     }
 
     webView.post {
+      val current = permissionState()
+      if (current != "prompt") {
+        done(current)
+        return@post
+      }
       permission += done
       if (permission.size > 1) return@post
       activity.requestNotificationPermission()
@@ -297,9 +301,9 @@ class AndroidBridge(
     }.getOrDefault(false)
   }
 
-  fun onNotificationPermissionResult(granted: Boolean) {
-    state.edit().putBoolean("notification_requested", true).apply()
-    val state = if (granted) "granted" else "denied"
+  fun onNotificationPermissionResult(granted: Boolean, cancelled: Boolean = false) {
+    notificationState.edit().putBoolean("notification_denied", !granted && !cancelled).apply()
+    val state = permissionState()
     val callbacks = permission.toList()
     permission.clear()
     callbacks.forEach { it(state) }

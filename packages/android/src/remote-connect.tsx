@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js"
 import { persistRemoteWorkspace } from "./platform"
+import { normalizeHttpsUrl } from "./remote-workspace-state"
 
 type Props = {
   onConnected: () => void
@@ -10,14 +11,7 @@ function clean(value: string) {
 }
 
 function validUrl(value: string) {
-  try {
-    const url = new URL(clean(value))
-    if (url.protocol !== "https:") return
-    url.hash = ""
-    return url.toString().replace(/\/+$/, "")
-  } catch {
-    return
-  }
+  return normalizeHttpsUrl(clean(value))
 }
 
 function validPort(value: string) {

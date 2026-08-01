@@ -1,13 +1,13 @@
 package dev.slopcode.android
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -19,9 +19,6 @@ import androidx.webkit.WebViewFeature
 class MainActivity : AppCompatActivity() {
   private lateinit var webView: WebView
   private lateinit var bridge: AndroidBridge
-  private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-    bridge.onNotificationPermissionResult(granted)
-  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
@@ -95,7 +92,21 @@ class MainActivity : AppCompatActivity() {
   }
 
   fun requestNotificationPermission() {
-    notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
+  }
+
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<out String>,
+    grantResults: IntArray,
+  ) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode != NOTIFICATION_PERMISSION_REQUEST) return
+    bridge.onNotificationPermissionResult(
+      grantResults.size == 1 && grantResults[0] == PackageManager.PERMISSION_GRANTED,
+      cancelled = grantResults.isEmpty(),
+    )
   }
 
   private fun handleIntent(intent: Intent?, flush: Boolean) {
@@ -115,5 +126,6 @@ class MainActivity : AppCompatActivity() {
     private const val TRUSTED_HOST = "appassets.androidplatform.net"
     private const val TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
     private const val TRUSTED_PATH_PREFIX = "/site/"
+    private const val NOTIFICATION_PERMISSION_REQUEST = 1001
   }
 }

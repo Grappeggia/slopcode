@@ -1,4 +1,11 @@
-import { canOpenExternalUrl, detectAndroidCapabilities, getAndroidBridge, parsePermission, parseStringArray } from "./bridge"
+import {
+  canOpenExternalUrl,
+  detectAndroidCapabilities,
+  getAndroidBridge,
+  parsePermission,
+  parseStringArray,
+  type AndroidNativeBridge,
+} from "./bridge"
 import {
   readRemoteWorkspaceSecret,
   readRemoteWorkspaceState,
@@ -8,6 +15,7 @@ import {
   type RemoteWorkspaceSecret,
 } from "./remote-workspace-state"
 import type { AndroidSecureStorage } from "./types"
+import { notificationDecision } from "./notification-permission"
 
 type AsyncStorage = {
   getItem(key: string): Promise<string | null>
@@ -17,8 +25,9 @@ type AsyncStorage = {
 
 const APP_STORAGE = "slopcode.android.app.dat"
 const deepLinkEvent = "slopcode:deep-link"
+type Bridge = AndroidNativeBridge | null | undefined
 
-function secureStorage(bridge = getAndroidBridge()): AndroidSecureStorage | undefined {
+function secureStorage(bridge: Bridge = getAndroidBridge()): AndroidSecureStorage | undefined {
   if (!bridge) return
   return {
     getItem: async (namespace, key) => {
@@ -42,8 +51,25 @@ function secureStorage(bridge = getAndroidBridge()): AndroidSecureStorage | unde
   }
 }
 
-export function appStorage(bridge = getAndroidBridge()) {
-  if (!bridge) return
+function volatileStorage() {
+  const values = new Map<string, string>()
+  const key = (namespace: string, name: string) => `${namespace}:${name}`
+  return (name?: string): AsyncStorage => {
+    const namespace = name ?? APP_STORAGE
+    return {
+      getItem: async (item) => values.get(key(namespace, item)) ?? null,
+      setItem: async (item, value) => {
+        values.set(key(namespace, item), value)
+      },
+      removeItem: async (item) => {
+        values.delete(key(namespace, item))
+      },
+    }
+  }
+}
+
+export function appStorage(bridge: Bridge = getAndroidBridge()) {
+  if (!bridge) return volatileStorage()
   return (name?: string): AsyncStorage => ({
     getItem: async (key: string) => {
       const value = await bridge.storageGet(name ?? APP_STORAGE, key).catch(() => null)
@@ -58,8 +84,8 @@ export function appStorage(bridge = getAndroidBridge()) {
   })
 }
 
-export async function readInitialWorkspaceState() {
-  const secure = secureStorage()
+export async function readInitialWorkspaceState(bridge: Bridge = getAndroidBridge()) {
+  const secure = secureStorage(bridge)
   if (!secure) return { state: { version: 1 } as RemoteWorkspaceState }
   return {
     state: await readRemoteWorkspaceState(secure),
@@ -67,8 +93,8 @@ export async function readInitialWorkspaceState() {
   }
 }
 
-export async function persistServerUrl(url?: string) {
-  const secure = secureStorage()
+export async function persistServerUrl(url?: string, bridge: Bridge = getAndroidBridge()) {
+  const secure = secureStorage(bridge)
   if (!secure) return
   const state = await readRemoteWorkspaceState(secure)
   await writeRemoteWorkspaceState(secure, {
@@ -78,14 +104,18 @@ export async function persistServerUrl(url?: string) {
   })
 }
 
-export async function persistServerSecret(secret?: RemoteWorkspaceSecret) {
-  const secure = secureStorage()
+export async function persistServerSecret(secret?: RemoteWorkspaceSecret, bridge: Bridge = getAndroidBridge()) {
+  const secure = secureStorage(bridge)
   if (!secure) return
   await writeRemoteWorkspaceSecret(secure, secret)
 }
 
-export async function persistRemoteWorkspace(state: RemoteWorkspaceState, secret?: RemoteWorkspaceSecret) {
-  const secure = secureStorage()
+export async function persistRemoteWorkspace(
+  state: RemoteWorkspaceState,
+  secret?: RemoteWorkspaceSecret,
+  bridge: Bridge = getAndroidBridge(),
+) {
+  const secure = secureStorage(bridge)
   if (!secure) throw new Error("Android secure storage is unavailable")
   await writeRemoteWorkspaceState(secure, state)
   await writeRemoteWorkspaceSecret(secure, secret)
@@ -93,13 +123,13 @@ export async function persistRemoteWorkspace(state: RemoteWorkspaceState, secret
 
 export type AndroidWorkspaceBootstrap = Awaited<ReturnType<typeof readInitialWorkspaceState>>
 
-export async function shellBridge() {
-  const bridge = getAndroidBridge()
-  const capabilities = await detectAndroidCapabilities(bridge)
+export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
+  const native = bridge ?? undefined
+  const capabilities = await detectAndroidCapabilities(native)
 
   return {
     capabilities,
-    secureStorage: secureStorage(bridge),
+    secureStorage: secureStorage(native),
     notificationPermission: async () => parsePermission(await bridge?.notificationPermission().catch(() => "prompt")),
     requestNotificationPermission: async () =>
       parsePermission(await bridge?.requestNotificationPermission().catch(() => "prompt")),
@@ -118,13 +148,22 @@ export async function shellBridge() {
       void bridge?.openLink(url)
     },
     notify: async (title: string, description?: string, href?: string) => {
-      if (parsePermission(await bridge?.notificationPermission().catch(() => "prompt")) !== "granted") return
-      await bridge?.showNotification(title, description, href)
+      if (!native || !capabilities.notifications) return
+      const current = parsePermission(await native.notificationPermission().catch(() => "prompt"))
+      const initial = notificationDecision(current)
+      if (initial.request) {
+        const result = parsePermission(await native.requestNotificationPermission().catch(() => "prompt"))
+        if (!notificationDecision(current, result).show) return
+      }
+      if (!initial.show && !initial.request) return
+      await native.showNotification(title, description, href)
     },
     scanQrPairing: async () => {
       const value = await bridge?.scanQrPairing().catch(() => null)
       return typeof value === "string" && value ? value : null
     },
-    remoteSend: bridge?.remoteSend ? async (payload: string) => String(await bridge.remoteSend(payload)) : undefined,
+    remoteSend: capabilities.remoteTransport && native
+      ? async (payload: string) => String(await native.remoteSend(payload))
+      : undefined,
   }
 }
