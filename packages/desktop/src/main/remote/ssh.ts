@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import path, { posix } from "node:path"
+import { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
 import { Schema } from "effect"
-import { RemoteHost, RemoteWorkspaceSsh } from "../../../../protocol/src/remote"
 import {
   DesktopWorkspaceID,
   type DesktopRemoteEvent,
@@ -29,6 +29,7 @@ type NormalizedSshTarget = {
   port: number
   localDirectory: string
   remoteDirectory: string
+  stateKey: string
   identityPath?: string
   hostKey: DesktopSshHostKey
 }
@@ -64,13 +65,23 @@ type RunningWorkspace = {
   cleanup: () => Promise<void>
 }
 
+type PendingWorkspace = {
+  promise: Promise<DesktopRemoteReady>
+  cancel: () => void
+}
+
 type Deps = {
   allocatePort: () => Promise<number>
   uuid: () => string
-  runSsh: (args: string[], script: string, timeoutMs: number) => Promise<CommandResult>
+  runSsh: (args: string[], script: string, timeoutMs: number, signal?: AbortSignal) => Promise<CommandResult>
   openTunnel: (args: string[]) => TunnelProcess
-  health: (url: string, password: string) => Promise<boolean>
-  validateRemoteDirectory: (url: string, password: string, directory: string) => Promise<DesktopRemoteValidation>
+  health: (url: string, password: string, signal?: AbortSignal) => Promise<boolean>
+  validateRemoteDirectory: (
+    url: string,
+    password: string,
+    directory: string,
+    signal?: AbortSignal,
+  ) => Promise<DesktopRemoteValidation>
   materializeHostKey: (hostKey: DesktopSshHostKey) => Promise<MaterializedHostKey>
 }
 
@@ -98,6 +109,7 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
     port,
     remoteDirectory,
   })
+  const stateKey = workspaceStateKey(id)
 
   return {
     id,
@@ -118,6 +130,7 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
     port,
     localDirectory,
     remoteDirectory,
+    stateKey,
     identityPath,
     hostKey: normalizeHostKey(target.security.hostKey),
   }
@@ -130,6 +143,10 @@ export function workspaceIdentity(input: {
   remoteDirectory: string
 }) {
   return DesktopWorkspaceID.make(`ssh:${input.user}@${input.hostName}:${input.port}\u0000${input.remoteDirectory}`)
+}
+
+export function workspaceStateKey(id: DesktopWorkspaceID | string) {
+  return createHash("sha256").update(id).digest("hex")
 }
 
 export function buildSshExecArgs(target: NormalizedSshTarget, knownHostsPath: string) {
@@ -152,16 +169,40 @@ export function buildSshTunnelArgs(
   ]
 }
 
+export function buildSshBootstrapScript(target: NormalizedSshTarget, port: number, password: string) {
+  return bootstrapScript(target, port, password)
+}
+
+export function buildSshStopScript(target: NormalizedSshTarget) {
+  return stopScript(target)
+}
+
 export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRemoteHostService {
   const deps = withDeps(opts)
   const listeners = new Set<(event: DesktopRemoteEvent) => void>()
   const states = new Map<string, DesktopRemoteState>()
   const active = new Map<string, RunningWorkspace>()
-  const pending = new Map<string, Promise<DesktopRemoteReady>>()
+  const pending = new Map<string, PendingWorkspace>()
+  const generations = new Map<string, number>()
 
   const emit = (state: DesktopRemoteState) => {
     states.set(state.id, state)
     for (const listener of listeners) listener({ type: "state", state })
+  }
+
+  const nextGeneration = (id: string) => {
+    const next = (generations.get(id) ?? 0) + 1
+    generations.set(id, next)
+    return next
+  }
+
+  const stopped = (state: DesktopRemoteState) => {
+    emit({
+      kind: "stopped",
+      id: state.id,
+      host: state.host,
+      workspace: state.workspace,
+    })
   }
 
   const fail = (target: NormalizedSshTarget, message: string) => {
@@ -181,40 +222,66 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     const current = active.get(target.id)
     if (current) return current.state
     const running = pending.get(target.id)
-    if (running) return running
+    if (running) return running.promise
 
-    const task = (async () => {
+    const generation = nextGeneration(target.id)
+    const signal = new AbortController()
+    let task!: Promise<DesktopRemoteReady>
+
+    task = (async () => {
       emit({
         kind: "validating",
         id: target.id,
         host: target.host,
         workspace: target.workspace,
       })
-      const hostKey = await deps.materializeHostKey(target.hostKey)
-      const cleanup = async () => hostKey.cleanup()
+      let cleanup = async () => {}
+      let stopRemote = async () => {}
+      let tunnel: TunnelProcess | undefined
+      let booted = false
 
       try {
+        const hostKey = await deps.materializeHostKey(target.hostKey)
+        cleanup = () => hostKey.cleanup()
+        assertLive(signal.signal, generations, target.id, generation)
+
         emit({
           kind: "starting",
           id: target.id,
           host: target.host,
           workspace: target.workspace,
         })
-        const requestedPort = await deps.allocatePort()
-        const requestedPassword = deps.uuid()
         const execArgs = buildSshExecArgs(target, hostKey.path)
-        const bootstrap = await deps.runSsh(execArgs, bootstrapScript(requestedPort, requestedPassword), SSH_SCRIPT_TIMEOUT_MS)
+        stopRemote = () => deps.runSsh(execArgs, stopScript(target), SSH_SCRIPT_TIMEOUT_MS).then(() => undefined)
+        const requestedPort = await deps.allocatePort()
+        assertLive(signal.signal, generations, target.id, generation)
+        const requestedPassword = deps.uuid()
+        const bootstrap = await deps.runSsh(
+          execArgs,
+          bootstrapScript(target, requestedPort, requestedPassword),
+          SSH_SCRIPT_TIMEOUT_MS,
+          signal.signal,
+        )
+        assertLive(signal.signal, generations, target.id, generation)
         const remote = parseBootstrap(bootstrap)
+        booted = true
         const localPort = await deps.allocatePort()
-        const tunnel = deps.openTunnel(buildSshTunnelArgs(target, hostKey.path, localPort, remote.port))
+        assertLive(signal.signal, generations, target.id, generation)
+        tunnel = deps.openTunnel(buildSshTunnelArgs(target, hostKey.path, localPort, remote.port))
         const url = `http://127.0.0.1:${localPort}`
+        const closeTunnel = () => tunnel?.stop()
+        signal.signal.addEventListener("abort", closeTunnel, { once: true })
 
         try {
-          await waitForHealth(() => deps.health(url, remote.password))
-          await deps.validateRemoteDirectory(url, remote.password, target.remoteDirectory)
+          await waitForHealth(() => deps.health(url, remote.password, signal.signal), signal.signal)
+          assertLive(signal.signal, generations, target.id, generation)
+          await deps.validateRemoteDirectory(url, remote.password, target.remoteDirectory, signal.signal)
+          assertLive(signal.signal, generations, target.id, generation)
         } catch (error) {
           tunnel.stop()
           throw error
+        } finally {
+          signal.signal.removeEventListener("abort", closeTunnel)
         }
 
         const state = {
@@ -231,50 +298,55 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         const item = {
           state,
           tunnel,
-          stopRemote: () => deps.runSsh(execArgs, stopScript(), SSH_SCRIPT_TIMEOUT_MS).then(() => undefined),
+          stopRemote,
           cleanup,
         } satisfies RunningWorkspace
 
+        assertLive(signal.signal, generations, target.id, generation)
         active.set(target.id, item)
         emit(state)
         tunnel.onExit((code, signal) => {
           if (active.get(target.id) !== item) return
+          if (generations.get(target.id) !== generation) return
           active.delete(target.id)
           void cleanup()
           fail(target, `SSH tunnel exited (code=${code ?? "null"} signal=${signal ?? "null"})`)
         })
         return state
       } catch (error) {
+        tunnel?.stop()
+        if (booted) await stopRemote().catch(() => undefined)
         await cleanup().catch(() => undefined)
+        if (isAbortError(error)) throw error
         const message = error instanceof Error ? error.message : String(error)
-        fail(target, message)
+        if (generations.get(target.id) === generation) fail(target, message)
         throw error
       } finally {
-        pending.delete(target.id)
+        if (pending.get(target.id)?.promise === task) pending.delete(target.id)
       }
     })()
 
-    pending.set(target.id, task)
+    pending.set(target.id, {
+      promise: task,
+      cancel: () => signal.abort(abortError()),
+    })
     return task
   }
 
   const stop = async (id: ReturnType<typeof DesktopWorkspaceID.make>) => {
+    nextGeneration(id)
     const item = active.get(id)
+    const running = pending.get(id)
     const state = states.get(id)
     active.delete(id)
+    running?.cancel()
+    if (state?.kind !== "stopped" && state) stopped(state)
     if (item) {
       item.tunnel.stop()
       await item.stopRemote().catch(() => undefined)
       await item.cleanup().catch(() => undefined)
     }
-    if (state) {
-      emit({
-        kind: "stopped",
-        id: state.id,
-        host: state.host,
-        workspace: state.workspace,
-      })
-    }
+    if (running) await running.promise.catch(() => undefined)
   }
 
   return {
@@ -292,7 +364,9 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     ensureWorkspace: start,
     stopWorkspace: stop,
     async stopAll() {
-      await Promise.all([...new Set([...active.keys(), ...states.keys()])].map((id) => stop(DesktopWorkspaceID.make(id))))
+      await Promise.all(
+        [...new Set([...active.keys(), ...pending.keys(), ...states.keys()])].map((id) => stop(DesktopWorkspaceID.make(id))),
+      )
     },
   }
 }
@@ -398,11 +472,12 @@ function parseBootstrap(result: CommandResult): BootstrapResult {
   return parsed as BootstrapResult
 }
 
-async function waitForHealth(check: () => Promise<boolean>) {
+async function waitForHealth(check: () => Promise<boolean>, signal: AbortSignal) {
   const timeout = Date.now() + SSH_HEALTH_TIMEOUT_MS
   while (Date.now() < timeout) {
+    throwIfAborted(signal)
     if (await check()) return
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await wait(100, signal)
   }
   throw new Error(`SSH tunnel health check timed out after ${SSH_HEALTH_TIMEOUT_MS}ms`)
 }
@@ -415,12 +490,14 @@ function summarize(value: string) {
     .join("\n")
 }
 
-function bootstrapScript(port: number, password: string) {
+function bootstrapScript(target: NormalizedSshTarget, port: number, password: string) {
   return [
     "set -eu",
+    `dir=${quote(target.remoteDirectory)}`,
+    `key=${quote(target.stateKey)}`,
     'state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/slopcode"',
-    'state_file="$state_dir/desktop-ssh-server.env"',
-    'log_file="$state_dir/desktop-ssh-server.log"',
+    'state_file="$state_dir/desktop-ssh-server-$key.env"',
+    'log_file="$state_dir/desktop-ssh-server-$key.log"',
     "mkdir -p \"$state_dir\"",
     "matches_pid() {",
     '  [ -n "${PID:-}" ] || return 1',
@@ -433,7 +510,7 @@ function bootstrapScript(port: number, password: string) {
     "}",
     'if [ -f "$state_file" ]; then',
     '  . "$state_file"',
-    '  if matches_pid && [ -n "${PORT:-}" ] && [ -n "${PASSWORD:-}" ]; then',
+    '  if matches_pid && [ -n "${PORT:-}" ] && [ -n "${PASSWORD:-}" ] && [ "${DIRECTORY:-}" = "$dir" ]; then',
     '    printf \'{"attached":true,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$PORT" "$PASSWORD"',
     "    exit 0",
     "  fi",
@@ -446,14 +523,16 @@ function bootstrapScript(port: number, password: string) {
     '  echo "slopcode executable not found" >&2',
     "  exit 41",
     "fi",
+    'cd "$dir"',
     `PORT=${port}`,
-    `PASSWORD='${password}'`,
+    `PASSWORD=${quote(password)}`,
     'nohup env SLOPCODE_SERVER_USERNAME=slopcode SLOPCODE_SERVER_PASSWORD="$PASSWORD" SLOPCODE_CLIENT=desktop SLOPCODE_DISABLE_EMBEDDED_WEB_UI=true "$bin" serve --hostname 127.0.0.1 --port "$PORT" >>"$log_file" 2>&1 &',
     "PID=$!",
     'cat >"$state_file" <<EOF',
     'PID=$PID',
     'PORT=$PORT',
     'PASSWORD="$PASSWORD"',
+    'DIRECTORY="$dir"',
     "EOF",
     'printf \'{"attached":false,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$PORT" "$PASSWORD"',
   ].join("\n")
@@ -471,11 +550,12 @@ function withDeps(opts: Partial<Deps>): Deps {
   }
 }
 
-function stopScript() {
+function stopScript(target: NormalizedSshTarget) {
   return [
     "set -eu",
+    `key=${quote(target.stateKey)}`,
     'state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/slopcode"',
-    'state_file="$state_dir/desktop-ssh-server.env"',
+    'state_file="$state_dir/desktop-ssh-server-$key.env"',
     'if [ ! -f "$state_file" ]; then',
     "  exit 0",
     "fi",
@@ -485,6 +565,50 @@ function stopScript() {
     '  kill "$PID" 2>/dev/null || true',
     "fi",
   ].join("\n")
+}
+
+function quote(value: string) {
+  return `'${value.replaceAll("'", `'\"'\"'`)}'`
+}
+
+function abortError() {
+  return Object.assign(new Error("SSH workspace start aborted"), { name: "AbortError" })
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError"
+}
+
+function throwIfAborted(signal: AbortSignal) {
+  if (signal.aborted) throw (signal.reason instanceof Error ? signal.reason : abortError())
+}
+
+function assertLive(
+  signal: AbortSignal,
+  generations: Map<string, number>,
+  id: ReturnType<typeof DesktopWorkspaceID.make>,
+  generation: number,
+) {
+  throwIfAborted(signal)
+  if (generations.get(id) !== generation) throw abortError()
+}
+
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    throwIfAborted(signal)
+    const timer = setTimeout(done, ms)
+    const abort = () => {
+      clearTimeout(timer)
+      reject(signal.reason instanceof Error ? signal.reason : abortError())
+    }
+
+    function done() {
+      signal.removeEventListener("abort", abort)
+      resolve()
+    }
+
+    signal.addEventListener("abort", abort, { once: true })
+  })
 }
 
 function allocatePort() {
@@ -520,17 +644,35 @@ async function materializeHostKey(hostKey: DesktopSshHostKey): Promise<Materiali
   }
 }
 
-function runSsh(args: string[], script: string, timeoutMs: number) {
+function runSsh(args: string[], script: string, timeoutMs: number, signal?: AbortSignal) {
   return new Promise<CommandResult>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : abortError())
+      return
+    }
+
     const child = spawn("ssh", args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     })
     let stdout = ""
     let stderr = ""
+    let done = false
+    const finish = (next: () => void) => {
+      if (done) return
+      done = true
+      clearTimeout(timeout)
+      signal?.removeEventListener("abort", abort)
+      next()
+    }
+    const abort = () =>
+      finish(() => {
+        child.kill()
+        reject(signal?.reason instanceof Error ? signal.reason : abortError())
+      })
     const timeout = setTimeout(() => {
       child.kill()
-      reject(new Error(`ssh ${args.join(" ")} timed out after ${timeoutMs}ms`))
+      finish(() => reject(new Error(`ssh ${args.join(" ")} timed out after ${timeoutMs}ms`)))
     }, timeoutMs)
 
     child.stdout.setEncoding("utf8")
@@ -542,13 +684,12 @@ function runSsh(args: string[], script: string, timeoutMs: number) {
       stderr += chunk
     })
     child.once("error", (error) => {
-      clearTimeout(timeout)
-      reject(error)
+      finish(() => reject(error))
     })
     child.once("close", (code, signal) => {
-      clearTimeout(timeout)
-      resolve({ code, signal, stdout, stderr })
+      finish(() => resolve({ code, signal, stdout, stderr }))
     })
+    signal?.addEventListener("abort", abort, { once: true })
     child.stdin.end(script)
   })
 }
@@ -564,15 +705,27 @@ function openTunnel(args: string[]): TunnelProcess {
   }
 }
 
-async function validateRemoteDirectory(url: string, password: string, directory: string): Promise<DesktopRemoteValidation> {
+async function validateRemoteDirectory(
+  url: string,
+  password: string,
+  directory: string,
+  signal?: AbortSignal,
+): Promise<DesktopRemoteValidation> {
   const target = new URL("/path", url)
   target.searchParams.set("directory", directory)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5_000)
+  const abort = () => controller.abort(signal?.reason instanceof Error ? signal.reason : abortError())
+  signal?.addEventListener("abort", abort, { once: true })
   const res = await fetch(target, {
     method: "GET",
     headers: {
       authorization: `Basic ${Buffer.from(`slopcode:${password}`).toString("base64")}`,
     },
-    signal: AbortSignal.timeout(5_000),
+    signal: controller.signal,
+  }).finally(() => {
+    clearTimeout(timer)
+    signal?.removeEventListener("abort", abort)
   })
 
   if (!res.ok) {
@@ -590,7 +743,7 @@ function asWorkspacePath(value: string): DesktopRemoteWorkspace["directory"] {
   return value as DesktopRemoteWorkspace["directory"]
 }
 
-async function defaultHealth(url: string, password: string) {
+async function defaultHealth(url: string, password: string, signal?: AbortSignal) {
   let healthUrl: URL
   try {
     healthUrl = new URL("/global/health", url)
@@ -599,12 +752,19 @@ async function defaultHealth(url: string, password: string) {
   }
 
   try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3_000)
+    const abort = () => controller.abort(signal?.reason instanceof Error ? signal.reason : abortError())
+    signal?.addEventListener("abort", abort, { once: true })
     const res = await fetch(healthUrl, {
       method: "GET",
       headers: {
         authorization: `Basic ${Buffer.from(`slopcode:${password}`).toString("base64")}`,
       },
-      signal: AbortSignal.timeout(3_000),
+      signal: controller.signal,
+    }).finally(() => {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", abort)
     })
     return res.ok
   } catch {

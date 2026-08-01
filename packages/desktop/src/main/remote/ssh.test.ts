@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { createSshRemoteHostService, buildSshExecArgs, normalizeSshTarget, workspaceIdentity } from "./ssh"
+import {
+  buildSshBootstrapScript,
+  buildSshExecArgs,
+  buildSshStopScript,
+  createSshRemoteHostService,
+  normalizeSshTarget,
+  workspaceIdentity,
+  workspaceStateKey,
+} from "./ssh"
 import { DesktopWorkspaceID, type DesktopSshTarget } from "./contract"
 
 describe("normalizeSshTarget", () => {
@@ -58,6 +66,7 @@ describe("workspaceIdentity", () => {
     const second = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv//slopcode" }))
 
     expect(first.id).toBe(second.id)
+    expect(first.stateKey).toBe(second.stateKey)
     expect(first.id).toBe(
       workspaceIdentity({
         hostName: "example.test",
@@ -66,6 +75,37 @@ describe("workspaceIdentity", () => {
         remoteDirectory: "/srv/slopcode",
       }),
     )
+    expect(first.stateKey).toBe(workspaceStateKey(first.id))
+  })
+})
+
+describe("SSH workspace scripts", () => {
+  test("scope remote state to the normalized remote workspace and launch in that directory", () => {
+    const first = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/slopcode/" }))
+    const second = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/other" }))
+    const bootstrap = buildSshBootstrapScript(first, 4200, "secret")
+    const stop = buildSshStopScript(first)
+
+    expect(first.stateKey).not.toBe(second.stateKey)
+    expect(bootstrap).toContain(`key='${first.stateKey}'`)
+    expect(bootstrap).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(bootstrap).toContain('log_file="$state_dir/desktop-ssh-server-$key.log"')
+    expect(stop).toContain(`key='${first.stateKey}'`)
+    expect(stop).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(bootstrap).toContain("cd \"$dir\"")
+    expect(bootstrap).toContain('DIRECTORY="$dir"')
+    expect(stop).not.toContain("/srv/slopcode")
+  })
+
+  test("keep selected directory out of raw shell commands", () => {
+    const target = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/remote dir/$(touch nope)" }))
+    const bootstrap = buildSshBootstrapScript(target, 4200, "secret")
+    const stop = buildSshStopScript(target)
+
+    expect(bootstrap).toContain(`dir='/srv/remote dir/$(touch nope)'`)
+    expect(bootstrap).toContain("cd \"$dir\"")
+    expect(bootstrap).not.toContain("cd /srv/remote dir/$(touch nope)")
+    expect(stop).not.toContain("/srv/remote dir/$(touch nope)")
   })
 })
 
@@ -147,6 +187,69 @@ describe("createSshRemoteHostService", () => {
       message: "SSH tunnel exited (code=255 signal=null)",
     })
   })
+
+  test("cancels a pending startup before it can become ready", async () => {
+    const events: string[] = []
+    const runs: string[] = []
+    const gate = deferred<void>()
+    let stops = 0
+    let cleanups = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4102,
+      uuid: () => "00000000-0000-4000-8000-000000000003",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => {
+          cleanups += 1
+        },
+      }),
+      runSsh: async (_args, script, _timeoutMs, signal) => {
+        runs.push(script)
+        if (signal?.aborted) throw signal.reason
+        return {
+          code: 0,
+          signal: null,
+          stdout: '{"attached":false,"port":4202,"username":"slopcode","password":"secret"}\n',
+          stderr: "",
+        }
+      },
+      openTunnel: () => ({
+        stop: () => {
+          if (stops) return
+          stops += 1
+        },
+        onExit: () => undefined,
+      }),
+      health: async (_url, _password, signal) => {
+        gate.resolve()
+        await new Promise<boolean>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
+        })
+        return false
+      },
+      validateRemoteDirectory: async () => {
+        throw new Error("validation should not run after cancellation")
+      },
+    })
+
+    const target = fixtureTarget()
+    const id = normalizeSshTarget(target).id
+    const unsubscribe = service.subscribe((event) => events.push(event.state.kind))
+    const pending = service.ensureWorkspace(target)
+    await gate.promise
+    await service.stopWorkspace(id)
+    unsubscribe()
+
+    await expect(pending).rejects.toThrow("aborted")
+    expect(events).toEqual(["validating", "starting", "stopped"])
+    expect(stops).toBe(1)
+    expect(cleanups).toBe(1)
+    expect(runs).toHaveLength(2)
+    expect(runs[0]).toContain("nohup env")
+    expect(runs[1]).toContain(`key='${workspaceStateKey(id)}'`)
+    expect(runs[1]).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(service.getState(id)?.kind).toBe("stopped")
+  })
 })
 
 function fixtureTarget(
@@ -184,4 +287,14 @@ function fixtureTarget(
       },
     },
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }

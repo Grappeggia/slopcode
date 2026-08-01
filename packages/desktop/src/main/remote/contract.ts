@@ -1,4 +1,4 @@
-import type { RemoteHost, RemoteWorkspaceSsh } from "../../../../protocol/src/remote"
+import type { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
 
 export type DesktopRemoteHost = RemoteHost & { mode: "ssh" }
 export type DesktopRemoteWorkspace = RemoteWorkspaceSsh
