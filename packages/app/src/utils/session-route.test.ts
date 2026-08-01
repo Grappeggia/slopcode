@@ -1,14 +1,34 @@
 import { describe, expect, test } from "bun:test"
 import { ServerConnection } from "@/context/server"
-import { legacySessionHref, legacySessionServer, requireServerKey, serverRouteKey, sessionHref } from "./session-route"
+import {
+  canonicalSessionRoute,
+  legacySessionHref,
+  legacySessionRedirect,
+  legacySessionServer,
+  requireServerKey,
+  serverRouteKey,
+  sessionHref,
+} from "./session-route"
 
 describe("session routes", () => {
-  test("builds and decodes a server-keyed session route", () => {
+  test("builds and decodes a server-keyed session route with its directory segment", () => {
     const server = ServerConnection.Key.make("https://example.com:4096")
-    const href = sessionHref(server, "session-1")
+    const href = sessionHref(server, "L1VzZXJzL2V4YW1wbGUvcHJvamVjdA", "session-1")
 
-    expect(href).toBe("/server/aHR0cHM6Ly9leGFtcGxlLmNvbTo0MDk2/session/session-1")
+    expect(href).toBe("/server/aHR0cHM6Ly9leGFtcGxlLmNvbTo0MDk2/L1VzZXJzL2V4YW1wbGUvcHJvamVjdA/session/session-1")
     expect(requireServerKey(href.split("/")[2])).toBe(server)
+  })
+
+  test("declares the directory param required by existing session consumers", () => {
+    expect(canonicalSessionRoute).toBe("/server/:serverKey/:dir/session/:id")
+  })
+
+  test("redirects compatibility server routes into the directory-aware canonical route", () => {
+    const server = ServerConnection.Key.make("https://example.com:4096")
+
+    expect(legacySessionRedirect(server, "/Users/example/project", "session-1")).toBe(
+      "/server/aHR0cHM6Ly9leGFtcGxlLmNvbTo0MDk2/L1VzZXJzL2V4YW1wbGUvcHJvamVjdA/session/session-1",
+    )
   })
 
   test("rejects malformed server route segments", () => {

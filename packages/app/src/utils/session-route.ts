@@ -2,8 +2,14 @@ import { base64Encode } from "@slopcode-ai/core/util/encode"
 import { ServerConnection } from "@/context/server"
 import { decode64 } from "@/utils/base64"
 
-export function sessionHref(server: ServerConnection.Key, sessionID: string) {
-  return `/server/${base64Encode(server)}/session/${sessionID}`
+export const canonicalSessionRoute = "/server/:serverKey/:dir/session/:id"
+
+export function sessionHref(server: ServerConnection.Key, dirBase64: string, sessionID: string) {
+  return `/server/${base64Encode(server)}/${dirBase64}/session/${sessionID}`
+}
+
+export function legacySessionRedirect(server: ServerConnection.Key, directory: string, sessionID: string) {
+  return sessionHref(server, base64Encode(directory), sessionID)
 }
 
 export function legacySessionHref(directory: string, sessionID: string) {

@@ -13,7 +13,7 @@ export function createTabController(input: {
   const active = (tab: Tab) => {
     const location = input.location()
     if (tab.type === "draft") return `${location.pathname}${location.search}` === `/new-session?draftId=${tab.draftID}`
-    if (location.pathname === sessionHref(tab.server, tab.sessionId)) return true
+    if (location.pathname === sessionHref(tab.server, tab.dirBase64, tab.sessionId)) return true
     return input.activeServer() === tab.server && location.pathname === legacySessionHref(atob(tab.dirBase64), tab.sessionId)
   }
 

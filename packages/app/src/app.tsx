@@ -50,7 +50,7 @@ import DirectoryLayout, { DirectoryDataProvider } from "@/pages/directory-layout
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
-import { serverRouteKey } from "./utils/session-route"
+import { canonicalSessionRoute, legacySessionRedirect, serverRouteKey } from "./utils/session-route"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
@@ -126,12 +126,41 @@ function ResolvedDraftRoute(props: { draftID: string }) {
   )
 }
 
-function TargetSessionRoute() {
-  const params = useParams<{ serverKey: string; id: string }>()
+function CanonicalSessionRoute() {
+  const params = useParams<{ serverKey: string; dir: string; id: string }>()
   const global = useGlobal()
   const server = useServer()
   const navigate = useNavigate()
-  const [directory, setDirectory] = createSignal<string>()
+  const target = createMemo(() => {
+    const key = serverRouteKey(params.serverKey)
+    if (!key) return
+    const conn = global.servers.list().find((item) => ServerConnection.key(item) === key)
+    if (!conn) return
+    return { key, conn }
+  })
+
+  createEffect(() => {
+    const current = target()
+    if (!current || !params.dir || !params.id) {
+      navigate("/", { replace: true })
+      return
+    }
+    if (server.key !== current.key) server.setActive(current.key)
+  })
+
+  return (
+    <Show when={target() && server.key === target()?.key}>
+      <DirectoryLayout>
+        <SessionRoute />
+      </DirectoryLayout>
+    </Show>
+  )
+}
+
+function TargetSessionRoute() {
+  const params = useParams<{ serverKey: string; id: string }>()
+  const global = useGlobal()
+  const navigate = useNavigate()
   const target = createMemo(() => {
     const key = serverRouteKey(params.serverKey)
     if (!key) return
@@ -147,9 +176,7 @@ function TargetSessionRoute() {
       navigate("/", { replace: true })
       return
     }
-    setDirectory()
     let stale = false
-    if (server.key !== current.key) server.setActive(current.key)
     void global
       .createServerCtx(current.conn)
       .sdk.client.session.get({ sessionID })
@@ -160,7 +187,7 @@ function TargetSessionRoute() {
           navigate("/", { replace: true })
           return
         }
-        setDirectory(directory)
+        navigate(legacySessionRedirect(current.key, directory, sessionID), { replace: true })
       })
       .catch(() => {
         if (!stale) navigate("/", { replace: true })
@@ -170,19 +197,7 @@ function TargetSessionRoute() {
     })
   })
 
-  return (
-    <Show when={directory()} keyed>
-      {(directory) => (
-        <SDKProvider directory={directory}>
-          <DirectoryDataProvider directory={directory}>
-            <SessionProviders>
-              <Session />
-            </SessionProviders>
-          </DirectoryDataProvider>
-        </SDKProvider>
-      )}
-    </Show>
-  )
+  return null
 }
 
 function UiI18nBridge(props: ParentProps) {
@@ -471,6 +486,7 @@ export function AppInterface(props: {
           >
             <Route path="/" component={HomeRoute} />
             <Route path="/new-session" component={DraftRoute} />
+            <Route path={canonicalSessionRoute} component={CanonicalSessionRoute} />
             <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
             <Route path="/:dir" component={DirectoryLayout}>
               <Route path="/" component={() => <Navigate href="session" />} />
