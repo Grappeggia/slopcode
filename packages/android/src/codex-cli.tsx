@@ -230,17 +230,30 @@ type Props = Omit<RemoteAgentPromptInput, "prompt">
 
 export function RemoteAgentSession(props: Props) {
   const [prompt, setPrompt] = createSignal("")
+  const [model, setModel] = createSignal("")
+  const [profile, setProfile] = createSignal("")
+  const [sandbox, setSandbox] = createSignal<RemoteAgentConfig["sandbox"]>()
+  const [approval, setApproval] = createSignal<RemoteAgentConfig["approval"]>()
   const [result, setResult] = createSignal<RemoteAgentResult>()
   const [error, setError] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const name = () => props.agent === "opencode-cli" ? "OpenCode CLI" : "Codex CLI"
+  const config = () => {
+    const next: RemoteAgentConfig = {
+      ...(model().trim() ? { model: model().trim() } : {}),
+      ...(profile().trim() ? { profile: profile().trim() } : {}),
+      ...(props.agent === "codex-cli" && sandbox() ? { sandbox: sandbox() } : {}),
+      ...(props.agent === "codex-cli" && approval() ? { approval: approval() } : {}),
+    }
+    return Object.keys(next).length > 0 ? next : props.config
+  }
 
   const send = async () => {
     if (busy()) return
     setBusy(true)
     setError("")
     try {
-      setResult(await promptRemoteAgent({ ...props, prompt: prompt() }))
+      setResult(await promptRemoteAgent({ ...props, prompt: prompt(), config: config() }))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Remote agent request failed.")
     } finally {
@@ -269,6 +282,70 @@ export function RemoteAgentSession(props: Props) {
             class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
           />
         </label>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="flex flex-col gap-1 text-14-medium">
+            Model (optional)
+            <input
+              type="text"
+              autocomplete="off"
+              placeholder={props.agent === "opencode-cli" ? "provider/model" : "model ID"}
+              value={model()}
+              onInput={(event) => setModel(event.currentTarget.value)}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            />
+          </label>
+          <label class="flex flex-col gap-1 text-14-medium">
+            {props.agent === "opencode-cli" ? "OpenCode agent (optional)" : "Codex profile (optional)"}
+            <input
+              type="text"
+              autocomplete="off"
+              placeholder={props.agent === "opencode-cli" ? "build" : "default"}
+              value={profile()}
+              onInput={(event) => setProfile(event.currentTarget.value)}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            />
+          </label>
+        </div>
+
+        <Show when={props.agent === "codex-cli"}>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="flex flex-col gap-1 text-14-medium">
+              Sandbox
+              <select
+                value={sandbox() ?? ""}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setSandbox(value ? (value as RemoteAgentConfig["sandbox"]) : undefined)
+                }}
+                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+              >
+                <option value="">Remote default</option>
+                {sandboxes.map((value) => <option value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label class="flex flex-col gap-1 text-14-medium">
+              Approval
+              <select
+                value={approval() ?? ""}
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setApproval(value ? (value as RemoteAgentConfig["approval"]) : undefined)
+                }}
+                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+              >
+                <option value="">Remote default</option>
+                {approvals.map((value) => <option value={value}>{value}</option>)}
+              </select>
+            </label>
+          </div>
+        </Show>
+
+        <Show when={props.agent === "opencode-cli"}>
+          <p class="text-12-regular text-text-weak">
+            OpenCode forwards the model and agent fields to <code>opencode run</code>; its permissions remain controlled by the remote OpenCode configuration.
+          </p>
+        </Show>
 
         <div class="rounded-md border border-border-weak-base p-3 text-12-regular text-text-weak">
           Workspace: {props.workspaceID} · {props.directory}
