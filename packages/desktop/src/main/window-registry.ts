@@ -1,3 +1,9 @@
+const windowIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+
+export function isWindowId(value: unknown): value is string {
+  return typeof value === "string" && windowIdPattern.test(value)
+}
+
 export function createWindowRegistry<W>(persistence: {
   read: () => unknown
   write: (ids: string[]) => void
@@ -10,7 +16,9 @@ export function createWindowRegistry<W>(persistence: {
   const persisted = () => {
     const value = persistence.read()
     if (!Array.isArray(value)) return []
-    return value.filter((id): id is string => typeof id === "string" && id.length > 0)
+    const ids = value.filter(isWindowId).filter((id, index, all) => all.indexOf(id) === index)
+    if (value.length !== ids.length || value.some((id, index) => id !== ids[index])) persistence.write(ids)
+    return ids
   }
 
   return {
@@ -19,6 +27,7 @@ export function createWindowRegistry<W>(persistence: {
       quitting = value
     },
     register(id: string, win: W) {
+      if (!isWindowId(id)) throw new Error("Invalid window id")
       windows.set(id, win)
       const ids = persisted()
       if (!ids.includes(id)) persistence.write([...ids, id])

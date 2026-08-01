@@ -1,5 +1,6 @@
 import { readdir, readFile, rm, stat } from "node:fs/promises"
-import { join } from "node:path"
+import { isAbsolute, relative, resolve } from "node:path"
+import { isRendererStoreName } from "./store-name"
 
 const emptyStoreMaxBytes = 128
 const draftRetentionMs = 30 * 24 * 60 * 60 * 1000
@@ -51,15 +52,26 @@ export async function deleteStoreFileIfEmpty(userDataPath: string, name: string)
 async function candidate(userDataPath: string, name: string) {
   const kind = storeKind(name)
   if (!kind) return
-  const path = join(userDataPath, name)
+  const path = resolveStorePath(userDataPath, name)
+  if (!path) return
   const info = await stat(path).catch(() => undefined)
   if (!info?.isFile()) return
   return { name, path, kind, modified: info.mtimeMs, empty: await isEmptyStore(path, info.size) }
 }
 
 function storeKind(name: string): StoreKind | undefined {
-  if (/^slopcode\.draft\..+\.dat$/.test(name)) return "draft"
-  if (/^slopcode\.workspace\..+\.dat$/.test(name)) return "workspace"
+  if (!isRendererStoreName(name)) return
+  if (name.startsWith("slopcode.draft.")) return "draft"
+  if (name.startsWith("slopcode.workspace.")) return "workspace"
+}
+
+export function resolveStorePath(userDataPath: string, name: string) {
+  if (!isRendererStoreName(name)) return
+  const root = resolve(userDataPath)
+  const path = resolve(root, name)
+  const pathFromRoot = relative(root, path)
+  if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) return
+  return path
 }
 
 async function isEmptyStore(path: string, size: number) {

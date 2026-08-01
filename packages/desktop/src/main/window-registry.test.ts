@@ -16,11 +16,17 @@ function setup(initial: unknown = []) {
 
 describe("window registry", () => {
   test("restores valid ids and persists each registration once", () => {
-    const app = setup(["a", "", 42])
+    const app = setup(["a", "a", "", 42, "../escape"])
     expect(app.registry.persisted()).toEqual(["a"])
+    expect(app.state.stored).toEqual(["a"])
     app.registry.register("a", { name: "a" })
     app.registry.register("b", { name: "b" })
     expect(app.state.stored).toEqual(["a", "b"])
+  })
+
+  test("rejects unsafe ids at registration", () => {
+    const app = setup()
+    expect(() => app.registry.register("../escape", { name: "escape" })).toThrow("Invalid window id")
   })
 
   test("forgets a deliberately closed window while another remains", () => {

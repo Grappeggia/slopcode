@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { cleanupStoreFiles, deleteStoreFileIfEmpty } from "./store-cleanup"
+import { cleanupStoreFiles, deleteStoreFileIfEmpty, resolveStorePath } from "./store-cleanup"
 
 const roots: string[] = []
 
@@ -54,5 +54,18 @@ describe("store cleanup", () => {
     await writeStore(path, "slopcode.workspace.empty.dat", "{}", new Date())
     expect(await deleteStoreFileIfEmpty(path, "slopcode.workspace.empty.dat")).toBe(true)
     expect(await deleteStoreFileIfEmpty(path, "slopcode.global.dat")).toBe(false)
+  })
+
+  test("rejects traversal before touching files outside user data", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "slopcode-store-boundary-"))
+    roots.push(parent)
+    const path = join(parent, "user-data")
+    const outside = join(parent, "slopcode.workspace.escape.dat")
+    await mkdir(path)
+    await writeStore(parent, "slopcode.workspace.escape.dat", "{}", new Date())
+
+    expect(resolveStorePath(path, "../slopcode.workspace.escape.dat")).toBeUndefined()
+    expect(await deleteStoreFileIfEmpty(path, "../slopcode.workspace.escape.dat")).toBe(false)
+    expect((await stat(outside)).isFile()).toBe(true)
   })
 })

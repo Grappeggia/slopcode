@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { SETTINGS_STORE } from "./store-keys"
 import { deleteStoreFileIfEmpty } from "./store-cleanup"
 import { createStoreOperationQueue } from "./store-operations"
+import { isRendererStoreName } from "./store-name"
 
 const cache = new Map<string, Store>()
 const queue = createStoreOperationQueue()
@@ -32,6 +33,7 @@ export function runStoreOperation<T>(name: string, operation: () => T | PromiseL
 }
 
 export function removeStoreFileIfEmpty(name: string) {
+  if (!isRendererStoreName(name)) return Promise.resolve()
   return runStoreOperation(name, async () => {
     const store = cache.get(name)
     if (store && Object.keys(store.store).length > 0) return

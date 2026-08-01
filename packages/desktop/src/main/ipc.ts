@@ -10,6 +10,7 @@ import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
 import { guardIpc } from "./security"
 import { getStore, removeStoreFileIfEmpty, runStoreOperation } from "./store"
+import { assertRendererStoreName } from "./store-name"
 import { openExternalURL, openLocalFileURL, getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
@@ -87,8 +88,9 @@ export function registerIpcHandlers(deps: Deps) {
     deps.recordFatalRendererError(error),
   )
   ipc.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
+    const storeName = assertRendererStoreName(name)
     try {
-      const store = getStore(name)
+      const store = getStore(storeName)
       const value = store.get(key)
       if (value === undefined || value === null) return null
       return typeof value === "string" ? value : JSON.stringify(value)
@@ -97,22 +99,25 @@ export function registerIpcHandlers(deps: Deps) {
     }
   })
   ipc.handle("store-set", (_event: IpcMainInvokeEvent, name: string, key: string, value: string) => {
-    return runStoreOperation(name, () => getStore(name).set(key, value))
+    const storeName = assertRendererStoreName(name)
+    return runStoreOperation(storeName, () => getStore(storeName).set(key, value))
   })
   ipc.handle("store-delete", async (_event: IpcMainInvokeEvent, name: string, key: string) => {
-    await runStoreOperation(name, () => getStore(name).delete(key))
-    await removeStoreFileIfEmpty(name)
+    const storeName = assertRendererStoreName(name)
+    await runStoreOperation(storeName, () => getStore(storeName).delete(key))
+    await removeStoreFileIfEmpty(storeName)
   })
   ipc.handle("store-clear", async (_event: IpcMainInvokeEvent, name: string) => {
-    await runStoreOperation(name, () => getStore(name).clear())
-    await removeStoreFileIfEmpty(name)
+    const storeName = assertRendererStoreName(name)
+    await runStoreOperation(storeName, () => getStore(storeName).clear())
+    await removeStoreFileIfEmpty(storeName)
   })
   ipc.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {
-    const store = getStore(name)
+    const store = getStore(assertRendererStoreName(name))
     return Object.keys(store.store)
   })
   ipc.handle("store-length", (_event: IpcMainInvokeEvent, name: string) => {
-    const store = getStore(name)
+    const store = getStore(assertRendererStoreName(name))
     return Object.keys(store.store).length
   })
 
