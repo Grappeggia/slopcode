@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
+import { mkdtempSync, rmSync } from "node:fs"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { createServer } from "node:net"
+import { createConnection, createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import path, { posix } from "node:path"
 import { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
@@ -76,7 +77,7 @@ type Deps = {
   allocatePort: () => Promise<number>
   uuid: () => string
   runSsh: (args: string[], script: string, timeoutMs: number, signal?: AbortSignal) => Promise<CommandResult>
-  openTunnel: (args: string[]) => TunnelProcess
+  openTunnel: (args: string[], socketPath: string) => TunnelProcess
   health: (url: string, password: string, signal?: AbortSignal) => Promise<boolean>
   validateRemoteDirectory: (
     url: string,
@@ -158,16 +159,21 @@ export function buildSshExecArgs(target: NormalizedSshTarget, knownHostsPath: st
 export function buildSshTunnelArgs(
   target: NormalizedSshTarget,
   knownHostsPath: string,
-  localPort: number,
+  localSocket: string,
   remotePort: number,
 ) {
+  if (!path.isAbsolute(localSocket) || /[\0\r\n]/.test(localSocket)) {
+    throw new Error("SSH tunnel socket must be an absolute path")
+  }
   return [
     ...buildSshBaseArgs(target, knownHostsPath),
+    "-o",
+    "StreamLocalBindUnlink=yes",
     "-N",
     "-T",
     "-v",
     "-L",
-    `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+    `${localSocket}:127.0.0.1:${remotePort}`,
     target.authority,
   ]
 }
@@ -260,6 +266,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       workspace: target.workspace,
     })
     let cleanup = async () => {}
+    let cleanupTunnel = async () => {}
     let stopRemote = async () => {}
     let stopStartup = async () => {}
     let tunnel: TunnelProcess | undefined
@@ -308,63 +315,80 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       const remote = parseBootstrap(bootstrap)
       remotePassword = remote.password
       assertLive(signal.signal, generations, target.id, generation)
-      tunnel = deps.openTunnel(buildSshTunnelArgs(target, hostKey.path, 0, remote.port))
+      const tunnelDir = createTunnelDirectory()
+      cleanupTunnel = once(tunnelDir.cleanup)
+      tunnel = deps.openTunnel(
+        buildSshTunnelArgs(target, hostKey.path, tunnelDir.socketPath, remote.port),
+        tunnelDir.socketPath,
+      )
       tunnel.onExit((code, exitSignal) => {
         reportTunnelFailure(new Error(`SSH tunnel exited (code=${code ?? "null"} signal=${exitSignal ?? "null"})`))
       })
       tunnel.onError(reportTunnelFailure)
-      const localPort = await Promise.race([tunnel.port, tunnelFailure])
-      assertLive(signal.signal, generations, target.id, generation)
-      const url = `http://127.0.0.1:${localPort}`
       const closeTunnel = () => tunnel?.stop()
+      const abort = abortRace(signal.signal)
       signal.signal.addEventListener("abort", closeTunnel, { once: true })
 
       try {
-        await Promise.race([waitForHealth(() => deps.health(url, remote.password, signal.signal), signal.signal), tunnelFailure])
+        const localPort = await Promise.race([tunnel.port, tunnelFailure, abort.promise])
+        assertLive(signal.signal, generations, target.id, generation)
+        const url = `http://127.0.0.1:${localPort}`
+        await Promise.race([
+          waitForHealth(() => deps.health(url, remote.password, signal.signal), signal.signal),
+          tunnelFailure,
+          abort.promise,
+        ])
         assertLive(signal.signal, generations, target.id, generation)
         await Promise.race([
           deps.validateRemoteDirectory(url, remote.password, target.remoteDirectory, signal.signal),
           tunnelFailure,
+          abort.promise,
         ])
         assertLive(signal.signal, generations, target.id, generation)
+
+        const state = {
+          kind: "ready",
+          id: target.id,
+          host: target.host,
+          workspace: target.workspace,
+          url,
+          username: remote.username,
+          password: remote.password,
+          attached: remote.attached,
+        } satisfies DesktopRemoteReady
+
+        item = {
+          state,
+          tunnel,
+          stopRemote,
+          cleanup: async () => {
+            await cleanupTunnel().catch(() => undefined)
+            await cleanup().catch(() => undefined)
+          },
+        }
+
+        assertLive(signal.signal, generations, target.id, generation)
+        if (tunnelError) throw tunnelError
+        active.set(target.id, item)
+        emit(state)
+        return state
       } catch (error) {
         tunnel.stop()
         throw error
       } finally {
         signal.signal.removeEventListener("abort", closeTunnel)
+        abort.dispose()
       }
-
-      const state = {
-        kind: "ready",
-        id: target.id,
-        host: target.host,
-        workspace: target.workspace,
-        url,
-        username: remote.username,
-        password: remote.password,
-        attached: remote.attached,
-      } satisfies DesktopRemoteReady
-
-      item = {
-        state,
-        tunnel,
-        stopRemote,
-        cleanup,
-      }
-
-      assertLive(signal.signal, generations, target.id, generation)
-      if (tunnelError) throw tunnelError
-      active.set(target.id, item)
-      emit(state)
-      return state
     } catch (error) {
       tunnel?.stop()
       await stopStartup().catch(() => undefined)
+      await cleanupTunnel().catch(() => undefined)
       await cleanup().catch(() => undefined)
-      if (isAbortError(error)) throw error
-      const message = error instanceof Error ? error.message : String(error)
+      const next = signal.signal.aborted && !isAbortError(error) ? abortError() : error
+      if (isAbortError(next)) throw next
+      const message = next instanceof Error ? next.message : String(next)
       if (generations.get(target.id) === generation) fail(target, message, [requestedPassword, remotePassword])
-      throw error
+      throw next
     }
   }
 
@@ -801,7 +825,7 @@ function withDeps(opts: Partial<Deps>): Deps {
     allocatePort: opts.allocatePort ?? allocatePort,
     uuid: opts.uuid ?? (() => randomUUID()),
     runSsh: opts.runSsh ?? runSsh,
-    openTunnel: opts.openTunnel ?? openTunnel,
+    openTunnel: opts.openTunnel ?? openSshTunnel,
     health: opts.health ?? defaultHealth,
     validateRemoteDirectory: opts.validateRemoteDirectory ?? validateRemoteDirectory,
     materializeHostKey: opts.materializeHostKey ?? materializeHostKey,
@@ -904,6 +928,19 @@ function assertLive(
   if (generations.get(id) !== generation) throw abortError()
 }
 
+function abortRace(signal: AbortSignal) {
+  let abort!: () => void
+  const promise = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason instanceof Error ? signal.reason : abortError())
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+  })
+  return {
+    promise,
+    dispose: () => signal.removeEventListener("abort", abort),
+  }
+}
+
 function wait(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     throwIfAborted(signal)
@@ -936,6 +973,14 @@ function allocatePort() {
       server.close(() => resolve(address.port))
     })
   })
+}
+
+function createTunnelDirectory() {
+  const directory = mkdtempSync(path.join(tmpdir(), "slopcode-ssh-tunnel-"))
+  return {
+    socketPath: path.join(directory, "forward.sock"),
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  }
 }
 
 async function materializeHostKey(hostKey: DesktopSshHostKey): Promise<MaterializedHostKey> {
@@ -1005,24 +1050,57 @@ function runSsh(args: string[], script: string, timeoutMs: number, signal?: Abor
   })
 }
 
-function openTunnel(args: string[]): TunnelProcess {
-  const child = spawn("ssh", args, {
+export function openSshTunnel(args: string[], socketPath: string, spawnProcess: typeof spawn = spawn): TunnelProcess {
+  const child = spawnProcess("ssh", args, {
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   })
   let resolvePort!: (port: number) => void
   let rejectPort!: (error: Error) => void
-  let assigned = false
+  let ready = false
   let failure: Error | undefined
   let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let outputBuffer = ""
+  let proxyPort: number | undefined
+  let stopped = false
+  const clients = new Set<Socket>()
   const exits = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>()
   const errors = new Set<(error: Error) => void>()
   const port = new Promise<number>((resolve, reject) => {
     resolvePort = resolve
     rejectPort = reject
   })
+  const proxy = createServer((client) => {
+    clients.add(client)
+    const upstream = createConnection(socketPath)
+    clients.add(upstream)
+    let closed = false
+    const close = () => {
+      if (closed) return
+      closed = true
+      clients.delete(client)
+      clients.delete(upstream)
+      client.destroy()
+      upstream.destroy()
+    }
+    client.once("error", close)
+    client.once("close", close)
+    upstream.once("error", close)
+    upstream.once("close", close)
+    client.pipe(upstream)
+    upstream.pipe(client)
+  })
+  const closeResources = () => {
+    if (stopped) return
+    stopped = true
+    if (timer) clearTimeout(timer)
+    proxy.close()
+    for (const socket of clients) socket.destroy()
+    clients.clear()
+    rmSync(socketPath, { force: true })
+    child.kill()
+  }
   const fail = (error: unknown) => {
     const next = error instanceof Error ? error : new Error(String(error))
     if (failure) return
@@ -1031,33 +1109,46 @@ function openTunnel(args: string[]): TunnelProcess {
     rejectPort(next)
     for (const cb of errors) cb(next)
     errors.clear()
+    closeResources()
   }
-  const assign = (next: number) => {
-    if (assigned || failure) return
-    assigned = true
+  const assign = () => {
+    if (ready || failure || proxyPort === undefined) return
+    ready = true
     if (timer) clearTimeout(timer)
-    resolvePort(next)
+    resolvePort(proxyPort)
   }
   const output = (chunk: string) => {
     outputBuffer += chunk
-    const match = /Local forwarding listening on [^\r\n]*\bport ([0-9]+)\.?/i.exec(outputBuffer)
-    const next = Number(match?.[1])
-    if (Number.isInteger(next) && next > 0 && next <= 65_535) assign(next)
+    if (outputBuffer.includes(`Local forwarding listening on path ${socketPath}`)) assign()
     if (outputBuffer.length > 4_096) outputBuffer = outputBuffer.slice(-4_096)
   }
+  proxy.once("error", fail)
+  proxy.once("listening", () => {
+    const address = proxy.address()
+    if (typeof address !== "object" || !address || address.address !== "127.0.0.1") {
+      fail(new Error("SSH tunnel proxy did not bind to loopback"))
+      return
+    }
+    proxyPort = address.port
+    assign()
+  })
   child.stderr.setEncoding("utf8")
   child.stderr.on("data", output)
   child.once("error", fail)
   child.once("exit", (code, signal) => {
     exit = { code, signal }
-    if (!assigned) fail(new Error(`SSH tunnel exited before local port assignment (code=${code ?? "null"} signal=${signal ?? "null"})`))
+    if (!ready) fail(new Error(`SSH tunnel exited before Unix socket readiness (code=${code ?? "null"} signal=${signal ?? "null"})`))
     for (const cb of exits) cb(code, signal)
     exits.clear()
   })
-  timer = setTimeout(() => fail(new Error("SSH tunnel did not report its assigned local port")), SSH_SCRIPT_TIMEOUT_MS)
+  timer = setTimeout(() => fail(new Error("SSH tunnel did not report Unix socket readiness")), SSH_SCRIPT_TIMEOUT_MS)
+  proxy.listen(0, "127.0.0.1")
   return {
     port,
-    stop: () => child.kill(),
+    stop: () => {
+      if (!ready && !failure) rejectPort(new Error("SSH tunnel stopped before Unix socket readiness"))
+      closeResources()
+    },
     onExit: (cb) => {
       if (exit) cb(exit.code, exit.signal)
       else exits.add(cb)

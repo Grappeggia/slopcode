@@ -1,11 +1,19 @@
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { EventEmitter } from "node:events"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { createConnection, createServer, type Server } from "node:net"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { PassThrough } from "node:stream"
 import { describe, expect, test } from "bun:test"
 import {
   buildSshBootstrapScript,
   buildSshExecArgs,
+  buildSshTunnelArgs,
   buildSshStopScript,
   createSshRemoteHostService,
   normalizeSshTarget,
+  openSshTunnel,
   workspaceIdentity,
   workspaceStateKey,
 } from "./ssh"
@@ -58,6 +66,61 @@ describe("buildSshExecArgs", () => {
     ])
     expect(args.join(" ")).not.toContain("/srv/slopcode")
     expect(args.join(" ")).not.toContain("ssh-ed25519 AAAA")
+  })
+})
+
+describe("buildSshTunnelArgs", () => {
+  test("uses an app-owned Unix socket instead of TCP port zero", () => {
+    const target = normalizeSshTarget(fixtureTarget())
+    const args = buildSshTunnelArgs(target, "/tmp/known_hosts", "/tmp/slopcode-ssh-tunnel-abc/forward.sock", 4310)
+    const forward = args[args.indexOf("-L") + 1]
+
+    expect(forward).toBe("/tmp/slopcode-ssh-tunnel-abc/forward.sock:127.0.0.1:4310")
+    expect(forward).not.toContain("127.0.0.1:0")
+    expect(args).toContain("StreamLocalBindUnlink=yes")
+  })
+})
+
+describe("openSshTunnel", () => {
+  test("keeps the loopback port owned and pipes through the Unix socket", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "slopcode-ssh-tunnel-test-"))
+    const socketPath = path.join(directory, "forward.sock")
+    const upstream = createServer((socket) => socket.on("data", (chunk) => socket.write(chunk)))
+    const child = new FakeTunnelChild()
+    let spawned: string[] = []
+
+    try {
+      await listen(upstream, socketPath)
+      const tunnel = openSshTunnel(
+        ["-L", `${socketPath}:127.0.0.1:4310`],
+        socketPath,
+        ((_, args) => {
+          spawned = args
+          queueMicrotask(() => child.stderr.write(`debug1: Local forwarding listening on path ${socketPath}.\n`))
+          return child as unknown as ReturnType<typeof spawn>
+        }) as typeof spawn,
+      )
+      const port = await tunnel.port
+
+      expect(spawned).toContain("-L")
+      expect(spawned[spawned.indexOf("-L") + 1]).toBe(`${socketPath}:127.0.0.1:4310`)
+      expect(spawned.join(" ")).not.toContain("127.0.0.1:0")
+      expect(await canBind(port)).toBe(false)
+
+      const client = createConnection(port, "127.0.0.1")
+      await onceConnected(client)
+      client.write("ping")
+      expect(await read(client)).toBe("ping")
+      client.destroy()
+
+      const exited = onceExit(child)
+      tunnel.stop()
+      await exited
+      expect(await canBind(port)).toBe(true)
+    } finally {
+      await close(upstream)
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })
 
@@ -268,6 +331,9 @@ describe("createSshRemoteHostService", () => {
     const opened = deferred<void>()
     let allocations = 0
     let args: string[] = []
+    let socketPath = ""
+    let ownedPort: number | undefined
+    let ownerClosed = Promise.resolve()
     let healthUrl: string | undefined
     const service = createSshRemoteHostService({
       allocatePort: async () => {
@@ -285,18 +351,34 @@ describe("createSshRemoteHostService", () => {
         stdout: '{"attached":false,"port":4310,"username":"slopcode","password":"secret"}\n',
         stderr: "",
       }),
-      openTunnel: (next) => {
+      openTunnel: (next, socket) => {
         args = next
-        opened.resolve()
+        socketPath = socket
+        const owner = createServer()
+        ownerClosed = new Promise((resolve) => owner.once("close", resolve))
+        const owned = new Promise<number>((resolve, reject) => {
+          owner.once("error", reject)
+          owner.listen(0, "127.0.0.1", () => {
+            const address = owner.address()
+            if (typeof address !== "object" || !address) {
+              reject(new Error("proxy did not bind"))
+              return
+            }
+            ownedPort = address.port
+            opened.resolve()
+            resolve(address.port)
+          })
+        })
         return {
-          port: assigned.promise,
-          stop: () => undefined,
+          port: assigned.promise.then(() => owned),
+          stop: () => owner.close(),
           onExit: () => undefined,
           onError: () => undefined,
         }
       },
       health: async (url) => {
         healthUrl = url
+        expect(ownedPort).toBe(Number(new URL(url).port))
         return true
       },
       validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
@@ -306,12 +388,19 @@ describe("createSshRemoteHostService", () => {
     await opened.promise
 
     expect(allocations).toBe(1)
-    expect(args).toContain("127.0.0.1:0:127.0.0.1:4310")
+    const forward = args[args.indexOf("-L") + 1]
+    expect(forward).toBe(`${socketPath}:127.0.0.1:4310`)
+    expect(forward).not.toContain("127.0.0.1:0")
+    expect(ownedPort).toBeGreaterThan(0)
+    expect(existsSync(socketPath)).toBe(false)
     expect(healthUrl).toBeUndefined()
 
     assigned.resolve(4321)
-    await pending
-    expect(healthUrl).toBe("http://127.0.0.1:4321")
+    const ready = await pending
+    expect(healthUrl).toBe(`http://127.0.0.1:${ownedPort}`)
+    await service.stopWorkspace(ready.id)
+    await ownerClosed
+    expect(existsSync(socketPath)).toBe(false)
   })
 
   test("surfaces unexpected tunnel exits as failed state", async () => {
@@ -873,6 +962,63 @@ function deferred<T>() {
     reject = rej
   })
   return { promise, resolve, reject }
+}
+
+class FakeTunnelChild extends EventEmitter {
+  readonly stderr = new PassThrough()
+
+  kill() {
+    this.emit("exit", null, "SIGTERM")
+    return true
+  }
+}
+
+function listen(server: Server, endpoint: string) {
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+}
+
+function close(server: Server) {
+  if (!server.listening) return Promise.resolve()
+  return new Promise<void>((resolve) => server.close(() => resolve()))
+}
+
+function onceConnected(socket: ReturnType<typeof createConnection>) {
+  return new Promise<void>((resolve, reject) => {
+    socket.once("connect", resolve)
+    socket.once("error", reject)
+  })
+}
+
+function onceExit(child: FakeTunnelChild) {
+  return new Promise<void>((resolve) => child.once("exit", () => resolve()))
+}
+
+function read(socket: ReturnType<typeof createConnection>) {
+  socket.setEncoding("utf8")
+  return new Promise<string>((resolve, reject) => {
+    socket.once("data", resolve)
+    socket.once("error", reject)
+  })
+}
+
+async function canBind(port: number) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const result = await tryBind(port)
+    if (result) return true
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  return false
+}
+
+function tryBind(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const server = createServer()
+    server.once("error", () => resolve(false))
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)))
+  })
 }
 
 function runMatcher(
