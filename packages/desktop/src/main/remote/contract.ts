@@ -1,7 +1,8 @@
-import type { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
+import type { RemoteAgentMode, RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
 
 export type DesktopRemoteHost = RemoteHost & { mode: "ssh" }
-export type DesktopRemoteWorkspace = RemoteWorkspaceSsh
+export type DesktopRemoteWorkspace = Omit<RemoteWorkspaceSsh, "agent"> & { agent: RemoteAgentMode }
+export type DesktopRemoteWorkspaceInput = RemoteWorkspaceSsh
 
 export type DesktopWorkspaceID = string & { readonly __brand: "DesktopWorkspaceID" }
 
@@ -28,7 +29,7 @@ export type DesktopSshSecurity = {
 
 export type DesktopSshTarget = {
   host: DesktopRemoteHost
-  workspace: DesktopRemoteWorkspace
+  workspace: DesktopRemoteWorkspaceInput
   security: DesktopSshSecurity
 }
 

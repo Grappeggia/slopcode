@@ -26,12 +26,28 @@ describe("normalizeSshTarget", () => {
     expect(target.hostName).toBe("example.test")
     expect(target.user).toBe("marcos")
     expect(target.remoteDirectory).toBe("/srv/slopcode")
-    expect(String(target.id)).toBe("ssh:marcos@example.test:2222\u0000/srv/slopcode")
+    expect(target.workspace.agent).toBe("local-slopcode")
+    expect(String(target.id)).toBe("ssh:marcos@example.test:2222\u0000local-slopcode\u0000/srv/slopcode")
+  })
+
+  test("preserves explicit agent modes in the normalized workspace", () => {
+    for (const agent of ["local-slopcode", "codex-cli"] as const) {
+      const target = normalizeSshTarget(fixtureTarget({ agent }))
+
+      expect(target.workspace.agent).toBe(agent)
+    }
   })
 
   test("rejects unsafe ssh values at the boundary", () => {
     expect(() => normalizeSshTarget(fixtureTarget({ sshHost: "-bad-host" }))).toThrow("cannot start with '-'")
     expect(() => normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/repo\nx" }))).toThrow("Invalid remote directory")
+  })
+
+  test("rejects malformed agent modes at the protocol boundary", () => {
+    const target = fixtureTarget()
+    ;(target.workspace as unknown as { agent: unknown }).agent = "arbitrary-command"
+
+    expect(() => normalizeSshTarget(target)).toThrow()
   })
 })
 
@@ -305,9 +321,18 @@ describe("workspaceIdentity", () => {
         user: "marcos",
         port: 2222,
         remoteDirectory: "/srv/slopcode",
+        agent: "local-slopcode",
       }),
     )
     expect(first.stateKey).toBe(workspaceStateKey(first.id))
+  })
+
+  test("separates local Slopcode and Codex CLI identities", () => {
+    const local = normalizeSshTarget(fixtureTarget({ agent: "local-slopcode" }))
+    const codex = normalizeSshTarget(fixtureTarget({ agent: "codex-cli" }))
+
+    expect(local.id).not.toBe(codex.id)
+    expect(local.stateKey).not.toBe(codex.stateKey)
   })
 })
 
@@ -1272,6 +1297,7 @@ describe("createSshRemoteHostService", () => {
 
 function fixtureTarget(
   overrides: {
+    agent?: "local-slopcode" | "codex-cli"
     remoteDirectory?: string
     sshHost?: string
   } = {},
@@ -1289,6 +1315,7 @@ function fixtureTarget(
       id: "wrk_remote-1",
       name: "slopcode",
       mode: "ssh",
+      ...(overrides.agent ? { agent: overrides.agent } : {}),
       directory: "/Users/marcos/src/slopcode",
       remoteDirectory: overrides.remoteDirectory ?? "/srv/slopcode",
       ssh: {

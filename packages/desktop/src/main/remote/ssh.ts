@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { platform, tmpdir } from "node:os"
 import path, { posix } from "node:path"
-import { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
+import { RemoteHost, RemoteWorkspaceSsh, type RemoteAgentMode as RemoteAgentModeType } from "@slopcode-ai/protocol"
 import { Schema } from "effect"
 import {
   DesktopWorkspaceID,
@@ -89,6 +89,7 @@ type Deps = {
 
 const decodeHost = Schema.decodeUnknownSync(RemoteHost)
 const decodeWorkspace = Schema.decodeUnknownSync(RemoteWorkspaceSsh)
+const DEFAULT_REMOTE_AGENT: RemoteAgentModeType = "local-slopcode"
 const SSH_SCRIPT_TIMEOUT_MS = 15_000
 const SSH_HEALTH_TIMEOUT_MS = 30_000
 const SSH_TUNNEL_CLEANUP_TIMEOUT_MS = 2_000
@@ -104,6 +105,7 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
   if (decodedHost.mode !== "ssh") throw new Error("Remote host must use ssh mode")
   const host = decodedHost as DesktopRemoteHost
   const workspace = decodeWorkspace(target.workspace)
+  const agent = workspace.agent ?? DEFAULT_REMOTE_AGENT
   const hostName = requireToken("SSH host", workspace.ssh.host, /^[a-zA-Z0-9._:[\]-]+$/)
   const user = requireToken("SSH user", workspace.ssh.user, /^[a-zA-Z0-9._-]+$/)
   const port = workspace.ssh.port
@@ -117,6 +119,7 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
     user,
     port,
     remoteDirectory,
+    agent,
   })
   const stateKey = workspaceStateKey(id)
 
@@ -125,6 +128,7 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
     host,
     workspace: {
       ...workspace,
+      agent,
       directory: asWorkspacePath(localDirectory),
       remoteDirectory: asWorkspacePath(remoteDirectory),
       ssh: {
@@ -150,8 +154,12 @@ export function workspaceIdentity(input: {
   user: string
   port: number
   remoteDirectory: string
+  agent?: RemoteAgentModeType
 }) {
-  return DesktopWorkspaceID.make(`ssh:${input.user}@${input.hostName}:${input.port}\u0000${input.remoteDirectory}`)
+  const agent = input.agent ?? DEFAULT_REMOTE_AGENT
+  return DesktopWorkspaceID.make(
+    `ssh:${input.user}@${input.hostName}:${input.port}\u0000${agent}\u0000${input.remoteDirectory}`,
+  )
 }
 
 export function workspaceStateKey(id: DesktopWorkspaceID | string) {
