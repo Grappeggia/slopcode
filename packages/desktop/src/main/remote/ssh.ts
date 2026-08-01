@@ -114,12 +114,16 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
   const identityPath = target.security.identityPath
     ? normalizeAbsolutePath("SSH identity path", target.security.identityPath)
     : undefined
+  const hostKey = normalizeHostKey(target.security.hostKey)
   const id = workspaceIdentity({
     hostName,
     user,
     port,
     remoteDirectory,
     agent,
+    hostID: host.id,
+    identityPath,
+    hostKey,
   })
   const stateKey = workspaceStateKey(id)
 
@@ -145,7 +149,7 @@ export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarge
     remoteDirectory,
     stateKey,
     identityPath,
-    hostKey: normalizeHostKey(target.security.hostKey),
+    hostKey,
   }
 }
 
@@ -155,11 +159,23 @@ export function workspaceIdentity(input: {
   port: number
   remoteDirectory: string
   agent?: RemoteAgentModeType
+  hostID?: string
+  identityPath?: string
+  hostKey?: DesktopSshHostKey
 }) {
   const agent = input.agent ?? DEFAULT_REMOTE_AGENT
-  return DesktopWorkspaceID.make(
-    `ssh:${input.user}@${input.hostName}:${input.port}\u0000${agent}\u0000${input.remoteDirectory}`,
-  )
+  const base = `ssh:${input.user}@${input.hostName}:${input.port}\u0000${agent}\u0000${input.remoteDirectory}`
+  if (!input.hostID && !input.identityPath && !input.hostKey) return DesktopWorkspaceID.make(base)
+  const scope = createHash("sha256")
+    .update(
+      JSON.stringify({
+        hostID: input.hostID ?? "",
+        identityPath: input.identityPath ?? "",
+        hostKey: input.hostKey ?? null,
+      }),
+    )
+    .digest("hex")
+  return DesktopWorkspaceID.make(`${base}\u0000${scope}`)
 }
 
 export function workspaceStateKey(id: DesktopWorkspaceID | string) {
@@ -170,19 +186,9 @@ export function buildSshExecArgs(target: NormalizedSshTarget, knownHostsPath: st
   return [...buildSshBaseArgs(target, knownHostsPath), "-T", target.authority, "sh", "-se"]
 }
 
-export function buildSshTunnelArgs(
-  target: NormalizedSshTarget,
-  knownHostsPath: string,
-  remotePort: number,
-) {
+export function buildSshTunnelArgs(target: NormalizedSshTarget, knownHostsPath: string, remotePort: number) {
   requirePort("SSH remote tunnel port", remotePort)
-  return [
-    ...buildSshBaseArgs(target, knownHostsPath),
-    "-T",
-    "-W",
-    `127.0.0.1:${remotePort}`,
-    target.authority,
-  ]
+  return [...buildSshBaseArgs(target, knownHostsPath), "-T", "-W", `127.0.0.1:${remotePort}`, target.authority]
 }
 
 export function buildSshBootstrapScript(target: NormalizedSshTarget, port: number, password: string) {
@@ -245,12 +251,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     return tracked
   }
 
-  const closeUnexpected = (
-    target: NormalizedSshTarget,
-    generation: number,
-    item: RunningWorkspace,
-    error: Error,
-  ) => {
+  const closeUnexpected = (target: NormalizedSshTarget, generation: number, item: RunningWorkspace, error: Error) => {
     if (active.get(target.id) !== item) return
     if (generations.get(target.id) !== generation) return
     active.delete(target.id)
@@ -322,10 +323,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       const remote = parseBootstrap(bootstrap)
       remotePassword = remote.password
       assertLive(signal.signal, generations, target.id, generation)
-      tunnel = deps.openTunnel(
-        buildSshTunnelArgs(target, hostKey.path, remote.port),
-        remote.port,
-      )
+      tunnel = deps.openTunnel(buildSshTunnelArgs(target, hostKey.path, remote.port), remote.port)
       tunnel.onExit((code, exitSignal) => {
         reportTunnelFailure(new Error(`SSH tunnel exited (code=${code ?? "null"} signal=${exitSignal ?? "null"})`))
       })
@@ -406,9 +404,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
           Promise.resolve().then(() => tunnel?.stop()),
           Promise.resolve().then(stopStartup),
         ])
-        errors.push(
-          ...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])),
-        )
+        errors.push(...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])))
       } finally {
         try {
           await cleanup()
@@ -638,13 +634,13 @@ function readStateLines() {
   return [
     "read_state() {",
     '  exec 3<"$state_file" || return 1',
-    '  IFS= read -r next_pid <&3 || { exec 3<&-; return 1; }',
-    '  IFS= read -r next_port <&3 || { exec 3<&-; return 1; }',
-    '  IFS= read -r next_password <&3 || { exec 3<&-; return 1; }',
-    '  IFS= read -r next_workspace <&3 || { exec 3<&-; return 1; }',
-    '  IFS= read -r next_start <&3 || { exec 3<&-; return 1; }',
-    '  IFS= read -r next_exe <&3 || { exec 3<&-; return 1; }',
-    '  if IFS= read -r state_extra <&3; then',
+    "  IFS= read -r next_pid <&3 || { exec 3<&-; return 1; }",
+    "  IFS= read -r next_port <&3 || { exec 3<&-; return 1; }",
+    "  IFS= read -r next_password <&3 || { exec 3<&-; return 1; }",
+    "  IFS= read -r next_workspace <&3 || { exec 3<&-; return 1; }",
+    "  IFS= read -r next_start <&3 || { exec 3<&-; return 1; }",
+    "  IFS= read -r next_exe <&3 || { exec 3<&-; return 1; }",
+    "  if IFS= read -r state_extra <&3; then",
     "    exec 3<&-",
     "    return 1",
     "  fi",
@@ -672,46 +668,46 @@ function processIdentityLines() {
     '  marker=""',
     '  if [ -r "/proc/$pid/stat" ]; then',
     '    stat="$(cat "/proc/$pid/stat" 2>/dev/null || true)"',
-    '    rest="$(printf \'%s\\n\' "$stat" | sed \'s/^[^)]*) //\')"',
-    '    marker="$(printf \'%s\\n\' "$rest" | awk \'{print $20}\' || true)"',
+    "    rest=\"$(printf '%s\\n' \"$stat\" | sed 's/^[^)]*) //')\"",
+    "    marker=\"$(printf '%s\\n' \"$rest\" | awk '{print $20}' || true)\"",
     "  fi",
     '  if [ -z "$marker" ]; then',
     '    marker="$(ps -p "$pid" -o lstart= 2>/dev/null | sed \'s/^[[:space:]]*//;s/[[:space:]]*$//\' || true)"',
     "  fi",
     '  [ -n "$marker" ] || return 1',
-    '  printf \'%s\\n\' "$marker"',
+    "  printf '%s\\n' \"$marker\"",
     "}",
     "process_exe() {",
     '  pid="$1"',
     '  if [ -r "/proc/$pid/exe" ] && command -v readlink >/dev/null 2>&1; then',
     '    exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"',
     '    if [ -n "$exe" ]; then',
-    '      printf \'%s\\n\' "$exe"',
+    "      printf '%s\\n' \"$exe\"",
     "      return 0",
     "    fi",
     "  fi",
     '  exe="$(ps -p "$pid" -o comm= 2>/dev/null | sed \'s/^[[:space:]]*//;s/[[:space:]]*$//\' || true)"',
     '  [ -n "$exe" ] || return 1',
-    '  printf \'%s\\n\' "$exe"',
+    "  printf '%s\\n' \"$exe\"",
     "}",
     "resolve_exe() {",
     '  bin="$1"',
     '  case "$bin" in',
     '    /*) candidate="$bin" ;;',
     '    *) candidate="$(command -v "$bin" || true)" ;;',
-    '  esac',
+    "  esac",
     '  case "$candidate" in',
-    '    /*) ;;',
+    "    /*) ;;",
     '    *) candidate="$(pwd -P)/$candidate" ;;',
-    '  esac',
-    '  if command -v readlink >/dev/null 2>&1; then',
+    "  esac",
+    "  if command -v readlink >/dev/null 2>&1; then",
     '    resolved="$(readlink -f "$candidate" 2>/dev/null || true)"',
     '    if [ -n "$resolved" ]; then',
-    '      printf \'%s\\n\' "$resolved"',
+    "      printf '%s\\n' \"$resolved\"",
     "      return 0",
     "    fi",
     "  fi",
-    '  printf \'%s\\n\' "$candidate"',
+    "  printf '%s\\n' \"$candidate\"",
     "}",
   ]
 }
@@ -767,8 +763,8 @@ function waitForStateLines() {
     "    if read_state; then",
     "      return 0",
     "    fi",
-    '    tries=$((tries - 1))',
-    '    sleep 0.1',
+    "    tries=$((tries - 1))",
+    "    sleep 0.1",
     "  done",
     "  return 1",
     "}",
@@ -786,8 +782,8 @@ function waitForServerLines() {
     '    if ! kill -0 "$state_pid" 2>/dev/null; then',
     "      return 1",
     "    fi",
-    '    tries=$((tries - 1))',
-    '    sleep 0.1',
+    "    tries=$((tries - 1))",
+    "    sleep 0.1",
     "  done",
     "  return 1",
     "}",
@@ -802,7 +798,7 @@ function bootstrapScript(target: NormalizedSshTarget, port: number, password: st
     'state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/slopcode"',
     'state_file="$state_dir/desktop-ssh-server-$key.state"',
     'log_file="$state_dir/desktop-ssh-server-$key.log"',
-    "mkdir -p \"$state_dir\"",
+    'mkdir -p "$state_dir"',
     ...readStateLines(),
     ...processIdentityLines(),
     ...matchesServerLines(),
@@ -835,12 +831,12 @@ function bootstrapScript(target: NormalizedSshTarget, port: number, password: st
     "umask 077",
     'cd "$DIR"',
     'tmp="$STATE_FILE.tmp.$$"',
-    'trap \'rm -f "$tmp"\' EXIT HUP INT TERM',
+    "trap 'rm -f \"$tmp\"' EXIT HUP INT TERM",
     'start=""',
     'if [ -r "/proc/$$/stat" ]; then',
     '  stat="$(cat "/proc/$$/stat" 2>/dev/null || true)"',
-    '  rest="$(printf \'%s\\n\' "$stat" | sed \'s/^[^)]*) //\')"',
-    '  start="$(printf \'%s\\n\' "$rest" | awk \'{print $20}\' || true)"',
+    "  rest=\"$(printf '%s\\n' \"$stat\" | sed 's/^[^)]*) //')\"",
+    "  start=\"$(printf '%s\\n' \"$rest\" | awk '{print $20}' || true)\"",
     "fi",
     'if [ -z "$start" ]; then',
     '  start="$(ps -p "$$" -o lstart= 2>/dev/null | sed \'s/^[[:space:]]*//;s/[[:space:]]*$//\' || true)"',
@@ -851,7 +847,7 @@ function bootstrapScript(target: NormalizedSshTarget, port: number, password: st
     "fi",
     'printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" "$start" "$EXE" >"$tmp"',
     'mv -f "$tmp" "$STATE_FILE"',
-    'trap - EXIT HUP INT TERM',
+    "trap - EXIT HUP INT TERM",
     'exec env SLOPCODE_SERVER_USERNAME=slopcode SLOPCODE_SERVER_PASSWORD="$PASSWORD" SLOPCODE_CLIENT=desktop SLOPCODE_DISABLE_EMBEDDED_WEB_UI=true "$BIN" serve --hostname 127.0.0.1 --port "$PORT"',
     "EOF",
     "launch_pid=$!",
@@ -900,10 +896,10 @@ function stopScript(target: NormalizedSshTarget, password?: string) {
     ...(password
       ? [
           'if [ ! -f "$state_file" ]; then',
-          '  tries=20',
+          "  tries=20",
           '  while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do',
-          '    tries=$((tries - 1))',
-          '    sleep 0.1',
+          "    tries=$((tries - 1))",
+          "    sleep 0.1",
           "  done",
           "fi",
         ]
@@ -911,7 +907,7 @@ function stopScript(target: NormalizedSshTarget, password?: string) {
     'if [ ! -f "$state_file" ]; then',
     "  exit 0",
     "fi",
-    'if ! read_state; then',
+    "if ! read_state; then",
     '  rm -f "$state_file"',
     "  exit 0",
     "fi",
@@ -925,7 +921,7 @@ function stopScript(target: NormalizedSshTarget, password?: string) {
           "  exit 0",
           "fi",
           'if ! matches_server "$state_pid" "$state_port" "$state_start" "$state_exe"; then',
-          '  if ! wait_for_server 20; then',
+          "  if ! wait_for_server 20; then",
           '    rm -f "$state_file"',
           "    exit 0",
           "  fi",
@@ -968,7 +964,7 @@ function isAbortError(error: unknown) {
 }
 
 function throwIfAborted(signal: AbortSignal) {
-  if (signal.aborted) throw (signal.reason instanceof Error ? signal.reason : abortError())
+  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : abortError()
 }
 
 function assertLive(
@@ -1135,9 +1131,10 @@ function streamDrain(stream: NodeJS.ReadableStream | null | undefined, closed: P
 
 function requestKill(record: ProcessRecord, signal: NodeJS.Signals | undefined, label: string) {
   try {
-    const killed = record.group && platform() !== "win32" && record.child.pid
-      ? globalThis.process.kill(-record.child.pid, signal ?? "SIGTERM")
-      : record.child.kill(signal)
+    const killed =
+      record.group && platform() !== "win32" && record.child.pid
+        ? globalThis.process.kill(-record.child.pid, signal ?? "SIGTERM")
+        : record.child.kill(signal)
     if (!killed) record.errors.push(new Error(`${label} kill returned false`))
   } catch (error) {
     record.errors.push(new Error(`${label} kill failed: ${errorMessage(error)}`))
@@ -1356,16 +1353,18 @@ export function openSshTunnel(
     client.once("close", () => closeConnection(connection))
     client.pipe(child.stdin)
     child.stdout.pipe(client)
-    void process.termination.then(() => {
-      if (!connection.closed && !stopping) {
-        connection.closed = true
-        connections.delete(connection)
-        client.destroy()
-      }
-      return process.close
-    }).then(() => {
-      processes.delete(process)
-    })
+    void process.termination
+      .then(() => {
+        if (!connection.closed && !stopping) {
+          connection.closed = true
+          connections.delete(connection)
+          client.destroy()
+        }
+        return process.close
+      })
+      .then(() => {
+        processes.delete(process)
+      })
   }
   const closeProxy = () => {
     const server = proxy
@@ -1413,9 +1412,7 @@ export function openSshTunnel(
     const results = await Promise.allSettled(
       records.map((record) => terminateProcess(record, "SSH forwarding child", spawnProcess)),
     )
-    problems.push(
-      ...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])),
-    )
+    problems.push(...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])))
     if (problems.length) throw new Error(problems.join("; "))
   }
   const stop = () => {

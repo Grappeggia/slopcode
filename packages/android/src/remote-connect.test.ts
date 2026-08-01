@@ -43,7 +43,7 @@ function fetcher(
   calls: Array<{ url: string; body?: unknown; authorization: string | null }>,
   pending = false,
   bound = false,
-  responseWorkspace = workspace,
+  responseWorkspace: typeof workspace & { agent?: string } = workspace,
 ) {
   const responsePairing = { ...pairing, workspace: responseWorkspace }
   const responseBoundPairing = {
@@ -61,7 +61,8 @@ function fetcher(
     if (url.endsWith("/global/health")) return new Response(null, { status: 200 })
     if (url.endsWith("/remote/pairing")) return Response.json(bound ? responseBoundPairing : responsePairing)
     if (url.endsWith("/remote/ssh/validate")) {
-      if (pending) return Response.json({ message: "Waiting for desktop supervisor target registration" }, { status: 409 })
+      if (pending)
+        return Response.json({ message: "Waiting for desktop supervisor target registration" }, { status: 409 })
       return Response.json(responseWorkspace)
     }
     if (url.endsWith("/remote/select")) {
@@ -126,7 +127,7 @@ describe("Android remote pairing", () => {
     let saves = 0
 
     await expect(
-      connectRemoteWorkspace(input, fetcher(calls, true), async () => {
+      connectRemoteWorkspace({ ...input, supervisorWaitMs: 0 }, fetcher(calls, true), async () => {
         saves += 1
       }),
     ).rejects.toBeInstanceOf(RemoteSupervisorPendingError)
@@ -137,6 +138,28 @@ describe("Android remote pairing", () => {
       "/experimental/workspace/remote/ssh/validate",
     ])
     expect(saves).toBe(0)
+  })
+
+  test("waits for the desktop supervisor to register the SSH target", async () => {
+    const calls: Array<{ url: string; body?: unknown; authorization: string | null }> = []
+    const base = fetcher(calls, false, true)
+    let pending = true
+    const retrying = async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith("/remote/ssh/validate") && pending) {
+        pending = false
+        return Response.json({ message: "Waiting for desktop supervisor target registration" }, { status: 409 })
+      }
+      return base(url, init)
+    }
+    const result = await connectRemoteWorkspace({ ...input, supervisorWaitMs: 2_000 }, retrying, async () => undefined)
+
+    expect(result.pairing.workspace?.agent).toBe("local-slopcode")
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/global/health",
+      "/experimental/workspace/remote/pairing",
+      "/experimental/workspace/remote/ssh/validate",
+      "/experimental/workspace/remote/select",
+    ])
   })
 
   test("rejects a validated workspace that differs from the original request", async () => {
@@ -151,7 +174,9 @@ describe("Android remote pairing", () => {
       return response
     }
 
-    await expect(connectRemoteWorkspace(input, altered, async () => void saves++)).rejects.toThrow("exact requested workspace")
+    await expect(connectRemoteWorkspace(input, altered, async () => void saves++)).rejects.toThrow(
+      "exact requested workspace",
+    )
     expect(calls.map((call) => new URL(call.url).pathname)).not.toContain("/experimental/workspace/remote/select")
     expect(saves).toBe(0)
   })
@@ -278,10 +303,19 @@ describe("Android SSH authority and folder browsing", () => {
         root: "/",
         current: "/Users",
         parent: "/",
-        entries: Array.from({ length: 257 }, (_, index) => ({ name: `folder-${index}`, path: `/Users/folder-${index}`, type: "directory" })),
+        entries: Array.from({ length: 257 }, (_, index) => ({
+          name: `folder-${index}`,
+          path: `/Users/folder-${index}`,
+          type: "directory",
+        })),
       },
       { root: "/", current: "/Users", parent: "/", entries: [], recentFolders: ["/server-folder"] },
-      { root: "/", current: "/Users", parent: "/", entries: [{ name: "tmp", path: "/Users/tmp", type: "directory", extra: true }] },
+      {
+        root: "/",
+        current: "/Users",
+        parent: "/",
+        entries: [{ name: "tmp", path: "/Users/tmp", type: "directory", extra: true }],
+      },
     ]
     for (const payload of invalid) {
       await expect(browseRemoteFolders(base, async () => Response.json(payload))).rejects.toThrow(/invalid/)
@@ -289,36 +323,45 @@ describe("Android SSH authority and folder browsing", () => {
   })
 
   test("maps the server current path and does not trust the requested alias", async () => {
-    const result = await browseRemoteFolders(
-      { ...baseBrowseInput(), path: "/Users/alias" },
-      async (url) => {
-        expect(new URL(String(url)).searchParams.get("path")).toBe("/Users/alias")
-        return Response.json({ root: "/", current: "/Users", parent: "/", entries: [] })
-      },
-    )
+    const result = await browseRemoteFolders({ ...baseBrowseInput(), path: "/Users/alias" }, async (url) => {
+      expect(new URL(String(url)).searchParams.get("path")).toBe("/Users/alias")
+      return Response.json({ root: "/", current: "/Users", parent: "/", entries: [] })
+    })
     expect(result.path).toBe("/Users")
   })
 
   test("starts the first browse at the authenticated remote root when path is omitted", async () => {
-    const result = await browseRemoteFolders(
-      { ...baseBrowseInput(), path: undefined },
-      async (url) => {
-        const endpoint = new URL(String(url))
-        expect(endpoint.pathname).toBe("/remote/ssh/browse")
-        expect(endpoint.searchParams.get("workspace")).toBe(input.workspaceID)
-        expect(endpoint.searchParams.get("path")).toBeNull()
-        return Response.json({ root: "/instance", current: "/instance", entries: [] })
-      },
-    )
+    const result = await browseRemoteFolders({ ...baseBrowseInput(), path: undefined }, async (url) => {
+      const endpoint = new URL(String(url))
+      expect(endpoint.pathname).toBe("/remote/ssh/browse")
+      expect(endpoint.searchParams.get("workspace")).toBe(input.workspaceID!)
+      expect(endpoint.searchParams.get("path")).toBeNull()
+      return Response.json({ root: "/instance", current: "/instance", entries: [] })
+    })
     expect(result).toEqual({ root: "/instance", path: "/instance", entries: [], recentFolders: [] })
+  })
+
+  test("omits the workspace query when the server can derive the SSH workspace", async () => {
+    const result = await browseRemoteFolders({ ...baseBrowseInput(), workspaceID: undefined }, async (url) => {
+      const endpoint = new URL(String(url))
+      expect(endpoint.searchParams.get("workspace")).toBeNull()
+      expect(endpoint.searchParams.get("sshAuthority")).toBe(`${input.sshAuthority}:22`)
+      expect(endpoint.searchParams.get("sshPort")).toBe(String(input.port))
+      return Response.json({ root: "/instance", current: "/instance", entries: [] })
+    })
+    expect(result.path).toBe("/instance")
   })
 
   test("reports authenticated browse failures", async () => {
     await expect(
-      browseRemoteFolders(baseBrowseInput(), async () => Response.json({ message: "browse unavailable" }, { status: 503 })),
+      browseRemoteFolders(baseBrowseInput(), async () =>
+        Response.json({ message: "browse unavailable" }, { status: 503 }),
+      ),
     ).rejects.toThrow("browse unavailable")
     await expect(
-      browseRemoteFolders(baseBrowseInput(), async () => Response.json({ root: "/", current: "/", parent: "/bad", entries: [] })),
+      browseRemoteFolders(baseBrowseInput(), async () =>
+        Response.json({ root: "/", current: "/", parent: "/bad", entries: [] }),
+      ),
     ).rejects.toThrow("invalid parent")
   })
 
@@ -333,11 +376,46 @@ describe("Android SSH authority and folder browsing", () => {
       },
       async () => undefined,
     )
-    expect((calls.find((call) => call.url.endsWith("/remote/pairing"))?.body as { workspace: { agent: string } }).workspace.agent).toBe("opencode-cli")
+    expect(
+      (calls.find((call) => call.url.endsWith("/remote/pairing"))?.body as { workspace: { agent: string } }).workspace
+        .agent,
+    ).toBe("opencode-cli")
     expect(calls.find((call) => call.url.endsWith("/remote/ssh/validate"))?.body).toEqual(opencodeWorkspace)
     expect(result.state.workspace?.workspace?.agent).toBe("opencode-cli")
     expect(result.state.recentFolders?.[0]?.paths).toEqual([input.directory, "/old"])
     expect(JSON.stringify(result.state)).not.toContain("sshPassword")
+  })
+
+  test("fetches a versioned command catalog for a selected CLI agent", async () => {
+    const calls: Array<{ url: string; body?: unknown; authorization: string | null }> = []
+    const base = fetcher(calls, false, true, { ...workspace, agent: "opencode-cli" })
+    let saved: Awaited<ReturnType<typeof connectRemoteWorkspace>> | undefined
+    const result = await connectRemoteWorkspace(
+      { ...input, agent: "opencode-cli" },
+      async (url, init) => {
+        if (new URL(String(url)).pathname === "/remote/agent/catalog") {
+          const headers = new Headers(init?.headers)
+          calls.push({ url: String(url), authorization: headers.get("authorization") })
+          return Response.json({
+            agent: "opencode-cli",
+            version: "1.2.3",
+            commands: [{ name: "deploy", description: "Deploy the project" }],
+          })
+        }
+        return base(url, init)
+      },
+      async (state, secret) => {
+        saved = { state, secret, pairing: state.workspace! }
+      },
+    )
+
+    expect(calls.map((call) => new URL(call.url).pathname)).toContain("/remote/agent/catalog")
+    expect(result.state.commandCatalog).toEqual({
+      agent: "opencode-cli",
+      version: "1.2.3",
+      commands: expect.arrayContaining([{ name: "deploy", description: "Deploy the project" }, { name: "help" }]),
+    })
+    expect(saved?.state.commandCatalog?.version).toBe("1.2.3")
   })
 
   test("fails closed when an OpenCode validation response omits its bound agent", async () => {
@@ -349,9 +427,9 @@ describe("Android SSH authority and folder browsing", () => {
       if (String(url).endsWith("/remote/ssh/validate")) return Response.json(workspace)
       return response
     }
-    await expect(connectRemoteWorkspace({ ...input, agent: "opencode-cli" }, altered, async () => undefined)).rejects.toThrow(
-      "exact requested workspace",
-    )
+    await expect(
+      connectRemoteWorkspace({ ...input, agent: "opencode-cli" }, altered, async () => undefined),
+    ).rejects.toThrow("exact requested workspace")
     expect(calls.map((call) => new URL(call.url).pathname)).not.toContain("/experimental/workspace/remote/select")
   })
 })

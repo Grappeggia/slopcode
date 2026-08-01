@@ -1,5 +1,7 @@
-import { createSignal, Show } from "solid-js"
+import { createSignal, For, onMount, Show } from "solid-js"
+import { bakedRemoteCommandCatalog, fetchRemoteAgentCatalog } from "./remote-commands"
 import { normalizeHttpsUrl, type RemoteAgent } from "./remote-workspace-state"
+import type { RemoteCommandCatalog } from "./remote-workspace-state"
 
 type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>
 
@@ -11,6 +13,7 @@ const REQUEST_TIMEOUT_MS = 60_000
 const statuses = ["completed", "failed", "timed_out"] as const
 const sandboxes = ["read-only", "workspace-write", "danger-full-access"] as const
 const approvals = ["untrusted", "on-failure", "on-request", "never"] as const
+const permissionModes = ["default", "acceptEdits", "plan", "bypassPermissions"] as const
 
 export type RemoteAgentStatus = (typeof statuses)[number]
 export type RemoteCliAgent = Exclude<RemoteAgent, "local-slopcode">
@@ -19,6 +22,7 @@ export type RemoteAgentConfig = {
   profile?: string
   sandbox?: (typeof sandboxes)[number]
   approval?: (typeof approvals)[number]
+  permissionMode?: (typeof permissionModes)[number]
 }
 export type RemoteAgentResult = {
   output: string
@@ -41,6 +45,7 @@ export type RemoteAgentPromptInput = {
 
 export type CodexCliPromptInput = Omit<RemoteAgentPromptInput, "agent">
 export type OpencodeCliPromptInput = CodexCliPromptInput
+export type ClaudeCodePromptInput = CodexCliPromptInput
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -60,7 +65,8 @@ function directory(value: unknown) {
     next.includes("\\") ||
     next.includes("//") ||
     /[\u0000-\u001f\u007f\r\n?#]/.test(next)
-  ) return
+  )
+    return
   if (next.split("/").some((part) => part === "." || part === "..")) return
   return next
 }
@@ -72,7 +78,7 @@ function workspaceID(value: unknown) {
 }
 
 function agent(value: unknown): RemoteCliAgent | undefined {
-  if (value === "codex-cli" || value === "opencode-cli") return value
+  if (value === "codex-cli" || value === "opencode-cli" || value === "claude-code") return value
 }
 
 function authorization(username: unknown, password: unknown) {
@@ -95,7 +101,8 @@ function authorization(username: unknown, password: unknown) {
 
 function config(value: unknown) {
   if (!isRecord(value)) return
-  if (Object.keys(value).some((key) => !["model", "profile", "sandbox", "approval"].includes(key))) return
+  if (Object.keys(value).some((key) => !["model", "profile", "sandbox", "approval", "permissionMode"].includes(key)))
+    return
   const next: RemoteAgentConfig = {}
   for (const key of ["model", "profile"] as const) {
     if (value[key] === undefined) continue
@@ -104,7 +111,8 @@ function config(value: unknown) {
       value[key].length < 1 ||
       value[key].length > MAX_CONFIG_VALUE_LENGTH ||
       !/^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(value[key])
-    ) return
+    )
+      return
     next[key] = value[key]
   }
   if (value.sandbox !== undefined) {
@@ -115,12 +123,17 @@ function config(value: unknown) {
     if (!approvals.includes(value.approval as (typeof approvals)[number])) return
     next.approval = value.approval as RemoteAgentConfig["approval"]
   }
+  if (value.permissionMode !== undefined) {
+    if (!permissionModes.includes(value.permissionMode as (typeof permissionModes)[number])) return
+    next.permissionMode = value.permissionMode as RemoteAgentConfig["permissionMode"]
+  }
   return next
 }
 
 async function json(response: Response) {
   const length = Number(response.headers.get("content-length"))
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error("Remote agent response exceeded the Android limit.")
+  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES)
+    throw new Error("Remote agent response exceeded the Android limit.")
   if (!response.body) return
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -163,7 +176,8 @@ export function parseRemoteAgentResult(value: unknown): RemoteAgentResult | unde
   const output = text(value.output, MAX_OUTPUT_LENGTH)
   const status = statuses.find((item) => item === value.status)
   if (output === undefined || !status) return
-  if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isSafeInteger(value.exitCode))) return
+  if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isSafeInteger(value.exitCode)))
+    return
   return value.exitCode === undefined ? { output, status } : { output, status, exitCode: value.exitCode }
 }
 
@@ -171,7 +185,10 @@ export function parseCodexCliResult(value: unknown): CodexCliResult | undefined 
   return parseRemoteAgentResult(value)
 }
 
-export async function promptRemoteAgent(input: RemoteAgentPromptInput, fetcher: Fetcher = fetch): Promise<RemoteAgentResult> {
+export async function promptRemoteAgent(
+  input: RemoteAgentPromptInput,
+  fetcher: Fetcher = fetch,
+): Promise<RemoteAgentResult> {
   const serverUrl = normalizeHttpsUrl(input.serverUrl)
   const workspace = workspaceID(input.workspaceID)
   const remoteDirectory = directory(input.directory)
@@ -179,10 +196,25 @@ export async function promptRemoteAgent(input: RemoteAgentPromptInput, fetcher: 
   const prompt = typeof input.prompt === "string" ? text(input.prompt.trim(), MAX_PROMPT_LENGTH) : undefined
   const parsedConfig = input.config === undefined ? undefined : config(input.config)
   if (!serverUrl) throw new Error("Remote agent requires an exact HTTPS desktop or relay URL.")
-  if (!workspace || !remoteDirectory || !selectedAgent || !prompt) throw new Error("Remote agent requires a workspace, folder, agent, and prompt.")
+  if (!workspace || !remoteDirectory || !selectedAgent || !prompt)
+    throw new Error("Remote agent requires a workspace, folder, agent, and prompt.")
   if (input.config !== undefined && !parsedConfig) throw new Error("Remote agent configuration is invalid.")
-  if (selectedAgent === "opencode-cli" && (parsedConfig?.sandbox !== undefined || parsedConfig?.approval !== undefined)) {
+  if (
+    selectedAgent === "opencode-cli" &&
+    (parsedConfig?.sandbox !== undefined ||
+      parsedConfig?.approval !== undefined ||
+      parsedConfig?.permissionMode !== undefined)
+  ) {
     throw new Error("OpenCode configuration supports only model and profile.")
+  }
+  if (
+    selectedAgent === "claude-code" &&
+    (parsedConfig?.profile !== undefined || parsedConfig?.sandbox !== undefined || parsedConfig?.approval !== undefined)
+  ) {
+    throw new Error("Claude Code configuration supports only model and permission mode.")
+  }
+  if (selectedAgent === "codex-cli" && parsedConfig?.permissionMode !== undefined) {
+    throw new Error("Codex configuration does not support Claude Code permission mode.")
   }
 
   const endpoint = new URL(`${serverUrl}/remote/agent/prompt`)
@@ -226,7 +258,14 @@ export function promptOpencodeCli(input: OpencodeCliPromptInput, fetcher: Fetche
   return promptRemoteAgent({ ...input, agent: "opencode-cli" }, fetcher)
 }
 
-type Props = Omit<RemoteAgentPromptInput, "prompt">
+export function promptClaudeCode(input: ClaudeCodePromptInput, fetcher: Fetcher = fetch) {
+  return promptRemoteAgent({ ...input, agent: "claude-code" }, fetcher)
+}
+
+type Props = Omit<RemoteAgentPromptInput, "prompt"> & {
+  catalog?: RemoteCommandCatalog
+  onCatalog?: (catalog: RemoteCommandCatalog) => void
+}
 
 export function RemoteAgentSession(props: Props) {
   const [prompt, setPrompt] = createSignal("")
@@ -234,26 +273,61 @@ export function RemoteAgentSession(props: Props) {
   const [profile, setProfile] = createSignal("")
   const [sandbox, setSandbox] = createSignal<RemoteAgentConfig["sandbox"]>()
   const [approval, setApproval] = createSignal<RemoteAgentConfig["approval"]>()
+  const [permissionMode, setPermissionMode] = createSignal<RemoteAgentConfig["permissionMode"]>()
   const [result, setResult] = createSignal<RemoteAgentResult>()
   const [error, setError] = createSignal("")
   const [busy, setBusy] = createSignal(false)
-  const name = () => props.agent === "opencode-cli" ? "OpenCode CLI" : "Codex CLI"
+  const initialCatalog = () =>
+    props.catalog?.agent === props.agent ? props.catalog : bakedRemoteCommandCatalog(props.agent)
+  const [commands, setCommands] = createSignal(initialCatalog().commands)
+  const [agentVersion, setAgentVersion] = createSignal(initialCatalog().version)
+  const name = () => {
+    if (props.agent === "opencode-cli") return "OpenCode CLI"
+    if (props.agent === "claude-code") return "Claude Code"
+    return "Codex CLI"
+  }
   const config = () => {
     const next: RemoteAgentConfig = {
       ...(model().trim() ? { model: model().trim() } : {}),
       ...(profile().trim() ? { profile: profile().trim() } : {}),
       ...(props.agent === "codex-cli" && sandbox() ? { sandbox: sandbox() } : {}),
       ...(props.agent === "codex-cli" && approval() ? { approval: approval() } : {}),
+      ...(props.agent === "claude-code" && permissionMode() ? { permissionMode: permissionMode() } : {}),
     }
     return Object.keys(next).length > 0 ? next : props.config
   }
+
+  const refresh = async () => {
+    try {
+      const catalog = await fetchRemoteAgentCatalog({
+        serverUrl: props.serverUrl,
+        username: props.username,
+        password: props.password,
+        workspaceID: props.workspaceID,
+        directory: props.directory,
+        agent: props.agent,
+      })
+      setCommands(catalog.commands)
+      setAgentVersion(catalog.version)
+      if (props.catalog?.version !== catalog.version || props.catalog?.agent !== catalog.agent)
+        props.onCatalog?.(catalog)
+    } catch {
+      return
+    }
+  }
+
+  onMount(() => {
+    void refresh()
+  })
 
   const send = async () => {
     if (busy()) return
     setBusy(true)
     setError("")
     try {
-      setResult(await promptRemoteAgent({ ...props, prompt: prompt(), config: config() }))
+      const { catalog: _catalog, onCatalog: _onCatalog, ...input } = props
+      setResult(await promptRemoteAgent({ ...input, prompt: prompt(), config: config() }))
+      await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Remote agent request failed.")
     } finally {
@@ -283,29 +357,58 @@ export function RemoteAgentSession(props: Props) {
           />
         </label>
 
+        <div class="flex flex-col gap-2">
+          <div class="flex items-center justify-between text-12-regular text-text-weak">
+            <span>Remote slash commands</span>
+            <span>agent {agentVersion()}</span>
+          </div>
+          <div class="flex flex-wrap gap-2" aria-label="Remote slash commands">
+            <For each={commands()}>
+              {(item) => (
+                <button
+                  type="button"
+                  class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular"
+                  onClick={() => setPrompt(`/${item.name} `)}
+                  title={item.description}
+                >
+                  /{item.name}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label class="flex flex-col gap-1 text-14-medium">
             Model (optional)
             <input
               type="text"
               autocomplete="off"
-              placeholder={props.agent === "opencode-cli" ? "provider/model" : "model ID"}
+              placeholder={
+                props.agent === "opencode-cli"
+                  ? "provider/model"
+                  : props.agent === "claude-code"
+                    ? "sonnet"
+                    : "model ID"
+              }
               value={model()}
               onInput={(event) => setModel(event.currentTarget.value)}
               class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
             />
           </label>
-          <label class="flex flex-col gap-1 text-14-medium">
-            {props.agent === "opencode-cli" ? "OpenCode agent (optional)" : "Codex profile (optional)"}
-            <input
-              type="text"
-              autocomplete="off"
-              placeholder={props.agent === "opencode-cli" ? "build" : "default"}
-              value={profile()}
-              onInput={(event) => setProfile(event.currentTarget.value)}
-              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-            />
-          </label>
+          <Show when={props.agent !== "claude-code"}>
+            <label class="flex flex-col gap-1 text-14-medium">
+              {props.agent === "opencode-cli" ? "OpenCode agent (optional)" : "Codex profile (optional)"}
+              <input
+                type="text"
+                autocomplete="off"
+                placeholder={props.agent === "opencode-cli" ? "build" : "default"}
+                value={profile()}
+                onInput={(event) => setProfile(event.currentTarget.value)}
+                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+              />
+            </label>
+          </Show>
         </div>
 
         <Show when={props.agent === "codex-cli"}>
@@ -321,7 +424,9 @@ export function RemoteAgentSession(props: Props) {
                 class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
               >
                 <option value="">Remote default</option>
-                {sandboxes.map((value) => <option value={value}>{value}</option>)}
+                {sandboxes.map((value) => (
+                  <option value={value}>{value}</option>
+                ))}
               </select>
             </label>
             <label class="flex flex-col gap-1 text-14-medium">
@@ -335,7 +440,9 @@ export function RemoteAgentSession(props: Props) {
                 class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
               >
                 <option value="">Remote default</option>
-                {approvals.map((value) => <option value={value}>{value}</option>)}
+                {approvals.map((value) => (
+                  <option value={value}>{value}</option>
+                ))}
               </select>
             </label>
           </div>
@@ -343,7 +450,30 @@ export function RemoteAgentSession(props: Props) {
 
         <Show when={props.agent === "opencode-cli"}>
           <p class="text-12-regular text-text-weak">
-            OpenCode forwards the model and agent fields to <code>opencode run</code>; its permissions remain controlled by the remote OpenCode configuration.
+            OpenCode forwards the model and agent fields to <code>opencode run</code>; its permissions remain controlled
+            by the remote OpenCode configuration.
+          </p>
+        </Show>
+
+        <Show when={props.agent === "claude-code"}>
+          <label class="flex flex-col gap-1 text-14-medium">
+            Permission mode
+            <select
+              value={permissionMode() ?? ""}
+              onChange={(event) => {
+                const value = event.currentTarget.value
+                setPermissionMode(value ? (value as RemoteAgentConfig["permissionMode"]) : undefined)
+              }}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            >
+              <option value="">Remote default</option>
+              {permissionModes.map((value) => (
+                <option value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <p class="text-12-regular text-text-weak">
+            Claude Code runs in print mode with the selected model and permission mode on the SSH host.
           </p>
         </Show>
 
@@ -386,4 +516,8 @@ export function CodexCliSession(props: Omit<CodexCliPromptInput, "prompt">) {
 
 export function OpencodeCliSession(props: Omit<OpencodeCliPromptInput, "prompt">) {
   return <RemoteAgentSession {...props} agent="opencode-cli" />
+}
+
+export function ClaudeCodeSession(props: Omit<ClaudeCodePromptInput, "prompt">) {
+  return <RemoteAgentSession {...props} agent="claude-code" />
 }

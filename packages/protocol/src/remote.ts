@@ -47,6 +47,7 @@ export const RemoteAgentMode = Schema.Union([
   Schema.Literal("local-slopcode"),
   Schema.Literal("codex-cli"),
   Schema.Literal("opencode-cli"),
+  Schema.Literal("claude-code"),
 ]).annotate({ identifier: "RemoteV1.AgentMode" })
 export type RemoteAgentMode = typeof RemoteAgentMode.Type
 
@@ -244,12 +245,21 @@ export const RemoteCodexCliApproval = Schema.Union([
 ]).annotate({ identifier: "RemoteV1.CodexCliApproval" })
 export type RemoteCodexCliApproval = typeof RemoteCodexCliApproval.Type
 
+export const RemoteClaudeCodePermissionMode = Schema.Union([
+  Schema.Literal("default"),
+  Schema.Literal("acceptEdits"),
+  Schema.Literal("plan"),
+  Schema.Literal("bypassPermissions"),
+]).annotate({ identifier: "RemoteV1.ClaudeCodePermissionMode" })
+export type RemoteClaudeCodePermissionMode = typeof RemoteClaudeCodePermissionMode.Type
+
 export const RemoteCodexCliConfig = exact(
   Schema.Struct({
     model: Schema.optional(RemoteCodexCliModel),
     profile: Schema.optional(RemoteCodexCliProfile),
     sandbox: Schema.optional(RemoteCodexCliSandbox),
     approval: Schema.optional(RemoteCodexCliApproval),
+    permissionMode: Schema.optional(RemoteClaudeCodePermissionMode),
   }),
 ).annotate({ identifier: "RemoteV1.CodexCliConfig" })
 export type RemoteCodexCliConfig = typeof RemoteCodexCliConfig.Type
@@ -277,7 +287,9 @@ export const RemoteCodexCliResultMetadata = exact(
   Schema.Struct({
     status: RemoteCodexCliResultStatus,
     exitCode: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(255))),
-    durationMs: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(86_400_000))),
+    durationMs: Schema.optional(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(86_400_000)),
+    ),
     model: Schema.optional(RemoteCodexCliModel),
     profile: Schema.optional(RemoteCodexCliProfile),
     sandbox: Schema.optional(RemoteCodexCliSandbox),

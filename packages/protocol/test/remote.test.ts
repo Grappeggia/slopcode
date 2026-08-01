@@ -178,6 +178,7 @@ describe("remote protocol contracts", () => {
 
   test("supports explicit agent modes without breaking legacy ssh workspaces", async () => {
     const openCodeMode = await Effect.runPromise(Schema.decodeUnknownEffect(RemoteAgentMode)("opencode-cli"))
+    const claudeCodeMode = await Effect.runPromise(Schema.decodeUnknownEffect(RemoteAgentMode)("claude-code"))
 
     const legacy = await Effect.runPromise(
       Schema.decodeUnknownEffect(RemoteWorkspace)({
@@ -232,10 +233,9 @@ describe("remote protocol contracts", () => {
     expect(local.agent).toBe("local-slopcode")
     expect(codex.agent).toBe("codex-cli")
     expect(openCodeMode).toBe("opencode-cli")
+    expect(claudeCodeMode).toBe("claude-code")
 
-    await expect(
-      Effect.runPromise(Schema.decodeUnknownEffect(RemoteAgentMode)("open-code")),
-    ).rejects.toThrow()
+    await expect(Effect.runPromise(Schema.decodeUnknownEffect(RemoteAgentMode)("open-code"))).rejects.toThrow()
 
     await expect(
       Effect.runPromise(
@@ -290,9 +290,7 @@ describe("remote protocol contracts", () => {
     await expect(
       decode({ ...base, entries: [{ name: "src", path: "/srv/project\\src", kind: "directory" }] }),
     ).rejects.toThrow()
-    await expect(
-      decode({ ...base, path: `/${"a".repeat(RemoteSshFolderLimits.maxPathLength)}` }),
-    ).rejects.toThrow()
+    await expect(decode({ ...base, path: `/${"a".repeat(RemoteSshFolderLimits.maxPathLength)}` })).rejects.toThrow()
     await expect(
       decode({
         ...base,
@@ -312,11 +310,13 @@ describe("remote protocol contracts", () => {
     await expect(
       decode({
         ...base,
-        entries: [{
-          name: "a".repeat(RemoteSshFolderLimits.maxNameLength + 1),
-          path: "/srv/project/src",
-          kind: "file",
-        }],
+        entries: [
+          {
+            name: "a".repeat(RemoteSshFolderLimits.maxNameLength + 1),
+            path: "/srv/project/src",
+            kind: "file",
+          },
+        ],
       }),
     ).rejects.toThrow()
     await expect(
@@ -379,8 +379,17 @@ describe("remote protocol contracts", () => {
       }),
     )
 
+    const claudeCodeRequest = await Effect.runPromise(
+      Schema.decodeUnknownEffect(RemoteAgentRequest)({
+        agent: "claude-code",
+        prompt: "Summarize the selected remote folder.",
+        config: { model: "sonnet", permissionMode: "plan" },
+      }),
+    )
+
     expect(openCodeRequest.agent).toBe("opencode-cli")
     expect(openCodeResult.agent).toBe("opencode-cli")
+    expect(claudeCodeRequest.agent).toBe("claude-code")
   })
 
   test("rejects unbounded or command-shaped Codex CLI data", async () => {

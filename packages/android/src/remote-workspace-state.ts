@@ -34,7 +34,7 @@ export type RemoteWorkspaceRecord = {
   }
 }
 
-export const REMOTE_AGENTS = ["local-slopcode", "codex-cli", "opencode-cli"] as const
+export const REMOTE_AGENTS = ["local-slopcode", "codex-cli", "opencode-cli", "claude-code"] as const
 export type RemoteAgent = (typeof REMOTE_AGENTS)[number]
 export const DEFAULT_REMOTE_AGENT: RemoteAgent = "local-slopcode"
 
@@ -57,6 +57,20 @@ export type RemoteWorkspaceCapability = {
   sshWorkspace: boolean
 }
 
+export type RemoteCommandInfo = {
+  name: string
+  description?: string
+  agent?: string
+  model?: string
+  subtask?: boolean
+}
+
+export type RemoteCommandCatalog = {
+  agent: RemoteAgent
+  version: string
+  commands: RemoteCommandInfo[]
+}
+
 export type RemoteWorkspaceCapabilityName = keyof RemoteWorkspaceCapability
 
 export type RemoteWorkspaceSecret = {
@@ -75,6 +89,7 @@ export type RemoteWorkspaceState = {
   serverUrl?: string
   serverSelection?: RemoteServerSelection
   workspace?: RemoteWorkspaceRecord
+  commandCatalog?: RemoteCommandCatalog
   recentFolders?: RemoteFolderHistory[]
   savedAt?: string
 }
@@ -123,13 +138,52 @@ function absolutePath(value: unknown) {
     next.includes("//") ||
     /[\u0000-\u001f\u007f\r\n?#]/.test(next) ||
     next.split("/").some((part) => part === "." || part === "..")
-  ) return
+  )
+    return
   return next
 }
 
 function remoteAgent(value: unknown) {
   if (value === undefined) return DEFAULT_REMOTE_AGENT
   if (REMOTE_AGENTS.includes(value as RemoteAgent)) return value as RemoteAgent
+}
+
+function commandName(value: unknown) {
+  const next = text(value)
+  if (!next || next.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(next)) return
+  return next
+}
+
+function commandCatalog(value: unknown): RemoteCommandCatalog | undefined {
+  if (!isRecord(value) || !REMOTE_AGENTS.includes(value.agent as RemoteAgent)) return
+  const version = text(value.version)
+  if (!version || version.length > 128 || !Array.isArray(value.commands) || value.commands.length > 256) return
+  const commands = value.commands.flatMap((item) => {
+    if (!isRecord(item)) return []
+    const name = commandName(item.name)
+    if (!name) return []
+    const description = item.description === undefined ? undefined : text(item.description)
+    const agent = item.agent === undefined ? undefined : text(item.agent)
+    const model = item.model === undefined ? undefined : text(item.model)
+    if (item.description !== undefined && (!description || description.length > 512)) return []
+    if (item.agent !== undefined && (!agent || agent.length > 128)) return []
+    if (item.model !== undefined && (!model || model.length > 128)) return []
+    if (item.subtask !== undefined && typeof item.subtask !== "boolean") return []
+    return [
+      clean({
+        name,
+        description,
+        agent,
+        model,
+        subtask: item.subtask,
+      }) as RemoteCommandInfo,
+    ]
+  })
+  return {
+    agent: value.agent as RemoteAgent,
+    version,
+    commands: commands.filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index),
+  }
 }
 
 function safeAuthority(value: unknown) {
@@ -141,7 +195,7 @@ function safeAuthority(value: unknown) {
   if (!target) return
   if (target.startsWith("[")) {
     const close = target.indexOf("]")
-    if (close < 0 || target.slice(close + 1) && !/^:[1-9][0-9]{0,4}$/.test(target.slice(close + 1))) return
+    if (close < 0 || (target.slice(close + 1) && !/^:[1-9][0-9]{0,4}$/.test(target.slice(close + 1)))) return
     if (!/^[0-9A-Fa-f:.]+$/.test(target.slice(1, close)) || !target.slice(1, close).includes(":")) return
     return next
   }
@@ -149,7 +203,12 @@ function safeAuthority(value: unknown) {
   if (colons > 1) return
   const host = colons === 1 ? target.slice(0, target.lastIndexOf(":")) : target
   const suffix = colons === 1 ? target.slice(target.lastIndexOf(":")) : ""
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) || host.includes("..") || (suffix && !/^:[1-9][0-9]{0,4}$/.test(suffix))) return
+  if (
+    !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) ||
+    host.includes("..") ||
+    (suffix && !/^:[1-9][0-9]{0,4}$/.test(suffix))
+  )
+    return
   return next
 }
 
@@ -254,23 +313,21 @@ function normalizeWorkspace(value: unknown) {
 
 function normalizeRecentFolders(value: unknown) {
   if (!Array.isArray(value)) return
-  return value
-    .slice(0, MAX_RECENT_SCOPES)
-    .flatMap((item) => {
-      if (!isRecord(item)) return []
-      const origin = normalizeHttpsUrl(item.origin)
-      const workspaceIDValue = workspaceID(item.workspaceID)
-      const authority = safeAuthority(item.authority)
-      if (!origin || !workspaceIDValue || !authority || !Array.isArray(item.paths)) return []
-      const paths = item.paths
-        .filter((path): path is string => typeof path === "string")
-        .map(absolutePath)
-        .filter((path): path is string => !!path)
-        .filter((path, index, all) => all.indexOf(path) === index)
-        .slice(0, MAX_RECENT_FOLDERS)
-      if (paths.length === 0) return []
-      return [{ origin, workspaceID: workspaceIDValue, authority, paths }]
-    })
+  return value.slice(0, MAX_RECENT_SCOPES).flatMap((item) => {
+    if (!isRecord(item)) return []
+    const origin = normalizeHttpsUrl(item.origin)
+    const workspaceIDValue = workspaceID(item.workspaceID)
+    const authority = safeAuthority(item.authority)
+    if (!origin || !workspaceIDValue || !authority || !Array.isArray(item.paths)) return []
+    const paths = item.paths
+      .filter((path): path is string => typeof path === "string")
+      .map(absolutePath)
+      .filter((path): path is string => !!path)
+      .filter((path, index, all) => all.indexOf(path) === index)
+      .slice(0, MAX_RECENT_FOLDERS)
+    if (paths.length === 0) return []
+    return [{ origin, workspaceID: workspaceIDValue, authority, paths }]
+  })
 }
 
 function normalizeWorkspaceRecord(value: unknown): RemoteWorkspaceRecord | undefined {
@@ -288,7 +345,10 @@ function normalizeWorkspaceRecord(value: unknown): RemoteWorkspaceRecord | undef
   return record
 }
 
-export function remoteCapabilityEnabled(record: RemoteWorkspaceRecord | undefined, name: RemoteWorkspaceCapabilityName) {
+export function remoteCapabilityEnabled(
+  record: RemoteWorkspaceRecord | undefined,
+  name: RemoteWorkspaceCapabilityName,
+) {
   return record?.capability?.[name] === true
 }
 
@@ -331,6 +391,7 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
   const selection = normalizeServerSelection(value.serverSelection, serverUrl)
   const selectedUrl = selection?.url ?? serverUrl
   const recentFolders = normalizeRecentFolders(value.recentFolders)
+  const catalog = commandCatalog(value.commandCatalog)
   return {
     version: 1,
     serverUrl: selectedUrl,
@@ -340,7 +401,9 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
         ? {
             url: selectedUrl,
             workspaceID: workspaceID(
-              isRecord(value.workspace) && isRecord(value.workspace.workspace) ? value.workspace.workspace.id : undefined,
+              isRecord(value.workspace) && isRecord(value.workspace.workspace)
+                ? value.workspace.workspace.id
+                : undefined,
             ),
             directory:
               isRecord(value.workspace) && isRecord(value.workspace.workspace)
@@ -349,6 +412,7 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
           }
         : undefined),
     workspace: normalizeWorkspaceRecord(value.workspace ?? value.pairing),
+    ...(catalog ? { commandCatalog: catalog } : {}),
     ...(recentFolders ? { recentFolders } : {}),
     savedAt: text(value.savedAt),
   }
@@ -418,7 +482,10 @@ function parseState(value: unknown) {
   if (rawUrl && (!normalizeHttpsUrl(rawUrl) || normalizeHttpsUrl(rawUrl) !== state.serverUrl)) {
     throw new Error("Invalid remote server URL")
   }
-  if (value.serverSelection !== undefined && !normalizeServerSelection(value.serverSelection, normalizeHttpsUrl(rawUrl))) {
+  if (
+    value.serverSelection !== undefined &&
+    !normalizeServerSelection(value.serverSelection, normalizeHttpsUrl(rawUrl))
+  ) {
     throw new Error("Invalid remote server selection")
   }
   return state
@@ -433,7 +500,13 @@ function parseJson(value: string) {
 }
 
 function hasState(state: RemoteWorkspaceState) {
-  return !!state.serverUrl || !!state.workspace || !!state.savedAt || !!state.serverSelection || !!state.recentFolders?.length
+  return (
+    !!state.serverUrl ||
+    !!state.workspace ||
+    !!state.savedAt ||
+    !!state.serverSelection ||
+    !!state.recentFolders?.length
+  )
 }
 
 function stored(state: RemoteWorkspaceState, secret?: RemoteWorkspaceSecret): StoredRemoteWorkspace {
@@ -521,7 +594,10 @@ export async function writeRemoteWorkspaceRecord(
   if (rawUrl && (!normalizeHttpsUrl(rawUrl) || normalizeHttpsUrl(rawUrl) !== next.serverUrl)) {
     throw new Error("Remote server URL must be HTTPS without credentials, query, or fragment")
   }
-  if (state.serverSelection !== undefined && !normalizeServerSelection(state.serverSelection, normalizeHttpsUrl(rawUrl))) {
+  if (
+    state.serverSelection !== undefined &&
+    !normalizeServerSelection(state.serverSelection, normalizeHttpsUrl(rawUrl))
+  ) {
     throw new Error("Remote server selection is invalid")
   }
   const normalized = normalizeRemoteWorkspaceSecret(secret)
@@ -541,9 +617,12 @@ export async function writeRemoteWorkspaceRecord(
 export async function writeRemoteWorkspaceState(storage: AndroidSecureStorage, state: RemoteWorkspaceState) {
   const current = await readRemoteWorkspace(storage)
   const next = normalizeRemoteWorkspaceState(state)
-  const secret = current.secret && current.state.serverUrl === next.serverUrl && current.state.workspace?.pairingId === next.workspace?.pairingId
-    ? current.secret
-    : undefined
+  const secret =
+    current.secret &&
+    current.state.serverUrl === next.serverUrl &&
+    current.state.workspace?.pairingId === next.workspace?.pairingId
+      ? current.secret
+      : undefined
   await writeRemoteWorkspaceRecord(storage, state, secret)
 }
 

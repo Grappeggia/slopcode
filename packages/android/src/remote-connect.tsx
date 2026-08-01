@@ -1,5 +1,6 @@
 import { createSignal, For, onMount, Show } from "solid-js"
 import { persistRemoteWorkspace, readInitialWorkspaceState } from "./platform"
+import { bakedRemoteCommandCatalog, fetchRemoteAgentCatalog } from "./remote-commands"
 import {
   DEFAULT_REMOTE_AGENT,
   REMOTE_AGENTS,
@@ -23,6 +24,8 @@ type Fetcher = RemoteFetcher
 
 const MAX_RESPONSE_BYTES = 256 * 1024
 const REQUEST_TIMEOUT_MS = 15_000
+const SUPERVISOR_WAIT_MS = 30_000
+const SUPERVISOR_RETRY_MS = 500
 const MAX_FOLDER_ENTRIES = 256
 const MAX_FOLDER_NAME_LENGTH = 256
 const DEFAULT_SSH_PORT = 22
@@ -74,7 +77,8 @@ function selectionBinding(value: unknown) {
     !/^dev_[a-zA-Z0-9._:-]+$/.test(deviceID) ||
     typeof code !== "string" ||
     !/^[A-Z0-9]{6}$/.test(code)
-  ) return
+  )
+    return
   return { nonce, deviceID, code }
 }
 
@@ -101,7 +105,8 @@ export function validDirectory(value: string) {
     next.includes("//") ||
     /[\u0000-\u001f\u007f\r\n?#]/.test(next) ||
     next.split("/").some((part) => part === "." || part === "..")
-  ) return
+  )
+    return
   return next
 }
 
@@ -128,8 +133,11 @@ export function parseSshAuthority(value: string): SshAuthority | undefined {
   if (
     !raw ||
     raw.length > 320 ||
-    [...raw].some((character) => shellMeta.has(character) || character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f)
-  ) return
+    [...raw].some(
+      (character) => shellMeta.has(character) || character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f,
+    )
+  )
+    return
 
   const at = raw.indexOf("@")
   if (at < 1 || at !== raw.lastIndexOf("@")) return
@@ -188,13 +196,26 @@ function record(value: unknown, code: boolean) {
   const capability = raw.capability
   if (!capability || typeof capability !== "object" || Array.isArray(capability)) return
   const capabilities = capability as Record<string, unknown>
-  if (!["fs", "command", "pty", "events", "localWorkspace", "sshWorkspace"].every((key) => typeof capabilities[key] === "boolean")) return
+  if (
+    !["fs", "command", "pty", "events", "localWorkspace", "sshWorkspace"].every(
+      (key) => typeof capabilities[key] === "boolean",
+    )
+  )
+    return
   const device = raw.device
   const host = raw.host
   if (!device || typeof device !== "object" || Array.isArray(device)) return
   if (!host || typeof host !== "object" || Array.isArray(host)) return
-  if (typeof (device as Record<string, unknown>).id !== "string" || !/^dev_[a-zA-Z0-9._:-]+$/.test((device as Record<string, unknown>).id as string)) return
-  if (typeof (host as Record<string, unknown>).id !== "string" || !/^hst_[a-zA-Z0-9._:-]+$/.test((host as Record<string, unknown>).id as string)) return
+  if (
+    typeof (device as Record<string, unknown>).id !== "string" ||
+    !/^dev_[a-zA-Z0-9._:-]+$/.test((device as Record<string, unknown>).id as string)
+  )
+    return
+  if (
+    typeof (host as Record<string, unknown>).id !== "string" ||
+    !/^hst_[a-zA-Z0-9._:-]+$/.test((host as Record<string, unknown>).id as string)
+  )
+    return
   const normalized = normalizeRemoteWorkspaceState({ workspace: raw }).workspace
   const workspace = normalized?.workspace
   const deviceRecord = normalized?.device
@@ -221,7 +242,8 @@ function record(value: unknown, code: boolean) {
     !hostRecord.version ||
     !hostRecord.mode ||
     !capabilityRecord
-  ) return
+  )
+    return
   if (capabilityRecord.localWorkspace !== false || capabilityRecord.sshWorkspace !== true) return
   return {
     id: raw.id,
@@ -253,11 +275,15 @@ function workspace(value: unknown) {
     !normalized.ssh?.host ||
     !normalized.ssh.user ||
     !normalized.ssh.port
-  ) return
+  )
+    return
   return normalized
 }
 
-function sameWorkspace(left: NonNullable<RemoteWorkspaceRecord["workspace"]>, right: NonNullable<RemoteWorkspaceRecord["workspace"]>) {
+function sameWorkspace(
+  left: NonNullable<RemoteWorkspaceRecord["workspace"]>,
+  right: NonNullable<RemoteWorkspaceRecord["workspace"]>,
+) {
   return (
     left.id === right.id &&
     left.name === right.name &&
@@ -321,7 +347,8 @@ function message(value: unknown) {
 
 async function body(response: Response) {
   const length = Number(response.headers.get("content-length"))
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error("Desktop response exceeded the Android limit.")
+  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES)
+    throw new Error("Desktop response exceeded the Android limit.")
   if (!response.body) return
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -366,7 +393,13 @@ async function fetchBounded(fetcher: Fetcher, url: string, init: RequestInit) {
   }
 }
 
-async function request(fetcher: Fetcher, url: string, headers: Headers, payload?: unknown, method: "GET" | "POST" = "POST") {
+async function request(
+  fetcher: Fetcher,
+  url: string,
+  headers: Headers,
+  payload?: unknown,
+  method: "GET" | "POST" = "POST",
+) {
   const init: RequestInit = {
     method,
     headers,
@@ -385,7 +418,8 @@ async function request(fetcher: Fetcher, url: string, headers: Headers, payload?
   if (response.status === 409) {
     throw new RemoteSupervisorPendingError(detail ?? "The desktop supervisor has not registered this SSH folder yet.")
   }
-  if (response.status === 401 || response.status === 403) throw new Error("Desktop authentication failed for remote pairing.")
+  if (response.status === 401 || response.status === 403)
+    throw new Error("Desktop authentication failed for remote pairing.")
   throw new Error(detail ?? `Desktop remote request failed (${response.status}).`)
 }
 
@@ -395,6 +429,24 @@ export class RemoteSupervisorPendingError extends Error {
   constructor(detail: string) {
     super(detail)
     this.name = "RemoteSupervisorPendingError"
+  }
+}
+
+async function validateRemoteWorkspace(
+  fetcher: Fetcher,
+  url: string,
+  headers: Headers,
+  payload: unknown,
+  waitMs = SUPERVISOR_WAIT_MS,
+) {
+  const deadline = Date.now() + Math.max(0, Math.min(waitMs, SUPERVISOR_WAIT_MS))
+  while (true) {
+    try {
+      return await request(fetcher, url, headers, payload)
+    } catch (cause) {
+      if (!(cause instanceof RemoteSupervisorPendingError) || Date.now() >= deadline) throw cause
+      await new Promise((resolve) => setTimeout(resolve, Math.min(SUPERVISOR_RETRY_MS, deadline - Date.now())))
+    }
   }
 }
 
@@ -412,13 +464,14 @@ export type RemoteConnectInput = {
   username: string
   password: string
   name: string
-  workspaceID: string
+  workspaceID?: string
   sshAuthority: string
   port?: number
   directory: string
   agent?: RemoteAgent
   recentFolders?: readonly string[]
   deviceID?: string
+  supervisorWaitMs?: number
 }
 
 export type RemoteConnectResult = {
@@ -445,7 +498,7 @@ export type BrowseRemoteFoldersInput = {
   serverUrl: string
   username: string
   password: string
-  workspaceID: string
+  workspaceID?: string
   sshAuthority: string
   port?: number
   path?: string
@@ -462,9 +515,7 @@ function parent(value: string) {
 function boundedRecent(value: unknown) {
   if (value === undefined) return []
   if (!Array.isArray(value)) throw new Error("Remote folder history is invalid.")
-  const paths = value
-    .filter((item): item is string => typeof item === "string")
-    .map(validDirectory)
+  const paths = value.filter((item): item is string => typeof item === "string").map(validDirectory)
   if (paths.length !== value.length || paths.some((item) => !item)) throw new Error("Remote folder history is invalid.")
   return paths
     .filter((item): item is string => !!item)
@@ -486,12 +537,22 @@ function listing(value: unknown, recent: readonly string[]): RemoteFolderListing
   }
   const root = typeof value.root === "string" ? validDirectory(value.root) : undefined
   const path = typeof value.current === "string" ? validDirectory(value.current) : undefined
-  if (!root || !path || !within(root, path) || !Array.isArray(value.entries) || value.entries.length > MAX_FOLDER_ENTRIES) {
+  if (
+    !root ||
+    !path ||
+    !within(root, path) ||
+    !Array.isArray(value.entries) ||
+    value.entries.length > MAX_FOLDER_ENTRIES
+  ) {
     throw new Error("Desktop folder browser returned an invalid listing.")
   }
 
-  const responseParent = value.parent === undefined ? undefined : typeof value.parent === "string" ? validDirectory(value.parent) : undefined
-  if (value.parent !== undefined && (!responseParent || responseParent !== parent(path) || !within(root, responseParent))) {
+  const responseParent =
+    value.parent === undefined ? undefined : typeof value.parent === "string" ? validDirectory(value.parent) : undefined
+  if (
+    value.parent !== undefined &&
+    (!responseParent || responseParent !== parent(path) || !within(root, responseParent))
+  ) {
     throw new Error("Desktop folder browser returned an invalid parent.")
   }
 
@@ -512,7 +573,8 @@ function listing(value: unknown, recent: readonly string[]): RemoteFolderListing
     }
     const entryPath = typeof item.path === "string" ? validDirectory(item.path) : undefined
     const expectedPath = path === "/" ? `/${item.name}` : `${path}/${item.name}`
-    if (!entryPath || entryPath !== expectedPath) throw new Error("Desktop folder browser returned an invalid entry path.")
+    if (!entryPath || entryPath !== expectedPath)
+      throw new Error("Desktop folder browser returned an invalid entry path.")
     return { name: item.name, path: entryPath, type: item.type as RemoteEntryType }
   })
   if (parsed.some((item, index) => parsed.findIndex((other) => other.path === item.path) !== index)) {
@@ -531,19 +593,24 @@ export async function browseRemoteFolders(
   fetcher: RemoteFetcher = fetch,
 ): Promise<RemoteFolderListing> {
   const serverUrl = validUrl(input.serverUrl)
-  const workspaceID = validWorkspaceID(input.workspaceID)
+  const workspaceID = input.workspaceID === undefined ? undefined : validWorkspaceID(input.workspaceID)
   const path = input.path === undefined ? undefined : validDirectory(input.path)
   const authority = parseSshAuthority(input.sshAuthority)
   const port = authority && effectivePort(authority, input.port)
   const recent = boundedRecent(input.recentFolders)
   if (!serverUrl) throw new Error("Enter an HTTPS desktop or relay URL.")
-  if (!workspaceID) throw new Error("Enter a workspace ID provisioned by the desktop host.")
-  if (input.path !== undefined && !path) throw new Error("Remote folder must be an absolute POSIX path without traversal.")
+  if (input.workspaceID !== undefined && !workspaceID) throw new Error("Workspace ID is invalid.")
+  if (input.path !== undefined && !path)
+    throw new Error("Remote folder must be an absolute POSIX path without traversal.")
   if (!authority || !port) throw new Error("SSH authority must be user@host with an optional unambiguous :port.")
 
   const headers = new Headers({ authorization: basic(clean(input.username), input.password) })
   const endpoint = new URL(`${serverUrl}/remote/ssh/browse`)
-  endpoint.searchParams.set("workspace", workspaceID)
+  if (workspaceID) endpoint.searchParams.set("workspace", workspaceID)
+  if (!workspaceID) {
+    endpoint.searchParams.set("sshAuthority", authorityKey(authority, port))
+    endpoint.searchParams.set("sshPort", String(port))
+  }
   if (path !== undefined) endpoint.searchParams.set("path", path)
   const data = await request(fetcher, endpoint.toString(), headers, undefined, "GET")
   return listing(data, recent)
@@ -552,27 +619,36 @@ export async function browseRemoteFolders(
 export async function connectRemoteWorkspace(
   input: RemoteConnectInput,
   fetcher: Fetcher = fetch,
-  save: (state: RemoteWorkspaceState, secret: { username: string; password: string }) => Promise<void> = persistRemoteWorkspace,
+  save: (
+    state: RemoteWorkspaceState,
+    secret: { username: string; password: string },
+  ) => Promise<void> = persistRemoteWorkspace,
 ): Promise<RemoteConnectResult> {
   const serverUrl = validUrl(input.serverUrl)
   const remoteDirectory = validDirectory(input.directory)
   const authority = parseSshAuthority(input.sshAuthority)
   const sshPort = authority && effectivePort(authority, input.port)
-  const workspaceID = validWorkspaceID(input.workspaceID)
   const agent = input.agent === undefined ? DEFAULT_REMOTE_AGENT : input.agent
   const recent = boundedRecent(input.recentFolders)
   if (!serverUrl) throw new Error("Enter an HTTPS desktop or relay URL.")
   if (!remoteDirectory) throw new Error("Remote folder must be an absolute POSIX path without traversal.")
   if (!authority || !sshPort) throw new Error("SSH authority must be user@host with an optional unambiguous :port.")
-  if (!workspaceID) throw new Error("Enter a workspace ID provisioned by the desktop host.")
   if (!REMOTE_AGENTS.includes(agent)) throw new Error("Remote agent selection is invalid.")
+  const providedWorkspaceID = input.workspaceID === undefined ? undefined : validWorkspaceID(input.workspaceID)
+  if (input.workspaceID !== undefined && !providedWorkspaceID) throw new Error("Workspace ID is invalid.")
+  const workspaceID = providedWorkspaceID ?? derivedWorkspaceID(authority, sshPort, remoteDirectory, agent)
   const deviceID = validDeviceID(input.deviceID)
   if (!deviceID) throw new Error("Android device identity is invalid.")
 
   const headers = new Headers({ authorization: basic(clean(input.username), input.password) })
-  const health = await fetchBounded(fetcher, `${serverUrl}/global/health`, { headers, credentials: "omit", redirect: "error" })
+  const health = await fetchBounded(fetcher, `${serverUrl}/global/health`, {
+    headers,
+    credentials: "omit",
+    redirect: "error",
+  })
   if (!health.response.ok) {
-    if (health.response.status === 401 || health.response.status === 403) throw new Error("Desktop authentication failed for remote pairing.")
+    if (health.response.status === 401 || health.response.status === 403)
+      throw new Error("Desktop authentication failed for remote pairing.")
     throw new Error(`Desktop health check failed (${health.response.status}).`)
   }
 
@@ -607,16 +683,24 @@ export async function connectRemoteWorkspace(
     !sameWorkspace(created.workspace, requestedWorkspace) ||
     !sameDevice(created.device, requestedDevice) ||
     !created.capability
-  ) throw new Error("Desktop returned a pairing outside the requested device and workspace; no connection was saved.")
+  )
+    throw new Error("Desktop returned a pairing outside the requested device and workspace; no connection was saved.")
 
   const validated = workspace(
-    await request(fetcher, `${serverUrl}/experimental/workspace/remote/ssh/validate`, headers, requestedWorkspace),
+    await validateRemoteWorkspace(
+      fetcher,
+      `${serverUrl}/experimental/workspace/remote/ssh/validate`,
+      headers,
+      requestedWorkspace,
+      input.supervisorWaitMs,
+    ),
   )
   if (!validated || !sameWorkspace(validated, requestedWorkspace) || !sameWorkspace(validated, created.workspace)) {
     throw new Error("Desktop validation did not return the exact requested workspace; no connection was saved.")
   }
 
-  if (!created.selection || created.selection.deviceID !== requestedDevice.id) throw new RemoteSelectionBindingRequiredError()
+  if (!created.selection || created.selection.deviceID !== requestedDevice.id)
+    throw new RemoteSelectionBindingRequiredError()
 
   const selected = record(
     await request(fetcher, `${serverUrl}/experimental/workspace/remote/select`, headers, {
@@ -636,7 +720,8 @@ export async function connectRemoteWorkspace(
     !sameDevice(selected.device, requestedDevice) ||
     !sameHost(selected.host, created.host) ||
     !sameCapability(selected.capability, created.capability)
-  ) throw new Error("Desktop did not return the exact authoritative selected pairing; no connection was saved.")
+  )
+    throw new Error("Desktop did not return the exact authoritative selected pairing; no connection was saved.")
 
   const selectedID = selected.workspace.id
   if (!selectedID) throw new Error("Desktop returned a selected workspace without an ID; no connection was saved.")
@@ -644,6 +729,20 @@ export async function connectRemoteWorkspace(
     ...selected.record,
     workspace: { ...selected.record.workspace, agent },
   }
+  const commandCatalog =
+    agent === "local-slopcode"
+      ? undefined
+      : await fetchRemoteAgentCatalog(
+          {
+            serverUrl,
+            username: clean(input.username),
+            password: input.password,
+            workspaceID: selectedID,
+            directory: remoteDirectory,
+            agent,
+          },
+          fetcher,
+        ).catch(() => bakedRemoteCommandCatalog(agent))
   const scope = {
     origin: serverUrl,
     workspaceID: selectedID,
@@ -660,6 +759,7 @@ export async function connectRemoteWorkspace(
         directory: selected.workspace.remoteDirectory ?? selected.workspace.directory,
       },
       workspace: selectedRecord,
+      ...(commandCatalog ? { commandCatalog } : {}),
       recentFolders: [
         {
           ...scope,
@@ -673,6 +773,16 @@ export async function connectRemoteWorkspace(
   )
   await save(state, secret)
   return { state, secret, pairing: selectedRecord }
+}
+
+function derivedWorkspaceID(authority: SshAuthority, port: number, directory: string, agent: RemoteAgent) {
+  const value = `${authority.user}@${authority.host}:${port}\u0000${directory}\u0000${agent}`
+  let hash = 2_166_136_261
+  for (const character of value) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16_777_619) >>> 0
+  }
+  return `wrk_ssh_${hash.toString(16).padStart(8, "0")}`
 }
 
 export function RemoteConnect(props: Props) {
@@ -704,9 +814,11 @@ export function RemoteConnect(props: Props) {
     const parsed = parseSshAuthority(authority())
     const resolved = parsed && effectivePort(parsed, validPort(port()))
     if (!parsed || !resolved) return []
+    const id =
+      validWorkspaceID(workspace()) ?? derivedWorkspaceID(parsed, resolved, directory() || browsePath() || "/", agent())
     return remoteFoldersForScope(storedState(), {
       origin: url(),
-      workspaceID: workspace(),
+      workspaceID: id,
       authority: authorityKey(parsed, resolved),
     })
   }
@@ -720,7 +832,7 @@ export function RemoteConnect(props: Props) {
         serverUrl: url(),
         username: username(),
         password: password(),
-        workspaceID: workspace(),
+        workspaceID: workspace() || undefined,
         sshAuthority: authority(),
         port: validPort(port()),
         path,
@@ -746,7 +858,7 @@ export function RemoteConnect(props: Props) {
         username: username(),
         password: password(),
         name: name(),
-        workspaceID: workspace(),
+        workspaceID: workspace() || undefined,
         sshAuthority: authority(),
         port: validPort(port()),
         directory: directory(),
@@ -824,11 +936,10 @@ export function RemoteConnect(props: Props) {
         </label>
 
         <label class="flex flex-col gap-1 text-14-medium">
-            Workspace ID (provisioned by the desktop host)
-            <input
-              required
-              type="text"
-              placeholder="wrk_project"
+          Workspace ID (optional)
+          <input
+            type="text"
+            placeholder="Leave blank to derive one from SSH host and folder"
             value={workspace()}
             onInput={(event) => setWorkspace(event.currentTarget.value)}
             class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
@@ -895,11 +1006,15 @@ export function RemoteConnect(props: Props) {
             <option value="local-slopcode">Local Slopcode — commands run on the SSH host</option>
             <option value="codex-cli">Codex CLI — prompts/config are sent to Codex CLI</option>
             <option value="opencode-cli">OpenCode CLI — prompts/config are sent to OpenCode CLI</option>
+            <option value="claude-code">Claude Code — prompts/config are sent to Claude Code</option>
           </select>
         </label>
 
         <Show when={listingState()}>
-          <section class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3" aria-label="Remote folder browser">
+          <section
+            class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3"
+            aria-label="Remote folder browser"
+          >
             <div class="flex items-center justify-between gap-2">
               <div class="flex flex-col gap-1">
                 <h2 class="text-16-medium">Remote folders</h2>
@@ -949,7 +1064,10 @@ export function RemoteConnect(props: Props) {
 
             <div class="flex flex-col gap-2">
               <h3 class="text-14-medium">Directories</h3>
-              <Show when={(listingState()?.entries.length ?? 0) > 0} fallback={<p class="text-12-regular text-text-weak">No subfolders</p>}>
+              <Show
+                when={(listingState()?.entries.length ?? 0) > 0}
+                fallback={<p class="text-12-regular text-text-weak">No subfolders</p>}
+              >
                 <For each={listingState()?.entries ?? []}>
                   {(entry) => (
                     <button

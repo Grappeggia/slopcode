@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { parseRemoteAgentResult, promptCodexCli, promptOpencodeCli, promptRemoteAgent } from "./codex-cli"
+import {
+  parseRemoteAgentResult,
+  promptClaudeCode,
+  promptCodexCli,
+  promptOpencodeCli,
+  promptRemoteAgent,
+} from "./codex-cli"
 
 const input = {
   serverUrl: "https://desktop.example.test/",
@@ -65,6 +71,19 @@ describe("Android remote agent session", () => {
     })
   })
 
+  test("posts Claude Code with model and permission mode", async () => {
+    let body = ""
+    await promptClaudeCode({ ...input, config: { model: "sonnet", permissionMode: "plan" } }, async (_url, init) => {
+      body = String(init?.body)
+      return Response.json({ output: "Claude finished.", status: "completed" })
+    })
+    expect(JSON.parse(body)).toEqual({
+      agent: "claude-code",
+      prompt: input.prompt,
+      config: { model: "sonnet", permissionMode: "plan" },
+    })
+  })
+
   test("accepts only the bounded server result shape", () => {
     expect(parseRemoteAgentResult({ output: "ok", status: "timed_out" })).toEqual({ output: "ok", status: "timed_out" })
     expect(parseRemoteAgentResult({ output: "ok", status: "failed", exitCode: 7 })).toEqual({
@@ -91,7 +110,12 @@ describe("Android remote agent session", () => {
     await expect(
       promptRemoteAgent({ ...input, agent: "opencode-cli", config: { sandbox: "workspace-write" } }, fetcher),
     ).rejects.toThrow("OpenCode")
-    await expect(promptRemoteAgent({ ...input, agent: "opencode-cli", config: { command: "sh" } as never }, fetcher)).rejects.toThrow("configuration")
+    await expect(
+      promptRemoteAgent({ ...input, agent: "claude-code", config: { profile: "default" } }, fetcher),
+    ).rejects.toThrow("Claude Code")
+    await expect(
+      promptRemoteAgent({ ...input, agent: "opencode-cli", config: { command: "sh" } as never }, fetcher),
+    ).rejects.toThrow("configuration")
     await expect(promptCodexCli({ ...input, prompt: "x".repeat(32 * 1024 + 1) }, fetcher)).rejects.toThrow("workspace")
     expect(calls).toBe(0)
   })
@@ -114,5 +138,14 @@ describe("Android remote agent session", () => {
       return Response.json({ output: "ok", status: "completed" })
     })
     expect(JSON.parse(body)).toMatchObject({ agent: "opencode-cli", prompt: input.prompt })
+  })
+
+  test("keeps the Claude Code convenience wrapper bound to its agent", async () => {
+    let body = ""
+    await promptClaudeCode(input, async (_url, init) => {
+      body = String(init?.body)
+      return Response.json({ output: "ok", status: "completed" })
+    })
+    expect(JSON.parse(body)).toMatchObject({ agent: "claude-code", prompt: input.prompt })
   })
 })

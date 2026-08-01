@@ -7,10 +7,26 @@ import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import {
   MAX_CODEX_PROMPT_LENGTH,
   MAX_CODEX_OUTPUT_BYTES,
+  MAX_REMOTE_AGENT_COMMAND_DESCRIPTION_LENGTH,
+  MAX_REMOTE_AGENT_VERSION_LENGTH,
+  REMOTE_AGENT_VERSION_TIMEOUT,
   MAX_REMOTE_ENTRIES,
+  MAX_REMOTE_PATH_LENGTH,
   RemoteRuntimePaths,
 } from "../../src/server/routes/instance/httpapi/groups/remote-runtime"
-import { buildAgentCommand, resolveRemoteFolder, runAgentPrompt } from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
+import {
+  browseSshRemoteFolder,
+  buildAgentCommand,
+  buildAgentVersionCommand,
+  buildSshBrowseCommand,
+  discoverRemoteCommands,
+  parseRemoteCommandMetadata,
+  parseSshBrowseOutput,
+  resolveRemoteFolder,
+  runAgentCatalog,
+  runAgentVersion,
+  runAgentPrompt,
+} from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
 import { workspaceProxyURL } from "../../src/server/shared/workspace-routing"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
@@ -56,6 +72,48 @@ afterEach(async () => {
 })
 
 describe("remote runtime HttpApi", () => {
+  test("builds a strict SSH browse command and parses bounded directory metadata", async () => {
+    const command = buildSshBrowseCommand("marcos@example.test", 2222, "/Users/marcos")
+    expect(command?.command).toBe("ssh")
+    expect(command?.args).toContain("BatchMode=yes")
+    expect(command?.args).toContain("StrictHostKeyChecking=yes")
+    expect(command?.args?.some((item) => item.startsWith("UserKnownHostsFile="))).toBe(true)
+    expect(command?.args).toContain("ConnectTimeout=15")
+    expect(command?.args).toEqual(
+      expect.arrayContaining(["-p", "2222", "marcos@example.test", "sh", "-se", "--", "/Users/marcos"]),
+    )
+    expect(command?.options.shell).toBeUndefined()
+    expect(buildSshBrowseCommand("marcos@-bad", 22, "/")).toBeUndefined()
+    expect(
+      parseSshBrowseOutput(
+        "CURRENT\t/Users/marcos\nPARENT\t/Users\nENTRY\tProjects\t/Users/marcos/Projects\nENTRY\t..\t/Users/..\n",
+      ),
+    ).toEqual({
+      root: "/",
+      current: "/Users/marcos",
+      parent: "/Users",
+      entries: [{ name: "Projects", path: "/Users/marcos/Projects", type: "directory" }],
+    })
+
+    const process = Layer.mock(AppProcess.Service)({
+      run: () =>
+        Effect.succeed(
+          processResult({
+            stdout: Buffer.from("CURRENT\t/\nENTRY\tUsers\t/Users\n"),
+          }),
+        ),
+    })
+    await expect(
+      Effect.runPromise(
+        browseSshRemoteFolder({ authority: "marcos@example.test", port: 22 }).pipe(Effect.provide(process)),
+      ),
+    ).resolves.toEqual({
+      root: "/",
+      current: "/",
+      entries: [{ name: "Users", path: "/Users", type: "directory" }],
+    })
+  })
+
   test("browses only metadata with directories first and a bounded entry count", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     await mkdir(path.join(tmp.path, "z-directory"))
@@ -138,6 +196,44 @@ describe("remote runtime HttpApi", () => {
     expect(response.status).toBe(400)
   })
 
+  test("validates the catalog agent and selected path at the authenticated route", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const unknown = await request(RemoteRuntimePaths.catalog, tmp.path, { agent: "shell" })
+    const traversal = await request(RemoteRuntimePaths.catalog, tmp.path, {
+      agent: "codex-cli",
+      path: path.posix.join(tmp.path, ".."),
+    })
+    const oversized = await request(RemoteRuntimePaths.catalog, tmp.path, {
+      agent: "codex-cli",
+      path: `/${"x".repeat(MAX_REMOTE_PATH_LENGTH)}`,
+    })
+    expect(unknown.status).toBe(400)
+    expect(traversal.status).toBe(403)
+    expect(oversized.status).toBe(400)
+  })
+
+  test("serves a catalog endpoint with the fixed executable and no templates", async () => {
+    if (process.platform === "win32") return
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    await using bin = await tmpdir({ config: { formatter: false, lsp: false } })
+    await symlink(process.execPath, path.join(bin.path, "codex"))
+    const previous = process.env.PATH
+    process.env.PATH = `${bin.path}${path.delimiter}${previous ?? ""}`
+    try {
+      const response = await request(RemoteRuntimePaths.catalog, tmp.path, { agent: "codex-cli", path: tmp.path })
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.agent).toBe("codex-cli")
+      expect(typeof body.version).toBe("string")
+      expect(body.version.length).toBeGreaterThan(0)
+      expect(body.commands).toContainEqual(expect.objectContaining({ name: "help" }))
+      expect(JSON.stringify(body)).not.toContain("template")
+    } finally {
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+    }
+  })
+
   test("rejects an oversized prompt at the authenticated instance route", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     const response = await request(
@@ -189,7 +285,9 @@ describe("remote runtime HttpApi", () => {
     await mkdir(path.join(tmp.path, "src"))
     await writeFile(path.join(tmp.path, "file.txt"), "file")
 
-    await expect(Effect.runPromise(resolveRemoteFolder({ root: tmp.path, current: path.join(tmp.path, "src") }))).resolves.toEqual({
+    await expect(
+      Effect.runPromise(resolveRemoteFolder({ root: tmp.path, current: path.join(tmp.path, "src") })),
+    ).resolves.toEqual({
       root: tmp.path,
       current: path.join(tmp.path, "src"),
     })
@@ -227,6 +325,106 @@ describe("remote agent runtime", () => {
     expect(unknown.status).toBe(400)
   })
 
+  test("builds fixed version argv and runs it in the selected folder with bounds", async () => {
+    for (const agent of ["codex-cli", "opencode-cli", "claude-code"] as const) {
+      const command = buildAgentVersionCommand(agent, "/authorized/project")
+      expect(command).toMatchObject({
+        command: agent === "codex-cli" ? "codex" : agent === "opencode-cli" ? "opencode" : "claude",
+        args: ["--version"],
+        options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
+      })
+      expect(command?.options.shell).toBeUndefined()
+    }
+    expect(buildAgentVersionCommand("shell" as never, "/authorized/project")).toBeUndefined()
+
+    const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = []
+    const process = Layer.mock(AppProcess.Service)({
+      run: (command, options) => {
+        const standard = command as unknown as { command: string; args: readonly string[] }
+        calls.push({ command: standard.command, args: standard.args, options })
+        return Effect.succeed(processResult({ stdout: Buffer.from("claude 1.2.3\n") }))
+      },
+    })
+    await expect(
+      Effect.runPromise(
+        runAgentVersion({ agent: "claude-code", directory: "/authorized/project" }).pipe(Effect.provide(process)),
+      ),
+    ).resolves.toBe("claude 1.2.3")
+    expect(calls[0]).toMatchObject({
+      command: "claude",
+      args: ["--version"],
+      options: {
+        timeout: REMOTE_AGENT_VERSION_TIMEOUT,
+        maxOutputBytes: expect.any(Number),
+        maxErrorBytes: expect.any(Number),
+      },
+    })
+
+    const oversized = Layer.mock(AppProcess.Service)({
+      run: () =>
+        Effect.succeed(processResult({ stdout: Buffer.from("v".repeat(MAX_REMOTE_AGENT_VERSION_LENGTH + 1)) })),
+    })
+    await expect(
+      Effect.runPromise(
+        runAgentVersion({ agent: "codex-cli", directory: "/authorized/project" }).pipe(Effect.provide(oversized)),
+      ),
+    ).rejects.toThrow("invalid version metadata")
+  })
+
+  test("discovers bounded frontmatter metadata without returning templates", async () => {
+    expect(
+      parseRemoteCommandMetadata(
+        "review.md",
+        "---\ndescription: Review the project\nagent: plan\nmodel: sonnet\nsubtask: true\n---\nsecret template",
+      ),
+    ).toEqual({ name: "review", description: "Review the project", agent: "plan", model: "sonnet", subtask: true })
+    expect(parseRemoteCommandMetadata("bad.md", "---\nsubtask: maybe\n---\nignored")).toBeUndefined()
+    expect(
+      parseRemoteCommandMetadata(
+        "large.md",
+        `---\ndescription: ${"x".repeat(MAX_REMOTE_AGENT_COMMAND_DESCRIPTION_LENGTH + 1)}\n---\nignored`,
+      ),
+    ).toBeUndefined()
+
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const commands = path.join(tmp.path, ".claude", "commands")
+    await mkdir(commands, { recursive: true })
+    await writeFile(path.join(commands, "review.md"), "---\ndescription: Review it\nsubtask: true\n---\nsecret")
+    await writeFile(path.join(commands, "bad.md"), "---\nsubtask: no\n---\nsecret")
+    await writeFile(
+      path.join(commands, "large.md"),
+      `---\ndescription: ${"x".repeat(MAX_REMOTE_AGENT_COMMAND_DESCRIPTION_LENGTH + 1)}\n---\nsecret`,
+    )
+    const discovered = await discoverRemoteCommands("claude-code", tmp.path)
+    expect(discovered).toEqual([{ name: "review", description: "Review it", subtask: true }])
+    expect(JSON.stringify(discovered)).not.toContain("secret")
+  })
+
+  test("combines baked and project-local commands behind a bounded version check", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const commands = path.join(tmp.path, ".opencode", "commands")
+    await mkdir(commands, { recursive: true })
+    await writeFile(
+      path.join(commands, "deploy.md"),
+      "---\ndescription: Deploy safely\nmodel: openai/gpt-5\n---\nrun deploy",
+    )
+    const process = Layer.mock(AppProcess.Service)({
+      run: (command) => {
+        const standard = command as unknown as { command: string; args: readonly string[] }
+        expect(standard.command).toBe("opencode")
+        expect(standard.args).toEqual(["--version"])
+        return Effect.succeed(processResult({ stdout: Buffer.from("opencode 2.0.0\n") }))
+      },
+    })
+    const result = await Effect.runPromise(
+      runAgentCatalog({ agent: "opencode-cli", directory: tmp.path }).pipe(Effect.provide(process)),
+    )
+    expect(result.agent).toBe("opencode-cli")
+    expect(result.version).toBe("opencode 2.0.0")
+    expect(result.commands).toContainEqual({ name: "deploy", description: "Deploy safely", model: "openai/gpt-5" })
+    expect(result.commands.every((command) => !Object.hasOwn(command, "template"))).toBe(true)
+  })
+
   test("builds fixed argv with validated allowlisted configuration", () => {
     const prompt = "$(touch /tmp/should-not-run) --model injected"
     expect(
@@ -257,9 +455,14 @@ describe("remote agent runtime", () => {
       args: ["run", "--model", "openai/gpt-5", "--agent", "build", "--", prompt],
     })
     expect(buildAgentCommand("opencode-cli", prompt, { sandbox: "workspace-write" })).toBeUndefined()
+    expect(buildAgentCommand("claude-code", prompt, { model: "sonnet", permissionMode: "acceptEdits" })).toEqual({
+      executable: "claude",
+      args: ["-p", "--model", "sonnet", "--permission-mode", "acceptEdits", "--", prompt],
+    })
+    expect(buildAgentCommand("claude-code", prompt, { profile: "default" })).toBeUndefined()
   })
 
-  test("runs both selected executables with cwd and no client-controlled shell options", async () => {
+  test("runs selected executables with cwd and no client-controlled shell options", async () => {
     const commands: Array<{ command: string; args: readonly string[]; options: Record<string, unknown> }> = []
     const process = Layer.mock(AppProcess.Service)({
       run: (command) => {
@@ -284,7 +487,7 @@ describe("remote agent runtime", () => {
       options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
     })
     expect(commands[0].options.shell).toBeUndefined()
-    expect(commands[0].options.env).toBeUndefined()
+    expect(commands[0].options.env).toEqual({ SLOPCODE_REMOTE_SUPERVISOR_TOKEN: undefined })
 
     await Effect.runPromise(
       runAgentPrompt({ agent: "opencode-cli", directory: "/authorized/project", prompt: "inspect with opencode" }).pipe(
@@ -294,6 +497,20 @@ describe("remote agent runtime", () => {
     expect(commands[1]).toMatchObject({
       command: "opencode",
       args: ["run", "--", "inspect with opencode"],
+      options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
+    })
+
+    await Effect.runPromise(
+      runAgentPrompt({
+        agent: "claude-code",
+        directory: "/authorized/project",
+        prompt: "inspect with Claude Code",
+        config: { permissionMode: "plan" },
+      }).pipe(Effect.provide(process)),
+    )
+    expect(commands[2]).toMatchObject({
+      command: "claude",
+      args: ["-p", "--permission-mode", "plan", "--", "inspect with Claude Code"],
       options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
     })
   })

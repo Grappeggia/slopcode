@@ -27,11 +27,13 @@ describe("normalizeSshTarget", () => {
     expect(target.user).toBe("marcos")
     expect(target.remoteDirectory).toBe("/srv/slopcode")
     expect(target.workspace.agent).toBe("local-slopcode")
-    expect(String(target.id)).toBe("ssh:marcos@example.test:2222\u0000local-slopcode\u0000/srv/slopcode")
+    expect(String(target.id)).toMatch(
+      /^ssh:marcos@example\.test:2222\u0000local-slopcode\u0000\/srv\/slopcode\u0000[0-9a-f]{64}$/,
+    )
   })
 
   test("preserves explicit agent modes in the normalized workspace", () => {
-    for (const agent of ["local-slopcode", "codex-cli", "opencode-cli"] as const) {
+    for (const agent of ["local-slopcode", "codex-cli", "opencode-cli", "claude-code"] as const) {
       const target = normalizeSshTarget(fixtureTarget({ agent }))
 
       expect(target.workspace.agent).toBe(agent)
@@ -40,7 +42,9 @@ describe("normalizeSshTarget", () => {
 
   test("rejects unsafe ssh values at the boundary", () => {
     expect(() => normalizeSshTarget(fixtureTarget({ sshHost: "-bad-host" }))).toThrow("cannot start with '-'")
-    expect(() => normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/repo\nx" }))).toThrow("Invalid remote directory")
+    expect(() => normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/repo\nx" }))).toThrow(
+      "Invalid remote directory",
+    )
   })
 
   test("rejects malformed agent modes at the protocol boundary", () => {
@@ -112,14 +116,10 @@ describe("openSshTunnel", () => {
     const child = new TunnelChild()
     let spawned: string[] = []
 
-    const tunnel = openSshTunnel(
-      ["-W", `127.0.0.1:${remotePort}`],
-      remotePort,
-      ((_, args) => {
-        spawned = args
-        return child as unknown as ReturnType<typeof spawn>
-      }) as typeof spawn,
-    )
+    const tunnel = openSshTunnel(["-W", `127.0.0.1:${remotePort}`], remotePort, ((_, args) => {
+      spawned = args
+      return child as unknown as ReturnType<typeof spawn>
+    }) as typeof spawn)
     const port = await tunnel.port
 
     expect(spawned).toHaveLength(0)
@@ -214,7 +214,11 @@ describe("openSshTunnel", () => {
 
   test("keeps child error local and escalates before resolving cleanup", async () => {
     const child = new TunnelChild()
-    const tunnel = openSshTunnel(["-W", "127.0.0.1:4310"], 4310, (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn)
+    const tunnel = openSshTunnel(
+      ["-W", "127.0.0.1:4310"],
+      4310,
+      (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn,
+    )
     const port = await tunnel.port
     const errors: Error[] = []
     tunnel.onError((error) => errors.push(error))
@@ -244,14 +248,10 @@ describe("openSshTunnel", () => {
     const first = new TunnelChild()
     const second = new TunnelChild()
     let spawned = 0
-    const tunnel = openSshTunnel(
-      ["-W", "127.0.0.1:4313"],
-      4313,
-      (() => {
-        spawned += 1
-        return (spawned === 1 ? first : second) as unknown as ReturnType<typeof spawn>
-      }) as typeof spawn,
-    )
+    const tunnel = openSshTunnel(["-W", "127.0.0.1:4313"], 4313, (() => {
+      spawned += 1
+      return (spawned === 1 ? first : second) as unknown as ReturnType<typeof spawn>
+    }) as typeof spawn)
 
     try {
       const port = await tunnel.port
@@ -297,7 +297,11 @@ describe("openSshTunnel", () => {
   test("rejects bounded cleanup when child termination is never confirmed", async () => {
     const child = new TunnelChild()
     child.killError = new Error("permission denied")
-    const tunnel = openSshTunnel(["-W", "127.0.0.1:4311"], 4311, (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn)
+    const tunnel = openSshTunnel(
+      ["-W", "127.0.0.1:4311"],
+      4311,
+      (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn,
+    )
     const port = await tunnel.port
     const client = createConnection(port, "127.0.0.1")
     await onceConnected(client)
@@ -322,6 +326,12 @@ describe("workspaceIdentity", () => {
         port: 2222,
         remoteDirectory: "/srv/slopcode",
         agent: "local-slopcode",
+        hostID: "hst_build-box",
+        identityPath: "/Users/marcos/.ssh/id_slopcode",
+        hostKey: {
+          kind: "pinned",
+          value: "example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleHostKey",
+        },
       }),
     )
     expect(first.stateKey).toBe(workspaceStateKey(first.id))
@@ -331,11 +341,34 @@ describe("workspaceIdentity", () => {
     const local = normalizeSshTarget(fixtureTarget({ agent: "local-slopcode" }))
     const codex = normalizeSshTarget(fixtureTarget({ agent: "codex-cli" }))
     const opencode = normalizeSshTarget(fixtureTarget({ agent: "opencode-cli" }))
+    const claude = normalizeSshTarget(fixtureTarget({ agent: "claude-code" }))
 
     expect(local.id).not.toBe(codex.id)
     expect(codex.id).not.toBe(opencode.id)
+    expect(opencode.id).not.toBe(claude.id)
     expect(local.stateKey).not.toBe(codex.stateKey)
     expect(codex.stateKey).not.toBe(opencode.stateKey)
+    expect(opencode.stateKey).not.toBe(claude.stateKey)
+  })
+
+  test("separates desktop host and SSH security policy identity", () => {
+    const first = normalizeSshTarget(fixtureTarget())
+    const otherHost = normalizeSshTarget({
+      ...fixtureTarget(),
+      host: { ...fixtureTarget().host, id: "hst_other" },
+    })
+    const otherKey = normalizeSshTarget({
+      ...fixtureTarget(),
+      security: {
+        ...fixtureTarget().security,
+        hostKey: { kind: "known_hosts", path: "/Users/marcos/.ssh/other_known_hosts" },
+      },
+    })
+
+    expect(first.id).not.toBe(otherHost.id)
+    expect(first.id).not.toBe(otherKey.id)
+    expect(first.stateKey).not.toBe(otherHost.stateKey)
+    expect(first.stateKey).not.toBe(otherKey.stateKey)
   })
 })
 
@@ -365,12 +398,12 @@ describe("SSH workspace scripts", () => {
     expect(stop).toContain("state_exe")
     expect(stop).toContain('case "$cmd" in')
     expect(stop).toContain('expected_name="${expected_exe##*/}"')
-    expect(stop).not.toContain('set -- $cmd')
+    expect(stop).not.toContain("set -- $cmd")
     expect(stop).not.toContain('. "$state_file"')
     expect(guardedStop).toContain('if [ "$state_password" != "$expected_password" ]; then')
     expect(guardedStop).toContain('while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do')
-    expect(guardedStop).toContain('if ! wait_for_server 20; then')
-    expect(bootstrap).toContain("cd \"$dir\"")
+    expect(guardedStop).toContain("if ! wait_for_server 20; then")
+    expect(bootstrap).toContain('cd "$dir"')
     expect(stop).toContain("dir='/srv/slopcode'")
   })
 
@@ -404,14 +437,14 @@ describe("SSH workspace scripts", () => {
       input: [
         "set -eu",
         'state_file="$(mktemp)"',
-        'trap \'rm -f "$state_file"\' EXIT',
+        "trap 'rm -f \"$state_file\"' EXIT",
         "state_pid=old-pid",
         "state_port=old-port",
         "state_password=old-password",
         "state_workspace=old-workspace",
         "state_start=old-start",
         "state_exe=old-exe",
-        'printf \'%s\\n\' new-pid new-port new-password new-workspace new-start >"$state_file"',
+        "printf '%s\\n' new-pid new-port new-password new-workspace new-start >\"$state_file\"",
         readState,
         "if read_state; then exit 1; fi",
         '[ "$state_pid" = old-pid ]',
@@ -458,9 +491,21 @@ describe("SSH workspace scripts", () => {
     const stop = buildSshStopScript(normalizeSshTarget(fixtureTarget()))
 
     expect(runMatcher(stop, { comm: "slopcode", command: "slopcode serve --hostname 127.0.0.1 --port 4200" })).toBe(0)
-    expect(runMatcher(stop, { comm: "slopcode", command: "/usr/bin/slopcode serve --hostname 127.0.0.1 --port 4200" })).toBe(0)
-    expect(runMatcher(stop, { comm: "slopcode-helper", command: "/usr/bin/slopcode-helper serve --hostname 127.0.0.1 --port 4200" })).toBe(1)
-    expect(runMatcher(stop, { comm: "slopcode", command: "/usr/bin/slopcode-helper serve --hostname 127.0.0.1 --port 4200" })).toBe(1)
+    expect(
+      runMatcher(stop, { comm: "slopcode", command: "/usr/bin/slopcode serve --hostname 127.0.0.1 --port 4200" }),
+    ).toBe(0)
+    expect(
+      runMatcher(stop, {
+        comm: "slopcode-helper",
+        command: "/usr/bin/slopcode-helper serve --hostname 127.0.0.1 --port 4200",
+      }),
+    ).toBe(1)
+    expect(
+      runMatcher(stop, {
+        comm: "slopcode",
+        command: "/usr/bin/slopcode-helper serve --hostname 127.0.0.1 --port 4200",
+      }),
+    ).toBe(1)
   })
 
   test("keep selected directory out of raw shell commands", () => {
@@ -469,7 +514,7 @@ describe("SSH workspace scripts", () => {
     const stop = buildSshStopScript(target)
 
     expect(bootstrap).toContain(`dir='/srv/remote dir/$(touch nope)\`rm -f nope\`'`)
-    expect(bootstrap).toContain("cd \"$dir\"")
+    expect(bootstrap).toContain('cd "$dir"')
     expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" "$start" "$EXE" >"$tmp"')
     expect(bootstrap).not.toContain('. "$state_file"')
     expect(bootstrap).not.toContain("cd /srv/remote dir/$(touch nope)`rm -f nope`")
@@ -622,7 +667,7 @@ describe("createSshRemoteHostService", () => {
         "#!/usr/bin/env bun",
         'import { spawn } from "node:child_process"',
         "process.stdin.resume()",
-        "process.stdin.on(\"end\", () => {",
+        'process.stdin.on("end", () => {',
         '  process.stdout.write(\'{"attached":false,"port":4211,"username":"slopcode","password":"secret"}\\n\')',
         '  spawn("sh", ["-c", "sleep 0.12; printf drained >&2"], { stdio: ["ignore", "ignore", process.stderr] })',
         "  process.exit(0)",
@@ -898,7 +943,10 @@ describe("createSshRemoteHostService", () => {
         cleanup: async () => undefined,
       }),
       runSsh: async (args, script, timeoutMs, signal) => {
-        const stopping = !script.includes("expected_password=") && script.includes("matches_server") && !script.includes("nohup sh -se")
+        const stopping =
+          !script.includes("expected_password=") &&
+          script.includes("matches_server") &&
+          !script.includes("nohup sh -se")
         if (stopping) {
           cleanupStarted.resolve()
           await cleanupFinished.promise
@@ -991,7 +1039,7 @@ describe("createSshRemoteHostService", () => {
     expect(stops).toBe(1)
     expect(cleanups).toBe(1)
     expect(runs).toHaveLength(2)
-    expect(runs[0]).toContain('nohup sh -se <<\'EOF\'')
+    expect(runs[0]).toContain("nohup sh -se <<'EOF'")
     expect(runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000003'")
     expect(runs[1]).toContain(`key='${workspaceStateKey(id)}'`)
     expect(runs[1]).toContain('state_file="$state_dir/desktop-ssh-server-$key.state"')
@@ -1245,7 +1293,9 @@ describe("createSshRemoteHostService", () => {
 
     expect(remote.remote.state).toBeUndefined()
     expect(remote.remote.stops).toBe(0)
-    expect(remote.runs.at(-1)).toContain('if ! matches_server "$state_pid" "$state_port" "$state_start" "$state_exe"; then')
+    expect(remote.runs.at(-1)).toContain(
+      'if ! matches_server "$state_pid" "$state_port" "$state_start" "$state_exe"; then',
+    )
   })
 
   test("cleans launched bootstrap state on abort before bootstrap JSON is parsed", async () => {
@@ -1293,14 +1343,14 @@ describe("createSshRemoteHostService", () => {
     expect(remote.runs).toHaveLength(2)
     expect(remote.runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000007'")
     expect(remote.runs[1]).toContain('while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do')
-    expect(remote.runs[1]).toContain('if ! wait_for_server 20; then')
+    expect(remote.runs[1]).toContain("if ! wait_for_server 20; then")
     expect(service.getState(id)?.kind).toBe("stopped")
   })
 })
 
 function fixtureTarget(
   overrides: {
-    agent?: "local-slopcode" | "codex-cli" | "opencode-cli"
+    agent?: "local-slopcode" | "codex-cli" | "opencode-cli" | "claude-code"
     remoteDirectory?: string
     sshHost?: string
   } = {},
@@ -1500,16 +1550,16 @@ function runMatcher(
     "comm_calls=0",
     "ps() {",
     '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "comm=" ]; then',
-    '    comm_calls=$((comm_calls + 1))',
+    "    comm_calls=$((comm_calls + 1))",
     '    if [ "$comm_calls" -eq 1 ]; then printf \'%s\\n\' "$processExe"; else printf \'%s\\n\' "$comm"; fi',
     "    return 0",
     "  fi",
     '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "lstart=" ]; then',
-    '    printf \'%s\\n\' "$processStart"',
+    "    printf '%s\\n' \"$processStart\"",
     "    return 0",
     "  fi",
     '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "command=" ]; then',
-    '    printf \'%s\\n\' "$command"',
+    "    printf '%s\\n' \"$command\"",
     "    return 0",
     "  fi",
     "  return 1",
@@ -1550,7 +1600,7 @@ function createRemoteMachine(
     runSsh: async (_args: string[], script: string, _timeoutMs: number, signal?: AbortSignal) => {
       runs.push(script)
 
-      if (script.includes('nohup sh -se <<\'EOF\'')) {
+      if (script.includes("nohup sh -se <<'EOF'")) {
         if (remote.state?.server !== false && remote.state) {
           return {
             code: 0,

@@ -1,4 +1,5 @@
 import { ServerAuth } from "@/server/auth"
+import { RemoteTargetCapabilityHeader } from "../../../../../../../protocol/src/remote"
 import { Effect, Encoding, Layer, Redacted } from "effect"
 import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiError, HttpApiMiddleware } from "effect/unstable/httpapi"
@@ -79,6 +80,10 @@ function credentialFromURL(url: URL, request: HttpServerRequest.HttpServerReques
   if (token) return decodeCredential(token)
   const match = /^Basic\s+(.+)$/i.exec(request.headers.authorization ?? "")
   if (match) return decodeCredential(match[1])
+  const capability = request.headers[RemoteTargetCapabilityHeader]
+  if (capability && capability.length <= 1024 && !/[\r\n]/.test(capability)) {
+    return Effect.succeed({ username: "slopcode", password: Redacted.make(capability) })
+  }
   return Effect.succeed(emptyCredential())
 }
 

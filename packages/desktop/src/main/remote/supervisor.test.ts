@@ -6,7 +6,7 @@ import { createRemoteSupervisor } from "./supervisor"
 
 const ready = {
   kind: "ready",
-  id: "ssh:marcos@example.test:22\u0000opencode-cli\u0000/srv/project",
+  id: "ssh:marcos@example.test:22\u0000opencode-cli\u0000/srv/project\u000011d9f4dc0cc525dd3048f38a0293a3667499d45f29130c7dfcc9de179085a5f6",
   host: {
     id: "hst_desktop",
     name: "Desktop",
@@ -172,5 +172,72 @@ describe("createRemoteSupervisor", () => {
     await supervisor.reconcile()
 
     expect(attempts).toBe(2)
+  })
+
+  test("does not register a ready state from another host scope", async () => {
+    const calls: string[] = []
+    const remote = {
+      getState: () => undefined,
+      subscribe: () => () => undefined,
+      validateWorkspace: async () => ({ directory: ready.workspace.remoteDirectory }),
+      ensureWorkspace: async () => ({ ...ready, host: { ...ready.host, id: "hst_other" } }),
+      stopWorkspace: async () => undefined,
+      stopAll: async () => undefined,
+    } satisfies DesktopRemoteHostService
+    const supervisor = createRemoteSupervisor({
+      service: remote,
+      serverUrl: "http://127.0.0.1:9000",
+      username: "slopcode",
+      password: "desktop-secret",
+      token: "supervisor-secret",
+      hostID: ready.host.id,
+      fetcher: async (url) => {
+        calls.push(String(url))
+        return String(url).endsWith("/pairings") ? Response.json([pairing]) : new Response(null, { status: 204 })
+      },
+    })
+
+    await supervisor.reconcile()
+
+    expect(calls.filter((url) => url.endsWith("/target"))).toHaveLength(0)
+  })
+
+  test("re-registers a recovered ready state", async () => {
+    const calls: string[] = []
+    let listener: ((event: DesktopRemoteEvent) => void) | undefined
+    const remote = {
+      getState: () => undefined,
+      subscribe: (next: (event: DesktopRemoteEvent) => void) => {
+        listener = next
+        return () => {
+          listener = undefined
+        }
+      },
+      validateWorkspace: async () => ({ directory: ready.workspace.remoteDirectory }),
+      ensureWorkspace: async () => ready,
+      stopWorkspace: async () => undefined,
+      stopAll: async () => undefined,
+    } satisfies DesktopRemoteHostService
+    const supervisor = createRemoteSupervisor({
+      service: remote,
+      serverUrl: "http://127.0.0.1:9000",
+      username: "slopcode",
+      password: "desktop-secret",
+      token: "supervisor-secret",
+      hostID: ready.host.id,
+      fetcher: async (url) => {
+        calls.push(String(url))
+        return String(url).endsWith("/pairings") ? Response.json([pairing]) : new Response(null, { status: 204 })
+      },
+    })
+
+    supervisor.start()
+    await supervisor.reconcile()
+    listener?.({ type: "state", state: { ...ready, kind: "failed", message: "tunnel exited" } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    listener?.({ type: "state", state: ready })
+    await supervisor.reconcile()
+
+    expect(calls.filter((url) => url.endsWith("/target"))).toHaveLength(2)
   })
 })

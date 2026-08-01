@@ -2,6 +2,7 @@ import { RemotePairingRecord, RemoteTargetCapabilityHeader, RemoteWorkspaceSsh }
 import { Option, Schema } from "effect"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { normalizeSshTarget } from "./ssh"
 import type { DesktopRemoteHostService, DesktopRemoteReady, DesktopRemoteState, DesktopSshTarget } from "./contract"
 
 type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>
@@ -27,9 +28,11 @@ function pairings(value: unknown) {
   })
 }
 
-function sameTarget(pairing: ReturnType<typeof pairings>[number], ready: DesktopRemoteReady) {
+function sameTarget(pairing: ReturnType<typeof pairings>[number], ready: DesktopRemoteReady, expectedID: string) {
   if (pairing.workspace.mode !== "ssh") return false
   return (
+    ready.id === expectedID &&
+    ready.host.id === pairing.host.id &&
     pairing.workspace.remoteDirectory === ready.workspace.remoteDirectory &&
     pairing.workspace.ssh.host === ready.workspace.ssh.host &&
     pairing.workspace.ssh.port === ready.workspace.ssh.port &&
@@ -74,15 +77,18 @@ export function createRemoteSupervisor(options: RemoteSupervisorOptions) {
   const reconcile = async () => {
     if (reconciling) return reconciling
     reconciling = (async () => {
-      const response = await fetcher(`${options.serverUrl.replace(/\/$/, "")}/experimental/remote/supervisor/pairings`, {
-        headers: {
-          authorization: authorization(options.username, options.password),
-          ["x-slopcode-remote-supervisor-token"]: options.token,
+      const response = await fetcher(
+        `${options.serverUrl.replace(/\/$/, "")}/experimental/remote/supervisor/pairings`,
+        {
+          headers: {
+            authorization: authorization(options.username, options.password),
+            ["x-slopcode-remote-supervisor-token"]: options.token,
+          },
+          credentials: "omit",
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
         },
-        credentials: "omit",
-        redirect: "error",
-        signal: AbortSignal.timeout(5_000),
-      })
+      )
       if (!response.ok) return
       const found = pairings(await response.json())
       await Promise.all(
@@ -90,9 +96,12 @@ export function createRemoteSupervisor(options: RemoteSupervisorOptions) {
           if (pairing.host.id !== options.hostID) return []
           const next = target(pairing)
           if (!next) return []
+          const expectedID = normalizeSshTarget(next).id
           return [
             options.service.ensureWorkspace(next).then(
-              (state) => active.set(state.id, state),
+              (state) => {
+                if (state.id === expectedID && state.host.id === options.hostID) active.set(state.id, state)
+              },
               () => undefined,
             ),
           ]
@@ -102,7 +111,10 @@ export function createRemoteSupervisor(options: RemoteSupervisorOptions) {
         found.flatMap((pairing) =>
           [...active.entries()].flatMap(([stateID, state]) => {
             if (pairing.host.id !== options.hostID) return []
-            if (!sameTarget(pairing, state)) return []
+            const next = target(pairing)
+            if (!next) return []
+            const expectedID = normalizeSshTarget(next).id
+            if (!sameTarget(pairing, state, expectedID)) return []
             const key = `${pairing.id}\u0000${stateID}\u0000${state.url}`
             if (registered.has(key)) return []
             registered.add(key)
@@ -144,7 +156,10 @@ export function createRemoteSupervisor(options: RemoteSupervisorOptions) {
 
   const onState = (event: { type: "state"; state: DesktopRemoteState }) => {
     if (ready(event.state)) active.set(event.state.id, event.state)
-    else active.delete(event.state.id)
+    else {
+      active.delete(event.state.id)
+      for (const key of registered) if (key.includes(`\u0000${event.state.id}\u0000`)) registered.delete(key)
+    }
     void reconcile().catch(() => undefined)
   }
 

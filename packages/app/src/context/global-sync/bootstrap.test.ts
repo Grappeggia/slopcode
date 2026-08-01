@@ -88,7 +88,7 @@ describe("bootstrapDirectory", () => {
     await new Promise((resolve) => setTimeout(resolve, 80))
 
     expect(store.status).toBe("complete")
-    expect(mcpReads).toEqual([])
+    expect(mcpReads).toEqual(["command"])
   })
 })
 

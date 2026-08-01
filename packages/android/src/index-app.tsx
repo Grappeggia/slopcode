@@ -1,16 +1,17 @@
 import { HashRouter } from "@solidjs/router"
 import { render } from "solid-js/web"
-import {
-  AppBaseProviders,
-  AppInterface,
-  type Platform,
-  PlatformProvider,
-  ServerConnection,
-} from "@slopcode-ai/app"
+import { AppBaseProviders, AppInterface, type Platform, PlatformProvider, ServerConnection } from "@slopcode-ai/app"
 import "@slopcode-ai/app/index.css"
 import pkg from "../package.json"
-import { appStorage, persistServerSelection, readInitialWorkspaceState, shellBridge } from "./platform"
+import {
+  appStorage,
+  persistRemoteWorkspace,
+  persistServerSelection,
+  readInitialWorkspaceState,
+  shellBridge,
+} from "./platform"
 import { RemoteAgentSession } from "./codex-cli"
+import type { RemoteCommandCatalog } from "./remote-workspace-state"
 import { RemoteConnect } from "./remote-connect"
 import { remoteCapabilityEnabled } from "./remote-workspace-state"
 
@@ -45,7 +46,7 @@ export async function mountAndroidApp() {
       directory: initial.state.workspace?.workspace?.remoteDirectory ?? initial.state.workspace?.workspace?.directory,
     } as const)
   const selectedAgent = workspace?.agent
-  if (selectedAgent === "codex-cli" || selectedAgent === "opencode-cli") {
+  if (selectedAgent === "codex-cli" || selectedAgent === "opencode-cli" || selectedAgent === "claude-code") {
     render(
       () => (
         <RemoteAgentSession
@@ -55,6 +56,13 @@ export async function mountAndroidApp() {
           password={initial.secret?.password ?? ""}
           workspaceID={selection.workspaceID ?? ""}
           directory={selection.directory ?? ""}
+          catalog={initial.state.commandCatalog}
+          onCatalog={(catalog: RemoteCommandCatalog) =>
+            void persistRemoteWorkspace(
+              { ...initial.state, commandCatalog: catalog, savedAt: new Date().toISOString() },
+              initial.secret,
+            ).catch(() => undefined)
+          }
         />
       ),
       root,
@@ -115,11 +123,7 @@ export async function mountAndroidApp() {
     () => (
       <PlatformProvider value={platform}>
         <AppBaseProviders>
-          <AppInterface
-            defaultServer={serverKey}
-            servers={[server]}
-            router={HashRouter}
-          />
+          <AppInterface defaultServer={serverKey} servers={[server]} router={HashRouter} />
         </AppBaseProviders>
       </PlatformProvider>
     ),

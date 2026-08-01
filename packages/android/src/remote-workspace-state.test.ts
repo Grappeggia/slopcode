@@ -372,4 +372,40 @@ describe("remote workspace state persistence", () => {
       workspace: { workspace: { agent: "opencode-cli" } },
     })
   })
+
+  test("round-trips the explicit Claude Code agent selection", async () => {
+    const storage = memoryStorage()
+    await writeRemoteWorkspaceState(storage, {
+      version: 1,
+      serverUrl: "https://remote.example.test",
+      workspace: {
+        ...(pairing as unknown as Record<string, unknown>),
+        workspace: { ...pairing.workspace, agent: "claude-code" },
+      } as never,
+    })
+    await expect(readRemoteWorkspaceState(storage)).resolves.toMatchObject({
+      workspace: { workspace: { agent: "claude-code" } },
+    })
+  })
+
+  test("persists a bounded remote command catalog and version", async () => {
+    const state = normalizeRemoteWorkspaceState({
+      version: 1,
+      serverUrl: "https://remote.example.test",
+      commandCatalog: {
+        agent: "claude-code",
+        version: "2.1.0",
+        commands: [
+          { name: "review", description: "Review changes" },
+          { name: "review", description: "duplicate" },
+          { name: "bad name" },
+        ],
+      },
+    })
+    expect(state.commandCatalog).toEqual({
+      agent: "claude-code",
+      version: "2.1.0",
+      commands: [{ name: "review", description: "Review changes" }],
+    })
+  })
 })
