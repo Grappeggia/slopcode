@@ -14,7 +14,12 @@ const hop = new Set([
 function sanitize(out: Headers) {
   for (const key of hop) out.delete(key)
   out.delete("accept-encoding")
+  out.delete("authorization")
+  out.delete("cookie")
+  out.delete("set-cookie")
   out.delete("x-slopcode-directory")
+  out.delete("x-slopcode-remote-capability")
+  out.delete("x-slopcode-remote-supervisor-token")
   out.delete("x-slopcode-workspace")
 }
 

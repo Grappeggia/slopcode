@@ -1,12 +1,36 @@
 import { AbsolutePath, PositiveInt, Workspace } from "@slopcode-ai/schema"
-import { Schema, SchemaParser } from "effect"
+import { Schema, SchemaParser, Struct } from "effect"
 
 const Text = Schema.Trim.pipe(Schema.check(Schema.isNonEmpty()))
 const Port = PositiveInt.check(Schema.isLessThanOrEqualTo(65535))
 const exact = <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
-  Schema.declareConstructor<S["Type"], S["Encoded"]>()([], () => (u, _ast, options) =>
-    SchemaParser.decodeUnknownEffect(schema, { ...options, onExcessProperty: "error" })(u),
+  Schema.declareConstructor<S["Type"], S["Encoded"]>()([schema], ([codec]) => (u, _ast, options) =>
+    SchemaParser.decodeUnknownEffect(codec, { ...options, onExcessProperty: "error" })(u),
   )
+
+const loopback = new Set(["127.0.0.1", "localhost", "::1", "[::1]"])
+const isSafePath = (value: string) =>
+  value === "/" ||
+  (value.startsWith("/") &&
+    !value.includes("\\") &&
+    !value.includes("\u0000") &&
+    !value.includes("//") &&
+    !/[?#]/.test(value) &&
+    value
+      .slice(1)
+      .split("/")
+      .every((segment) => segment.length > 0 && segment !== "." && segment !== ".."))
+const isLoopbackTarget = (value: string) => {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false
+    if (url.username || url.password || url.search || url.hash) return false
+    if (!loopback.has(url.hostname.toLowerCase())) return false
+    return isSafePath(url.pathname)
+  } catch {
+    return false
+  }
+}
 
 export const RemoteVersion = Schema.Literal("v1").annotate({ identifier: "RemoteV1.Version" })
 export type RemoteVersion = typeof RemoteVersion.Type
@@ -102,11 +126,23 @@ export const RemoteWorkspaceSsh = exact(RemoteWorkspaceSshShape).annotate({ iden
 export type RemoteWorkspaceSsh = typeof RemoteWorkspaceSsh.Type
 export type RemoteWorkspaceSshEncoded = typeof RemoteWorkspaceSsh.Encoded
 
-export const RemoteWorkspace = Schema.Union([RemoteWorkspaceLocal, RemoteWorkspaceSsh]).annotate({
+export const RemoteWorkspace = exact(Schema.Union([RemoteWorkspaceLocalShape, RemoteWorkspaceSshShape])).annotate({
   identifier: "RemoteV1.Workspace",
 })
 export type RemoteWorkspace = typeof RemoteWorkspace.Type
 export type RemoteWorkspaceEncoded = typeof RemoteWorkspace.Encoded
+
+export const RemoteWorkspaceInput = Schema.Union([RemoteWorkspaceLocalShape, RemoteWorkspaceSshShape]).annotate({
+  identifier: "RemoteV1.WorkspaceInput",
+})
+export type RemoteWorkspaceInput = typeof RemoteWorkspaceInput.Type
+export type RemoteWorkspaceInputEncoded = typeof RemoteWorkspaceInput.Encoded
+
+export const RemoteWorkspaceSshInput = RemoteWorkspaceSshShape.annotate({
+  identifier: "RemoteV1.WorkspaceSshInput",
+})
+export type RemoteWorkspaceSshInput = typeof RemoteWorkspaceSshInput.Type
+export type RemoteWorkspaceSshInputEncoded = typeof RemoteWorkspaceSshInput.Encoded
 
 export const RemoteCapability = Schema.Struct({
   fs: Schema.Boolean,
@@ -130,6 +166,143 @@ export const RemotePairing = Schema.Struct({
 }).annotate({ identifier: "RemoteV1.Pairing" })
 export type RemotePairing = typeof RemotePairing.Type
 export type RemotePairingEncoded = typeof RemotePairing.Encoded
+
+export const RemotePairingRecord = Schema.Struct(Struct.omit(RemotePairing.fields, ["code"])).annotate({
+  identifier: "RemoteV1.PairingRecord",
+})
+export type RemotePairingRecord = typeof RemotePairingRecord.Type
+export type RemotePairingRecordEncoded = typeof RemotePairingRecord.Encoded
+
+export const RemotePairingWire = Schema.Struct({
+  version: RemoteVersion,
+  id: RemotePairingID,
+  code: RemotePairingCode,
+  device: RemoteDevice,
+  host: RemoteHost,
+  workspace: RemoteWorkspaceInput,
+  capability: RemoteCapability,
+}).annotate({ identifier: "RemoteV1.PairingWire" })
+export type RemotePairingWire = typeof RemotePairingWire.Type
+export type RemotePairingWireEncoded = typeof RemotePairingWire.Encoded
+
+export const RemotePairingRecordWire = Schema.Struct(Struct.omit(RemotePairingWire.fields, ["code"])).annotate({
+  identifier: "RemoteV1.PairingRecordWire",
+})
+export type RemotePairingRecordWire = typeof RemotePairingRecordWire.Type
+export type RemotePairingRecordWireEncoded = typeof RemotePairingRecordWire.Encoded
+
+export const RemoteTargetCapabilityHeader = "x-slopcode-remote-capability" as const
+const RemoteTargetCapability = Text.check(
+  Schema.makeFilter((value: string) =>
+    value.length <= 1024 && !/[\r\n]/.test(value) ? undefined : "Remote target capability must be a single bounded header value",
+  ),
+)
+export const RemoteTargetHeaders = exact(
+  Schema.Struct({
+    [RemoteTargetCapabilityHeader]: RemoteTargetCapability,
+  }),
+).annotate({ identifier: "RemoteV1.TargetHeaders" })
+export type RemoteTargetHeaders = typeof RemoteTargetHeaders.Type
+export type RemoteTargetHeadersEncoded = typeof RemoteTargetHeaders.Encoded
+
+export const RemoteTargetHeadersInput = Schema.Struct({
+  [RemoteTargetCapabilityHeader]: RemoteTargetCapability,
+}).annotate({ identifier: "RemoteV1.TargetHeadersInput" })
+export type RemoteTargetHeadersInput = typeof RemoteTargetHeadersInput.Type
+export type RemoteTargetHeadersInputEncoded = typeof RemoteTargetHeadersInput.Encoded
+
+export const RemotePairedHost = Schema.Struct({
+  host: RemoteHost,
+  pairings: Schema.Array(RemotePairingRecord),
+}).annotate({ identifier: "RemoteV1.PairedHost" })
+export type RemotePairedHost = typeof RemotePairedHost.Type
+export type RemotePairedHostEncoded = typeof RemotePairedHost.Encoded
+
+export const RemotePairedHostWire = Schema.Struct({
+  host: RemoteHost,
+  pairings: Schema.Array(RemotePairingRecordWire),
+}).annotate({ identifier: "RemoteV1.PairedHostWire" })
+export type RemotePairedHostWire = typeof RemotePairedHostWire.Type
+export type RemotePairedHostWireEncoded = typeof RemotePairedHostWire.Encoded
+
+export const RemotePairingCreateInput = Schema.Struct({
+  device: RemoteDevice,
+  workspace: RemoteWorkspace,
+  capability: Schema.optional(RemoteCapability),
+}).annotate({ identifier: "RemoteV1.PairingCreateInput" })
+export type RemotePairingCreateInput = typeof RemotePairingCreateInput.Type
+export type RemotePairingCreateInputEncoded = typeof RemotePairingCreateInput.Encoded
+
+export const RemotePairingCreatePayload = Schema.Struct({
+  device: RemoteDevice,
+  workspace: RemoteWorkspaceInput,
+  capability: Schema.optional(RemoteCapability),
+}).annotate({ identifier: "RemoteV1.PairingCreatePayload" })
+export type RemotePairingCreatePayload = typeof RemotePairingCreatePayload.Type
+export type RemotePairingCreatePayloadEncoded = typeof RemotePairingCreatePayload.Encoded
+
+export const RemoteWorkspaceSelectInput = Schema.Struct({
+  pairingID: RemotePairingID,
+}).annotate({ identifier: "RemoteV1.WorkspaceSelectInput" })
+export type RemoteWorkspaceSelectInput = typeof RemoteWorkspaceSelectInput.Type
+export type RemoteWorkspaceSelectInputEncoded = typeof RemoteWorkspaceSelectInput.Encoded
+
+const RemoteTargetLocalShape = Schema.Struct({
+  type: Schema.Literal("local"),
+  directory: AbsolutePath,
+})
+export const RemoteTargetLocal = exact(RemoteTargetLocalShape).annotate({ identifier: "RemoteV1.TargetLocal" })
+export type RemoteTargetLocal = typeof RemoteTargetLocal.Type
+export type RemoteTargetLocalEncoded = typeof RemoteTargetLocal.Encoded
+
+const RemoteTargetRemoteShape = Schema.Struct({
+  type: Schema.Literal("remote"),
+  url: Schema.String.check(
+    Schema.makeFilter((value: string) =>
+      isLoopbackTarget(value)
+        ? undefined
+        : "Remote target must be a loopback HTTP(S) base URL without credentials, query, fragment, or traversal",
+    ),
+  ),
+  headers: Schema.optional(RemoteTargetHeaders),
+})
+export const RemoteTargetRemote = exact(RemoteTargetRemoteShape).annotate({ identifier: "RemoteV1.TargetRemote" })
+export type RemoteTargetRemote = typeof RemoteTargetRemote.Type
+export type RemoteTargetRemoteEncoded = typeof RemoteTargetRemote.Encoded
+
+export const RemoteTarget = exact(Schema.Union([RemoteTargetLocalShape, RemoteTargetRemoteShape])).annotate({
+  identifier: "RemoteV1.Target",
+})
+export type RemoteTarget = typeof RemoteTarget.Type
+export type RemoteTargetEncoded = typeof RemoteTarget.Encoded
+
+const RemoteTargetRemoteInputShape = Schema.Struct({
+  type: Schema.Literal("remote"),
+  url: RemoteTargetRemoteShape.fields.url,
+  headers: Schema.optional(RemoteTargetHeadersInput),
+})
+
+export const RemoteTargetInput = Schema.Union([RemoteTargetLocalShape, RemoteTargetRemoteInputShape]).annotate({
+  identifier: "RemoteV1.TargetInput",
+})
+export type RemoteTargetInput = typeof RemoteTargetInput.Type
+export type RemoteTargetInputEncoded = typeof RemoteTargetInput.Encoded
+
+export const RemoteWorkspaceTargetInput = Schema.Struct({
+  pairingID: Schema.optional(RemotePairingID),
+  workspace: RemoteWorkspace,
+  target: RemoteTarget,
+}).annotate({ identifier: "RemoteV1.WorkspaceTargetInput" })
+export type RemoteWorkspaceTargetInput = typeof RemoteWorkspaceTargetInput.Type
+export type RemoteWorkspaceTargetInputEncoded = typeof RemoteWorkspaceTargetInput.Encoded
+
+export const RemoteWorkspaceTargetPayload = Schema.Struct({
+  pairingID: Schema.optional(RemotePairingID),
+  workspace: RemoteWorkspaceInput,
+  target: RemoteTargetInput,
+}).annotate({ identifier: "RemoteV1.WorkspaceTargetPayload" })
+export type RemoteWorkspaceTargetPayload = typeof RemoteWorkspaceTargetPayload.Type
+export type RemoteWorkspaceTargetPayloadEncoded = typeof RemoteWorkspaceTargetPayload.Encoded
 
 export const RemoteAcknowledgement = Schema.Struct({
   requestID: RemoteRequestID,

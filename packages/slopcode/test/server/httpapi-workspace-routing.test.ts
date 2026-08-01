@@ -31,6 +31,7 @@ import {
   WorkspaceRouteContext,
   workspaceRoutingLayer,
 } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
+import { defaultLayer as remotePairingLayer } from "../../src/server/routes/instance/httpapi/remote-pairing"
 import { HEADER as FenceHeader } from "../../src/server/shared/fence"
 import { resetDatabase } from "../fixture/db"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
@@ -75,6 +76,7 @@ type TestHandler<E, R> = (
 
 const workspaceRoutingTestLayer = workspaceRoutingLayer.pipe(
   Layer.provide([Socket.layerWebSocketConstructorGlobal, FetchHttpClient.layer]),
+  Layer.provide(remotePairingLayer),
 )
 
 const serverUrl = HttpServer.HttpServer.use((server) => Effect.succeed(HttpServer.formatAddress(server.address)))

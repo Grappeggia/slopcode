@@ -1,4 +1,7 @@
-import { DateTime, Effect } from "effect"
+import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionControl } from "@slopcode-ai/core/session/control"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { DateTime, Effect, Option } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
@@ -12,6 +15,7 @@ import {
   UnknownError,
 } from "../errors"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { RouteLocationContext } from "../middleware/route-location"
 
 const DefaultSessionsLimit = 50
 
@@ -21,6 +25,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     const session = graph.session
     const control = graph.control
     const runtime = graph.runtime
+
+    const routeLocation = Effect.fn("SessionHandler.routeLocation")(function* () {
+      const route = yield* Effect.serviceOption(RouteLocationContext)
+      return Option.getOrUndefined(route)
+    })
 
     const runtimeUnavailable = (error: { readonly sessionID: string; readonly actualOwner: "v1" | "v2" }) =>
       new ServiceUnavailableError({
@@ -35,15 +44,38 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.list",
         Effect.fn(function* (ctx) {
+          const route = yield* routeLocation()
           const query =
             ctx.query.cursor !== undefined
               ? yield* SessionsCursor.parse(ctx.query.cursor).pipe(
                   Effect.mapError(() => new InvalidCursorError({ message: "Invalid cursor" })),
                 )
               : ctx.query
+          const filters = route
+            ? { directory: route.directory, project: undefined, subpath: undefined, workspaceID: route.workspaceID }
+            : "directory" in query
+              ? {
+                  directory: query.directory,
+                  project: undefined,
+                  subpath: undefined,
+                  workspaceID: query.workspace,
+                }
+              : "project" in query
+                ? {
+                    directory: undefined,
+                    project: query.project,
+                    subpath: query.subpath,
+                    workspaceID: query.workspace,
+                  }
+                : {
+                    directory: undefined,
+                    project: undefined,
+                    subpath: undefined,
+                    workspaceID: query.workspace,
+                  }
           const sessions = yield* session.list({
             ...query,
-            workspaceID: query.workspace,
+            ...filters,
             limit: ctx.query.limit ?? DefaultSessionsLimit,
           })
           const first = sessions[0]
@@ -78,12 +110,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          const route = yield* routeLocation()
           return {
             data: yield* session.create({
               id: ctx.payload.id,
               agent: ctx.payload.agent,
               model: ctx.payload.model,
-              location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+              location:
+                route
+                  ? {
+                      directory: AbsolutePath.make(route.directory),
+                      workspaceID: route.workspaceID,
+                    }
+                  : ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
               runtime: "v2",
             }),
           }

@@ -11,7 +11,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Layer, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
-import { HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi"
 import { mkdir } from "node:fs/promises"
@@ -32,6 +32,7 @@ import {
   WorkspaceRoutingQuery,
   workspaceRoutingLayer,
 } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
+import { defaultLayer as remotePairingLayer } from "../../src/server/routes/instance/httpapi/remote-pairing"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
@@ -64,7 +65,11 @@ const it = testEffect(
 
 const instanceContextTestLayer = Layer.mergeAll(
   instanceContextLayer,
-  workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+  workspaceRoutingLayer.pipe(
+    Layer.provide(Socket.layerWebSocketConstructorGlobal),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(remotePairingLayer),
+  ),
 )
 
 const localAdapter = (directory: string): WorkspaceAdapter => ({

@@ -18,11 +18,12 @@ export function isLocalWorkspaceRoute(method: string, path: string) {
 }
 
 export function getWorkspaceRouteSessionID(url: URL) {
-  if (url.pathname === "/session/status") return null
+  if (url.pathname === "/session/status" || url.pathname === "/api/session/active") return null
 
   const id =
     url.pathname.match(/^\/session\/([^/]+)(?:\/|$)/)?.[1] ??
-    url.pathname.match(/^\/experimental\/session\/([^/]+)\/background$/)?.[1]
+    url.pathname.match(/^\/experimental\/session\/([^/]+)\/background$/)?.[1] ??
+    url.pathname.match(/^\/api\/session\/([^/]+)(?:\/|$)/)?.[1]
   if (!id) return null
 
   return SessionID.make(id)
@@ -34,5 +35,8 @@ export function workspaceProxyURL(target: string | URL, requestURL: URL) {
   proxyURL.search = requestURL.search
   proxyURL.hash = requestURL.hash
   proxyURL.searchParams.delete("workspace")
+  proxyURL.searchParams.delete("directory")
+  proxyURL.searchParams.delete("location[workspace]")
+  proxyURL.searchParams.delete("location[directory]")
   return proxyURL
 }

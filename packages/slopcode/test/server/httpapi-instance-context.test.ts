@@ -25,12 +25,14 @@ import {
   WorkspaceRoutingQuery,
   workspaceRoutingLayer,
 } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
+import { defaultLayer as remotePairingLayer } from "../../src/server/routes/instance/httpapi/remote-pairing"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { withFixedWorkspaceID } from "../fixture/flag"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { waitGlobalBusEvent } from "./global-bus"
 import { testEffect } from "../lib/effect"
+import { FetchHttpClient } from "effect/unstable/http"
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -59,7 +61,11 @@ const it = testEffect(
 
 const instanceContextTestLayer = Layer.mergeAll(
   instanceContextLayer,
-  workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
+  workspaceRoutingLayer.pipe(
+    Layer.provide(Socket.layerWebSocketConstructorGlobal),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(remotePairingLayer),
+  ),
 )
 
 const localAdapter = (directory: string): WorkspaceAdapter => ({

@@ -107,7 +107,9 @@ import { isolatedSessionServices, rawHandlers } from "@slopcode-ai/server/handle
 import { SessionGraph } from "@slopcode-ai/server/session-graph"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@slopcode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
+import { defaultLayer as remotePairingLayer } from "./remote-pairing"
 import { instanceContextLayer } from "./middleware/instance-context"
+import { serverWorkspaceRoutingLayer } from "./middleware/server-workspace-routing"
 import { workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
 import { memoMap } from "@slopcode-ai/core/effect/memo-map"
@@ -138,7 +140,14 @@ const authOnlyRouterLayer = authorizationRouterMiddleware.layer.pipe(Layer.provi
 const httpApiAuthLayer = authorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
-const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
+const workspaceRoutingLive = workspaceRoutingLayer.pipe(
+  Layer.provide(Socket.layerWebSocketConstructorGlobal),
+  Layer.provide(remotePairingLayer),
+)
+const serverWorkspaceRoutingLive = serverWorkspaceRoutingLayer.pipe(
+  Layer.provide(Socket.layerWebSocketConstructorGlobal),
+  Layer.provide(remotePairingLayer),
+)
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
   Layer.provide(schemaErrorLayer),
@@ -171,14 +180,15 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     tuiHandlers,
     workspaceHandlers,
   ]),
+  Layer.provide(remotePairingLayer),
 )
 
 const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
-  Layer.provide(rawHandlers),
-  Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
+  Layer.provide(handlers),
+  Layer.provide([serverHttpApiAuthLayer, serverWorkspaceRoutingLive, v2SchemaErrorLayer]),
 )
 
 // `OpenApi.fromApi` is non-trivial; defer until /doc is actually hit so
@@ -409,7 +419,7 @@ export function createRoutes(
     Layer.provide(locationLayer),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(Observability.layer),
-  )
+  ) as Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements>
 }
 
 export const routes = createRoutes()

@@ -1,31 +1,18 @@
+import { RouteLocationContext, RouteLocationMiddleware } from "@slopcode-ai/server/middleware/route-location"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
+import { Flag } from "@slopcode-ai/core/flag/flag"
 import type { Target } from "@/control-plane/types"
 import { Workspace } from "@/control-plane/workspace"
 import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
 import { Service as RemotePairingService } from "../remote-pairing"
-import { Session } from "@/session/session"
-import { HttpApiProxy } from "./proxy"
 import * as Fence from "@/server/shared/fence"
-import { getWorkspaceRouteSessionID, isLocalWorkspaceRoute, workspaceProxyURL } from "@/server/shared/workspace-routing"
+import { getWorkspaceRouteSessionID, workspaceProxyURL } from "@/server/shared/workspace-routing"
+import { Session } from "@/session/session"
 import { NotFoundError } from "@/storage/storage"
-import { Flag } from "@slopcode-ai/core/flag/flag"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
-import { InvalidRequestError } from "../errors"
-
-// Query fields this middleware reads from the URL. Spread into every
-// endpoint query schema in groups that apply WorkspaceRoutingMiddleware,
-// otherwise HttpApi rejects requests carrying these params with 400.
-// HttpApiMiddleware in effect-smol cannot declare query params today —
-// remove this once upstream supports middleware-declared query schemas.
-export const WorkspaceRoutingQueryFields = {
-  directory: Schema.optional(Schema.String),
-  workspace: Schema.optional(Schema.String),
-}
-
-export const WorkspaceRoutingQuery = Schema.Struct(WorkspaceRoutingQueryFields)
+import { HttpApiProxy } from "./proxy"
 
 type RemoteTarget = Extract<Target, { type: "remote" }>
 
@@ -42,23 +29,12 @@ type RequestPlan =
       readonly url: URL
       readonly sync: boolean
     }
+
+type SelectedPlan =
+  | { readonly _tag: "Selected"; readonly selected: import("../remote-pairing").ResolvedTarget | undefined }
+  | { readonly _tag: "Response"; readonly response: HttpServerResponse.HttpServerResponse }
+
 const InvalidWorkspaceID = Symbol("InvalidWorkspaceID")
-
-export class WorkspaceRouteContext extends Context.Service<
-  WorkspaceRouteContext,
-  {
-    readonly directory: string
-    readonly workspaceID?: WorkspaceV2.ID
-  }
->()("@slopcode/ExperimentalHttpApiWorkspaceRouteContext") {}
-
-export class WorkspaceRoutingMiddleware extends HttpApiMiddleware.Service<
-  WorkspaceRoutingMiddleware,
-  {
-    provides: WorkspaceRouteContext
-    requires: Session.Service
-  }
->()("@slopcode/ExperimentalHttpApiWorkspaceRouting") {}
 
 function requestURL(request: HttpServerRequest.HttpServerRequest): URL {
   return new URL(request.url, "http://localhost")
@@ -68,21 +44,6 @@ function configuredWorkspaceID(): WorkspaceV2.ID | undefined {
   return Flag.SLOPCODE_WORKSPACE_ID ? parseWorkspaceID(Flag.SLOPCODE_WORKSPACE_ID) : undefined
 }
 
-function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceV2.ID): WorkspaceV2.ID | undefined {
-  const workspaceParam = url.searchParams.get("workspace")
-  return sessionWorkspaceID ?? (workspaceParam ? parseWorkspaceID(workspaceParam) : undefined)
-}
-
-function selectedV2WorkspaceID(
-  url: URL,
-  sessionWorkspaceID?: WorkspaceV2.ID,
-): WorkspaceV2.ID | typeof InvalidWorkspaceID | undefined {
-  if (sessionWorkspaceID) return sessionWorkspaceID
-  const workspaceParam = url.searchParams.get("workspace")
-  if (!workspaceParam) return undefined
-  return parseWorkspaceID(workspaceParam) ?? InvalidWorkspaceID
-}
-
 function parseWorkspaceID(value: string): WorkspaceV2.ID | undefined {
   if (value.startsWith("ws_")) return value as WorkspaceV2.ID
   const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(value)
@@ -90,12 +51,32 @@ function parseWorkspaceID(value: string): WorkspaceV2.ID | undefined {
   return workspaceID.value
 }
 
-function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
-  return url.searchParams.get("directory") || request.headers["x-slopcode-directory"] || process.cwd()
+function selectedWorkspaceID(
+  request: HttpServerRequest.HttpServerRequest,
+  url: URL,
+  sessionWorkspaceID?: WorkspaceV2.ID,
+): WorkspaceV2.ID | typeof InvalidWorkspaceID | undefined {
+  if (sessionWorkspaceID) return sessionWorkspaceID
+  const workspaceParam =
+    url.searchParams.get("workspace") ||
+    url.searchParams.get("location[workspace]") ||
+    request.headers["x-slopcode-workspace"]
+  if (!workspaceParam) return undefined
+  return parseWorkspaceID(workspaceParam) ?? InvalidWorkspaceID
 }
 
-function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {
-  return isLocalWorkspaceRoute(request.method, url.pathname) || url.pathname.startsWith("/console")
+function selectedDirectory(
+  request: HttpServerRequest.HttpServerRequest,
+  url: URL,
+  sessionDirectory?: string,
+): string {
+  return (
+    sessionDirectory ||
+    url.searchParams.get("directory") ||
+    url.searchParams.get("location[directory]") ||
+    request.headers["x-slopcode-directory"] ||
+    process.cwd()
+  )
 }
 
 function resolveWorkspace(
@@ -106,7 +87,7 @@ function resolveWorkspace(
   return Workspace.Service.use((workspace) => workspace.get(id))
 }
 
-function missingWorkspaceResponse(id: WorkspaceV2.ID): HttpServerResponse.HttpServerResponse {
+function missingWorkspaceResponse(id: WorkspaceV2.ID) {
   return HttpServerResponse.text(`Workspace not found: ${id}`, {
     status: 500,
     contentType: "text/plain; charset=utf-8",
@@ -126,7 +107,7 @@ function proxyRemote(
   sync: boolean,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, Socket.WebSocketConstructor | Workspace.Service> {
   return Effect.gen(function* () {
-    if (sync && !(yield* Workspace.Service.use((svc) => svc.isSyncing(workspaceID)))) {
+  if (sync && !(yield* Workspace.Service.use((svc) => svc.isSyncing(workspaceID)))) {
       return HttpServerResponse.text(`broken sync connection for workspace: ${workspaceID}`, {
         status: 503,
         contentType: "text/plain; charset=utf-8",
@@ -159,24 +140,28 @@ function planRequest(
   return Effect.gen(function* () {
     const url = requestURL(request)
     const envWorkspaceID = configuredWorkspaceID()
-    const workspaceID = url.pathname.startsWith("/api/")
-      ? selectedV2WorkspaceID(url, session?.workspaceID)
-      : selectedWorkspaceID(url, session?.workspaceID)
+    const workspaceID = selectedWorkspaceID(request, url, session?.workspaceID)
     if (workspaceID === InvalidWorkspaceID) return { _tag: "InvalidWorkspace" }
     const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
 
-    if (workspace !== undefined && !envWorkspaceID && !shouldStayOnControlPlane(request, url)) {
+    if (workspace !== undefined && !envWorkspaceID) {
       const target = yield* resolveTarget(workspace)
-      if (target.type === "remote") return { _tag: "Remote", request, workspaceID: workspace.id, target, url, sync: true }
-      return { _tag: "Local", directory: target.directory, workspaceID: workspace.id }
+      if (target.type === "remote") {
+        return { _tag: "Remote", request, workspaceID: workspace.id, target, url, sync: true }
+      }
+      return {
+        _tag: "Local",
+        directory: session?.directory || target.directory,
+        workspaceID: workspace.id,
+      }
     }
 
-    if (workspaceID && !envWorkspaceID && !shouldStayOnControlPlane(request, url)) {
-      const selected = yield* RemotePairingService.use((service) => service.target(workspaceID)).pipe(
-        Effect.map((selected) => ({ _tag: "Selected" as const, selected })),
+    if (workspaceID && !envWorkspaceID) {
+      const selected: SelectedPlan = yield* RemotePairingService.use((service) => service.target(workspaceID)).pipe(
+        Effect.map((selected): SelectedPlan => ({ _tag: "Selected", selected })),
         Effect.catchTag("RemotePairing.TargetUnavailableError", (error) =>
-          Effect.succeed({
-            _tag: "Response" as const,
+          Effect.succeed<SelectedPlan>({
+            _tag: "Response",
             response: HttpServerResponse.text(error.message, { status: 409, contentType: "text/plain; charset=utf-8" }),
           }),
         ),
@@ -197,50 +182,48 @@ function planRequest(
             sync: false,
           }
         }
-        return { _tag: "Local", directory: selected.selected.target.directory, workspaceID }
+        return {
+          _tag: "Local",
+          directory: selected.selected.target.directory,
+          workspaceID,
+        }
       }
-    }
-
-    if (workspaceID && workspace === undefined && !envWorkspaceID) {
-      return { _tag: "MissingWorkspace", workspaceID }
+      if (workspace === undefined) return { _tag: "MissingWorkspace", workspaceID }
     }
 
     return {
       _tag: "Local",
-      directory: session?.directory || defaultDirectory(request, url),
-      workspaceID: envWorkspaceID ?? workspaceID,
+      directory: selectedDirectory(request, url, session?.directory),
+      workspaceID: envWorkspaceID ?? session?.workspaceID ?? workspaceID,
     }
   })
 }
 
 function routeWorkspace<E>(
   client: HttpClient.HttpClient,
-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E>,
   plan: RequestPlan,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, Socket.WebSocketConstructor | Workspace.Service> {
   if (plan._tag === "Response") return Effect.succeed(plan.response)
   if (plan._tag === "InvalidWorkspace") {
-    return Effect.succeed(
-      HttpServerResponse.jsonUnsafe(
-        new InvalidRequestError({
-          message: "Invalid workspace query parameter",
-          kind: "Query",
-          field: "workspace",
-        }),
-        { status: 400 },
-      ),
-    )
+    return Effect.succeed(HttpServerResponse.text("Invalid workspace query parameter", { status: 400 }))
   }
   if (plan._tag === "MissingWorkspace") return Effect.succeed(missingWorkspaceResponse(plan.workspaceID))
   if (plan._tag === "Remote") return proxyRemote(client, plan.request, plan.workspaceID, plan.target, plan.url, plan.sync)
   return effect.pipe(
-    Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory: plan.directory, workspaceID: plan.workspaceID })),
+    Effect.provideService(
+      RouteLocationContext,
+      RouteLocationContext.of({
+        directory: plan.directory,
+        workspaceID: plan.workspaceID,
+      }),
+    ),
   )
 }
 
 function routeHttpApiWorkspace<E>(
   client: HttpClient.HttpClient,
-  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext>,
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E>,
 ): Effect.Effect<
   HttpServerResponse.HttpServerResponse,
   E,
@@ -262,22 +245,23 @@ function routeHttpApiWorkspace<E>(
           Effect.catchDefect(() => Effect.succeed(undefined)),
         )
       : undefined
-    const plan = yield* planRequest(request, session)
-    return yield* routeWorkspace(client, effect, plan)
+    return yield* routeWorkspace(client, effect, yield* planRequest(request, session))
   })
 }
 
-export const workspaceRoutingLayer = Layer.effect(
-  WorkspaceRoutingMiddleware,
+export const serverWorkspaceRoutingLayer = Layer.effect(
+  RouteLocationMiddleware,
   Effect.gen(function* () {
     const makeWebSocket = yield* Socket.WebSocketConstructor
     const workspace = yield* Workspace.Service
+    const session = yield* Session.Service
     const pairings = yield* RemotePairingService
     const client = yield* HttpClient.HttpClient
-    return WorkspaceRoutingMiddleware.of((effect) =>
+    return RouteLocationMiddleware.of((effect) =>
       routeHttpApiWorkspace(client, effect).pipe(
         Effect.provideService(Socket.WebSocketConstructor, makeWebSocket),
         Effect.provideService(Workspace.Service, workspace),
+        Effect.provideService(Session.Service, session),
         Effect.provideService(RemotePairingService, pairings),
       ),
     )
