@@ -6,7 +6,6 @@ import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { Effect, Layer, Schema } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
-import { RouteLocationContext } from "../middleware/route-location"
 
 export const LocationQuery = Schema.Struct({
   location: Schema.optional(
@@ -84,18 +83,6 @@ function ref(request: HttpServerRequest.HttpServerRequest): Location.Ref {
   })
 }
 
-const resolveRef = (request: HttpServerRequest.HttpServerRequest) =>
-  Effect.gen(function* () {
-    const route = yield* Effect.serviceOption(RouteLocationContext)
-    if (route._tag === "Some") {
-      return Location.Ref.make({
-        directory: AbsolutePath.make(route.value.directory),
-        workspaceID: route.value.workspaceID,
-      })
-    }
-    return ref(request)
-  })
-
 function decode(input: string) {
   try {
     return decodeURIComponent(input)
@@ -111,7 +98,7 @@ export const layer = Layer.effect(
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* effect.pipe(Effect.provide(locations.get(yield* resolveRef(request))))
+        return yield* effect.pipe(Effect.provide(locations.get(ref(request))))
       }),
     )
   }),

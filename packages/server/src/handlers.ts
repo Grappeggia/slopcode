@@ -25,8 +25,12 @@ import { IntegrationHandler } from "./handlers/integration"
 import { CredentialHandler } from "./handlers/credential"
 import { Credential } from "@slopcode-ai/core/credential"
 import { ProjectCopyHandler } from "./handlers/project-copy"
-import { PtyHandler } from "./handlers/pty"
-import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
+import { Database } from "@slopcode-ai/core/database/database"
+import { ProjectV2 } from "@slopcode-ai/core/project"
+import { SessionProjector } from "@slopcode-ai/core/session/projector"
+import { SessionStore } from "@slopcode-ai/core/session/store"
+import { SessionGraph } from "./session-graph"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 
 const store = SessionStore.layer
 const execution = SessionExecutionLocal.layer.pipe(Layer.provide(store))
@@ -60,18 +64,6 @@ const raw = Layer.mergeAll(
   QuestionHandler,
   ReferenceHandler,
   ProjectCopyHandler,
-  PtyHandler,
-).pipe(
-  Layer.provide(sessionLocationLayer),
-  Layer.provide(locationLayer),
-  Layer.provide(SessionControl.layer),
-  Layer.provide(SessionV2.defaultLayer),
-  Layer.provide(SessionRuntime.defaultLayer),
-  Layer.provide(SessionExecutionLocal.defaultLayer),
-  Layer.provide(PermissionSaved.defaultLayer),
-  Layer.provide(LocationServiceMap.layer),
-  Layer.provide(Credential.defaultLayer),
-  Layer.provide(PtyTicket.defaultLayer),
 )
 
 export const makeRawHandlers = (saved: Layer.Layer<PermissionSaved.Service> = PermissionSaved.defaultLayer) =>
