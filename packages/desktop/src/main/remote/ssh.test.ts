@@ -89,26 +89,36 @@ describe("SSH workspace scripts", () => {
 
     expect(first.stateKey).not.toBe(second.stateKey)
     expect(bootstrap).toContain(`key='${first.stateKey}'`)
-    expect(bootstrap).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(bootstrap).toContain('state_file="$state_dir/desktop-ssh-server-$key.state"')
     expect(bootstrap).toContain('log_file="$state_dir/desktop-ssh-server-$key.log"')
     expect(stop).toContain(`key='${first.stateKey}'`)
-    expect(stop).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(stop).toContain('state_file="$state_dir/desktop-ssh-server-$key.state"')
     expect(guardedStop).toContain("expected_password='secret'")
-    expect(guardedStop).toContain('if [ "${PASSWORD:-}" != "$expected_password" ]; then')
+    expect(bootstrap).toContain("read_state() {")
+    expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" >"$tmp"')
+    expect(bootstrap).not.toContain('. "$state_file"')
+    expect(bootstrap).not.toContain('DIRECTORY="$dir"')
+    expect(stop).toContain('if ! matches_server "$state_pid" "$state_port"; then')
+    expect(stop).toContain('cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"')
+    expect(stop).not.toContain('. "$state_file"')
+    expect(guardedStop).toContain('if [ "$state_password" != "$expected_password" ]; then')
+    expect(guardedStop).toContain('while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do')
+    expect(guardedStop).toContain('if ! wait_for_server 20; then')
     expect(bootstrap).toContain("cd \"$dir\"")
-    expect(bootstrap).toContain('DIRECTORY="$dir"')
     expect(stop).not.toContain("/srv/slopcode")
   })
 
   test("keep selected directory out of raw shell commands", () => {
-    const target = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/remote dir/$(touch nope)" }))
+    const target = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/remote dir/$(touch nope)`rm -f nope`" }))
     const bootstrap = buildSshBootstrapScript(target, 4200, "secret")
     const stop = buildSshStopScript(target)
 
-    expect(bootstrap).toContain(`dir='/srv/remote dir/$(touch nope)'`)
+    expect(bootstrap).toContain(`dir='/srv/remote dir/$(touch nope)\`rm -f nope\`'`)
     expect(bootstrap).toContain("cd \"$dir\"")
-    expect(bootstrap).not.toContain("cd /srv/remote dir/$(touch nope)")
-    expect(stop).not.toContain("/srv/remote dir/$(touch nope)")
+    expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" >"$tmp"')
+    expect(bootstrap).not.toContain('. "$state_file"')
+    expect(bootstrap).not.toContain("cd /srv/remote dir/$(touch nope)`rm -f nope`")
+    expect(stop).not.toContain("/srv/remote dir/$(touch nope)`rm -f nope`")
   })
 })
 
@@ -248,10 +258,10 @@ describe("createSshRemoteHostService", () => {
     expect(stops).toBe(1)
     expect(cleanups).toBe(1)
     expect(runs).toHaveLength(2)
-    expect(runs[0]).toContain("nohup env")
+    expect(runs[0]).toContain('nohup sh -se <<\'EOF\'')
     expect(runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000003'")
     expect(runs[1]).toContain(`key='${workspaceStateKey(id)}'`)
-    expect(runs[1]).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(runs[1]).toContain('state_file="$state_dir/desktop-ssh-server-$key.state"')
     expect(service.getState(id)?.kind).toBe("stopped")
   })
 
@@ -404,9 +414,42 @@ describe("createSshRemoteHostService", () => {
     })
     expect(remote.remote.stops).toBe(0)
     expect(remote.runs).toHaveLength(2)
-    expect(remote.runs[0]).toContain('printf \'{"attached":true,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$PORT" "$PASSWORD"')
+    expect(remote.runs[0]).toContain(
+      'printf \'{"attached":true,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$state_port" "$state_password"',
+    )
     expect(remote.runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000004'")
     expect(service.getState(id)?.kind).toBe("stopped")
+  })
+
+  test("removes stale state without killing a reused pid on explicit stop", async () => {
+    const remote = createRemoteMachine()
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4107,
+      uuid: () => "00000000-0000-4000-8000-000000000008",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => ({
+        stop: () => undefined,
+        onExit: () => undefined,
+      }),
+      health: async () => true,
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const ready = await service.ensureWorkspace(fixtureTarget())
+    remote.remote.state = {
+      port: remote.remote.state?.port ?? 4207,
+      password: ready.password,
+      server: false,
+    }
+    await service.stopWorkspace(ready.id)
+
+    expect(remote.remote.state).toBeUndefined()
+    expect(remote.remote.stops).toBe(0)
+    expect(remote.runs.at(-1)).toContain('if ! matches_server "$state_pid" "$state_port"; then')
   })
 
   test("cleans launched bootstrap state on abort before bootstrap JSON is parsed", async () => {
@@ -451,6 +494,8 @@ describe("createSshRemoteHostService", () => {
     expect(remote.remote.stops).toBe(1)
     expect(remote.runs).toHaveLength(2)
     expect(remote.runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000007'")
+    expect(remote.runs[1]).toContain('while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do')
+    expect(remote.runs[1]).toContain('if ! wait_for_server 20; then')
     expect(service.getState(id)?.kind).toBe("stopped")
   })
 })
@@ -507,6 +552,7 @@ function createRemoteMachine(
     state?: {
       port: number
       password: string
+      server?: boolean
     }
     abortAfterLaunch?: boolean
   } = {},
@@ -526,8 +572,8 @@ function createRemoteMachine(
     runSsh: async (_args: string[], script: string, _timeoutMs: number, signal?: AbortSignal) => {
       runs.push(script)
 
-      if (script.includes("nohup env")) {
-        if (remote.state) {
+      if (script.includes('nohup sh -se <<\'EOF\'')) {
+        if (remote.state?.server !== false && remote.state) {
           return {
             code: 0,
             signal: null,
@@ -540,6 +586,7 @@ function createRemoteMachine(
         remote.state = {
           port: Number(match(script, /^PORT=(\d+)$/m)),
           password: match(script, /^PASSWORD='([^']+)'$/m),
+          server: true,
         }
         launched.resolve()
         if (opts.abortAfterLaunch) {
@@ -561,8 +608,15 @@ function createRemoteMachine(
 
       const expected = matchOptional(script, /^expected_password='([^']+)'$/m)
       if (remote.state && (!expected || remote.state.password === expected)) {
+        if (remote.state.server === false) {
+          remote.state = undefined
+        } else {
+          remote.state = undefined
+          remote.stops += 1
+        }
+      }
+      if (remote.state && remote.state.server === false && !expected && script.includes('if ! matches_server "$state_pid" "$state_port"; then')) {
         remote.state = undefined
-        remote.stops += 1
       }
       if (signal?.aborted) throw signal.reason
       return {
