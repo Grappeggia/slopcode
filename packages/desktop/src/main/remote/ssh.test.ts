@@ -96,20 +96,103 @@ describe("SSH workspace scripts", () => {
     expect(stop).toContain('state_file="$state_dir/desktop-ssh-server-$key.state"')
     expect(guardedStop).toContain("expected_password='secret'")
     expect(bootstrap).toContain("read_state() {")
-    expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" >"$tmp"')
+    expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" "$start" "$EXE" >"$tmp"')
     expect(bootstrap).not.toContain('. "$state_file"')
     expect(bootstrap).not.toContain('DIRECTORY="$dir"')
-    expect(stop).toContain('if ! matches_server "$state_pid" "$state_port"; then')
+    expect(stop).toContain('if ! matches_server "$state_pid" "$state_port" "$state_start" "$state_exe"; then')
     expect(stop).toContain('comm="$(ps -p "$pid" -o comm= 2>/dev/null || true)"')
     expect(stop).toContain('cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"')
-    expect(stop).toContain('case "$1" in')
-    expect(stop).toContain('slopcode|*/slopcode) ;;')
+    expect(stop).toContain("state_start")
+    expect(stop).toContain("state_exe")
+    expect(stop).toContain('case "$cmd" in')
+    expect(stop).toContain('expected_name="${expected_exe##*/}"')
+    expect(stop).not.toContain('set -- $cmd')
     expect(stop).not.toContain('. "$state_file"')
     expect(guardedStop).toContain('if [ "$state_password" != "$expected_password" ]; then')
     expect(guardedStop).toContain('while [ ! -f "$state_file" ] && [ "$tries" -gt 0 ]; do')
     expect(guardedStop).toContain('if ! wait_for_server 20; then')
     expect(bootstrap).toContain("cd \"$dir\"")
-    expect(stop).not.toContain("/srv/slopcode")
+    expect(stop).toContain("dir='/srv/slopcode'")
+  })
+
+  test("rejects a reused pid with a different process start marker", () => {
+    const stop = buildSshStopScript(normalizeSshTarget(fixtureTarget()))
+
+    expect(
+      runMatcher(stop, {
+        comm: "slopcode",
+        command: "slopcode serve --hostname 127.0.0.1 --port 4200",
+        stateStart: "old-start",
+        processStart: "new-start",
+      }),
+    ).toBe(1)
+  })
+
+  test("generates valid POSIX shell for bootstrap and stop", () => {
+    const target = normalizeSshTarget(fixtureTarget())
+
+    for (const script of [buildSshBootstrapScript(target, 4200, "secret"), buildSshStopScript(target)]) {
+      const result = spawnSync("sh", ["-n"], { input: script, encoding: "utf8" })
+      expect(result.status).toBe(0)
+      expect(result.stderr).toBe("")
+    }
+  })
+
+  test("does not partially apply malformed remote state", () => {
+    const script = buildSshStopScript(normalizeSshTarget(fixtureTarget()))
+    const readState = script.slice(script.indexOf("read_state() {"), script.indexOf("process_start() {"))
+    const result = spawnSync("sh", ["-se"], {
+      input: [
+        "set -eu",
+        'state_file="$(mktemp)"',
+        'trap \'rm -f "$state_file"\' EXIT',
+        "state_pid=old-pid",
+        "state_port=old-port",
+        "state_password=old-password",
+        "state_workspace=old-workspace",
+        "state_start=old-start",
+        "state_exe=old-exe",
+        'printf \'%s\\n\' new-pid new-port new-password new-workspace new-start >"$state_file"',
+        readState,
+        "if read_state; then exit 1; fi",
+        '[ "$state_pid" = old-pid ]',
+        '[ "$state_port" = old-port ]',
+        '[ "$state_password" = old-password ]',
+        '[ "$state_workspace" = old-workspace ]',
+        '[ "$state_start" = old-start ]',
+        '[ "$state_exe" = old-exe ]',
+      ].join("\n"),
+      encoding: "utf8",
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stderr).toBe("")
+  })
+
+  test("rejects a matching command from a different executable path", () => {
+    const stop = buildSshStopScript(normalizeSshTarget(fixtureTarget()))
+
+    expect(
+      runMatcher(stop, {
+        comm: "slopcode",
+        command: "slopcode serve --hostname 127.0.0.1 --port 4200",
+        stateExe: "/usr/bin/slopcode",
+        processExe: "slopcode-helper",
+      }),
+    ).toBe(1)
+  })
+
+  test("matches an executable path containing spaces without weakening identity checks", () => {
+    const stop = buildSshStopScript(normalizeSshTarget(fixtureTarget()))
+
+    expect(
+      runMatcher(stop, {
+        comm: "slopcode",
+        command: "/opt/slopcode builds/slopcode serve --hostname 127.0.0.1 --port 4200",
+        stateExe: "/opt/slopcode builds/slopcode",
+        processExe: "/opt/slopcode builds/slopcode",
+      }),
+    ).toBe(0)
   })
 
   test("matches_server rejects helper commands and accepts exact slopcode paths", () => {
@@ -128,10 +211,11 @@ describe("SSH workspace scripts", () => {
 
     expect(bootstrap).toContain(`dir='/srv/remote dir/$(touch nope)\`rm -f nope\`'`)
     expect(bootstrap).toContain("cd \"$dir\"")
-    expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" >"$tmp"')
+    expect(bootstrap).toContain('printf \'%s\\n\' "$$" "$PORT" "$PASSWORD" "$DIR" "$start" "$EXE" >"$tmp"')
     expect(bootstrap).not.toContain('. "$state_file"')
     expect(bootstrap).not.toContain("cd /srv/remote dir/$(touch nope)`rm -f nope`")
-    expect(stop).not.toContain("/srv/remote dir/$(touch nope)`rm -f nope`")
+    expect(stop).toContain("dir='/srv/remote dir/$(touch nope)`rm -f nope`'")
+    expect(stop).not.toContain("cd /srv/remote dir/$(touch nope)`rm -f nope`")
   })
 })
 
@@ -153,8 +237,10 @@ describe("createSshRemoteHostService", () => {
         stderr: "",
       }),
       openTunnel: () => ({
+        port: Promise.resolve(4100),
         stop: () => undefined,
         onExit: (cb) => exits.push(cb),
+        onError: () => undefined,
       }),
       health: async () => true,
       validateRemoteDirectory: async (url, password, directory) => {
@@ -177,6 +263,57 @@ describe("createSshRemoteHostService", () => {
     expect(exits).toHaveLength(1)
   })
 
+  test("waits for SSH to own a dynamically allocated local port before health", async () => {
+    const assigned = deferred<number>()
+    const opened = deferred<void>()
+    let allocations = 0
+    let args: string[] = []
+    let healthUrl: string | undefined
+    const service = createSshRemoteHostService({
+      allocatePort: async () => {
+        allocations += 1
+        return 4210
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000010",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: async () => ({
+        code: 0,
+        signal: null,
+        stdout: '{"attached":false,"port":4310,"username":"slopcode","password":"secret"}\n',
+        stderr: "",
+      }),
+      openTunnel: (next) => {
+        args = next
+        opened.resolve()
+        return {
+          port: assigned.promise,
+          stop: () => undefined,
+          onExit: () => undefined,
+          onError: () => undefined,
+        }
+      },
+      health: async (url) => {
+        healthUrl = url
+        return true
+      },
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const pending = service.ensureWorkspace(fixtureTarget())
+    await opened.promise
+
+    expect(allocations).toBe(1)
+    expect(args).toContain("127.0.0.1:0:127.0.0.1:4310")
+    expect(healthUrl).toBeUndefined()
+
+    assigned.resolve(4321)
+    await pending
+    expect(healthUrl).toBe("http://127.0.0.1:4321")
+  })
+
   test("surfaces unexpected tunnel exits as failed state", async () => {
     let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
     const service = createSshRemoteHostService({
@@ -193,10 +330,12 @@ describe("createSshRemoteHostService", () => {
         stderr: "",
       }),
       openTunnel: () => ({
+        port: Promise.resolve(4101),
         stop: () => undefined,
         onExit: (cb) => {
           exit = cb
         },
+        onError: () => undefined,
       }),
       health: async () => true,
       validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
@@ -204,6 +343,7 @@ describe("createSshRemoteHostService", () => {
 
     const ready = await service.ensureWorkspace(fixtureTarget())
     exit?.(255, null)
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(service.getState(ready.id)).toEqual({
       kind: "failed",
@@ -212,6 +352,114 @@ describe("createSshRemoteHostService", () => {
       workspace: ready.workspace,
       message: "SSH tunnel exited (code=255 signal=null)",
     })
+  })
+
+  test("rejects an early tunnel error, redacts its password, and cleans the owned server", async () => {
+    const remote = createRemoteMachine()
+    const events: string[] = []
+    const secret = "00000000-0000-4000-8000-000000000011"
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4111,
+      uuid: () => secret,
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => ({
+        port: new Promise<number>(() => undefined),
+        stop: () => undefined,
+        onExit: () => undefined,
+        onError: (cb) => queueMicrotask(() => cb(new Error(`spawn ssh ENOENT ${secret}`))),
+      }),
+      health: async () => {
+        throw new Error("health should not run")
+      },
+      validateRemoteDirectory: async () => {
+        throw new Error("validation should not run")
+      },
+    })
+    const unsubscribe = service.subscribe((event) => events.push(event.state.kind))
+    const target = fixtureTarget()
+    const pending = service.ensureWorkspace(target)
+
+    await expect(pending).rejects.toThrow(secret)
+    unsubscribe()
+
+    expect(events).toEqual(["validating", "starting", "failed"])
+    expect(service.getState(normalizeSshTarget(target).id)).toMatchObject({
+      kind: "failed",
+      message: "spawn ssh ENOENT [redacted]",
+    })
+    expect(remote.remote.state).toBeUndefined()
+    expect(remote.remote.stops).toBe(1)
+  })
+
+  test("rejects an early tunnel exit and cleans the owned server", async () => {
+    const remote = createRemoteMachine()
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
+    let healthCalls = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4112,
+      uuid: () => "00000000-0000-4000-8000-000000000012",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => ({
+        port: new Promise<number>(() => undefined),
+        stop: () => undefined,
+        onExit: (cb) => {
+          exit = cb
+          queueMicrotask(() => exit?.(255, null))
+        },
+        onError: () => undefined,
+      }),
+      health: async () => {
+        healthCalls += 1
+        return true
+      },
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    await expect(service.ensureWorkspace(fixtureTarget())).rejects.toThrow("SSH tunnel exited (code=255 signal=null)")
+
+    expect(healthCalls).toBe(0)
+    expect(remote.remote.state).toBeUndefined()
+    expect(remote.remote.stops).toBe(1)
+  })
+
+  test("cleans remote state when a ready tunnel exits unexpectedly", async () => {
+    const remote = createRemoteMachine()
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4113,
+      uuid: () => "00000000-0000-4000-8000-000000000013",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => ({
+        port: Promise.resolve(4213),
+        stop: () => undefined,
+        onExit: (cb) => {
+          exit = cb
+        },
+        onError: () => undefined,
+      }),
+      health: async () => true,
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const ready = await service.ensureWorkspace(fixtureTarget())
+    exit?.(255, null)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(service.getState(ready.id)?.kind).toBe("failed")
+    expect(remote.remote.state).toBeUndefined()
+    expect(remote.remote.stops).toBe(1)
   })
 
   test("cancels a pending startup before it can become ready", async () => {
@@ -240,11 +488,13 @@ describe("createSshRemoteHostService", () => {
         }
       },
       openTunnel: () => ({
+        port: Promise.resolve(4102),
         stop: () => {
           if (stops) return
           stops += 1
         },
         onExit: () => undefined,
+        onError: () => undefined,
       }),
       health: async (_url, _password, signal) => {
         gate.resolve()
@@ -295,10 +545,12 @@ describe("createSshRemoteHostService", () => {
       }),
       runSsh: remote.runSsh,
       openTunnel: () => ({
+        port: Promise.resolve(4105),
         stop: () => {
           stops += 1
         },
         onExit: () => undefined,
+        onError: () => undefined,
       }),
       health: async () => true,
       validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
@@ -314,6 +566,61 @@ describe("createSshRemoteHostService", () => {
     expect(remote.runs).toHaveLength(2)
     expect(remote.runs[1]).not.toContain("expected_password=")
     expect(service.getState(ready.id)?.kind).toBe("stopped")
+  })
+
+  test("serializes a stop before a new ensure for the same workspace", async () => {
+    const remote = createRemoteMachine({
+      state: {
+        port: 4208,
+        password: "attached-secret",
+      },
+    })
+    const stopStarted = deferred<void>()
+    const releaseStop = deferred<void>()
+    let tunnelCount = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4108,
+      uuid: () => "00000000-0000-4000-8000-000000000009",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: async (args, script, timeoutMs, signal) => {
+        if (!script.includes("nohup sh -se <<'EOF'") && !script.includes("expected_password=")) {
+          stopStarted.resolve()
+          await releaseStop.promise
+        }
+        return remote.runSsh(args, script, timeoutMs, signal)
+      },
+      openTunnel: () => {
+        tunnelCount += 1
+        return {
+          port: Promise.resolve(4108),
+          stop: () => undefined,
+          onExit: () => undefined,
+          onError: () => undefined,
+        }
+      },
+      health: async () => true,
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const first = await service.ensureWorkspace(fixtureTarget())
+    const stopping = service.stopWorkspace(first.id)
+    await stopStarted.promise
+
+    const second = service.ensureWorkspace(fixtureTarget())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(tunnelCount).toBe(1)
+
+    releaseStop.resolve()
+    await stopping
+    await second
+
+    expect(tunnelCount).toBe(2)
+    expect(remote.remote.state).toBeDefined()
+    expect(remote.remote.starts).toBe(1)
+    expect(remote.remote.stops).toBe(1)
   })
 
   test("does not stop an attached server when startup fails after attach", async () => {
@@ -336,10 +643,12 @@ describe("createSshRemoteHostService", () => {
       }),
       runSsh: remote.runSsh,
       openTunnel: () => ({
+        port: Promise.resolve(4105),
         stop: () => {
           stops += 1
         },
         onExit: () => undefined,
+        onError: () => undefined,
       }),
       health: async () => true,
       validateRemoteDirectory: async () => {
@@ -391,11 +700,13 @@ describe("createSshRemoteHostService", () => {
       }),
       runSsh: remote.runSsh,
       openTunnel: () => ({
+        port: Promise.resolve(4103),
         stop: () => {
           if (stops) return
           stops += 1
         },
         onExit: () => undefined,
+        onError: () => undefined,
       }),
       health: async (_url, _password, signal) => {
         gate.resolve()
@@ -445,8 +756,10 @@ describe("createSshRemoteHostService", () => {
       }),
       runSsh: remote.runSsh,
       openTunnel: () => ({
+        port: Promise.resolve(4107),
         stop: () => undefined,
         onExit: () => undefined,
+        onError: () => undefined,
       }),
       health: async () => true,
       validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
@@ -462,7 +775,7 @@ describe("createSshRemoteHostService", () => {
 
     expect(remote.remote.state).toBeUndefined()
     expect(remote.remote.stops).toBe(0)
-    expect(remote.runs.at(-1)).toContain('if ! matches_server "$state_pid" "$state_port"; then')
+    expect(remote.runs.at(-1)).toContain('if ! matches_server "$state_pid" "$state_port" "$state_start" "$state_exe"; then')
   })
 
   test("cleans launched bootstrap state on abort before bootstrap JSON is parsed", async () => {
@@ -483,8 +796,10 @@ describe("createSshRemoteHostService", () => {
       openTunnel: () => {
         tunnels += 1
         return {
+          port: Promise.resolve(4106),
           stop: () => undefined,
           onExit: () => undefined,
+          onError: () => undefined,
         }
       },
       health: async () => true,
@@ -565,22 +880,41 @@ function runMatcher(
   opts: {
     pid?: string
     port?: string
+    stateStart?: string
+    processStart?: string
+    stateExe?: string
+    processExe?: string
     comm: string
     command: string
   },
 ) {
   const pid = opts.pid ?? "4321"
   const port = opts.port ?? "4200"
+  const stateStart = opts.stateStart ?? "start"
+  const processStart = opts.processStart ?? stateStart
+  const stateExe = opts.stateExe ?? "/usr/bin/slopcode"
+  const processExe = opts.processExe ?? opts.comm
+  const identity = script.slice(script.indexOf("process_start() {"), script.indexOf("matches_server() {"))
   const fn = match(script, /(^matches_server\(\) \{[\s\S]*?^})/m)
   const input = [
     "set -eu",
     `pid=${shellQuote(pid)}`,
     `port=${shellQuote(port)}`,
+    `state_start=${shellQuote(stateStart)}`,
+    `state_exe=${shellQuote(stateExe)}`,
     `comm=${shellQuote(opts.comm)}`,
     `command=${shellQuote(opts.command)}`,
+    `processStart=${shellQuote(processStart)}`,
+    `processExe=${shellQuote(processExe)}`,
+    "comm_calls=0",
     "ps() {",
     '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "comm=" ]; then',
-    '    printf \'%s\\n\' "$comm"',
+    '    comm_calls=$((comm_calls + 1))',
+    '    if [ "$comm_calls" -eq 1 ]; then printf \'%s\\n\' "$processExe"; else printf \'%s\\n\' "$comm"; fi',
+    "    return 0",
+    "  fi",
+    '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "lstart=" ]; then',
+    '    printf \'%s\\n\' "$processStart"',
     "    return 0",
     "  fi",
     '  if [ "$1" = "-p" ] && [ "$2" = "$pid" ] && [ "$3" = "-o" ] && [ "$4" = "command=" ]; then',
@@ -589,8 +923,9 @@ function runMatcher(
     "  fi",
     "  return 1",
     "}",
+    identity,
     fn,
-    'matches_server "$pid" "$port"',
+    'matches_server "$pid" "$port" "$state_start" "$state_exe"',
   ].join("\n")
   const result = spawnSync("sh", ["-se"], {
     input,
@@ -667,7 +1002,12 @@ function createRemoteMachine(
           remote.stops += 1
         }
       }
-      if (remote.state && remote.state.server === false && !expected && script.includes('if ! matches_server "$state_pid" "$state_port"; then')) {
+      if (
+        remote.state &&
+        remote.state.server === false &&
+        !expected &&
+        script.includes('if ! matches_server "$state_pid" "$state_port" "$state_start" "$state_exe"; then')
+      ) {
         remote.state = undefined
       }
       if (signal?.aborted) throw signal.reason
