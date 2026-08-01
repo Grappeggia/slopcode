@@ -84,6 +84,13 @@ export async function persistServerSecret(secret?: RemoteWorkspaceSecret) {
   await writeRemoteWorkspaceSecret(secure, secret)
 }
 
+export async function persistRemoteWorkspace(state: RemoteWorkspaceState, secret?: RemoteWorkspaceSecret) {
+  const secure = secureStorage()
+  if (!secure) throw new Error("Android secure storage is unavailable")
+  await writeRemoteWorkspaceState(secure, state)
+  await writeRemoteWorkspaceSecret(secure, secret)
+}
+
 export type AndroidWorkspaceBootstrap = Awaited<ReturnType<typeof readInitialWorkspaceState>>
 
 export async function shellBridge() {

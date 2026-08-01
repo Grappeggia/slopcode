@@ -32,7 +32,11 @@ export function createSdkForServer({
 
   return createSlopcodeClient({
     ...config,
+    directory: server.directory,
+    experimental_workspaceID: server.workspaceID,
     headers: {
+      ...(server.workspaceID ? { "x-slopcode-workspace": server.workspaceID } : {}),
+      ...(server.directory ? { "x-slopcode-directory": server.directory } : {}),
       ...(config.headers instanceof Headers ? Object.fromEntries(config.headers.entries()) : config.headers),
       ...auth,
     },

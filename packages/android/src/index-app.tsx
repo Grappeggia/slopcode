@@ -10,12 +10,17 @@ import {
 import "@slopcode-ai/app/index.css"
 import pkg from "../package.json"
 import { appStorage, persistServerUrl, readInitialWorkspaceState, shellBridge } from "./platform"
+import { RemoteConnect } from "./remote-connect"
 
 export async function mountAndroidApp() {
   const root = document.getElementById("root")
   if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
 
   const [shell, initial] = await Promise.all([shellBridge(), readInitialWorkspaceState()])
+  if (!initial.state.serverUrl) {
+    render(() => <RemoteConnect onConnected={() => window.location.reload()} />, root)
+    return
+  }
   const platform: Platform = {
     platform: "android",
     version: pkg.version,
@@ -59,6 +64,9 @@ export async function mountAndroidApp() {
         url: initial.state.serverUrl,
         username: initial.secret?.username,
         password: initial.secret?.password,
+        workspaceID: initial.state.workspace?.workspace?.id,
+        directory:
+          initial.state.workspace?.workspace?.remoteDirectory ?? initial.state.workspace?.workspace?.directory,
       },
       displayName: initial.state.workspace?.workspace?.name ?? initial.state.workspace?.host?.name,
       label: initial.state.workspace?.workspace?.mode,
