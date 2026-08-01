@@ -20,8 +20,10 @@ private slots:
   void rejectsUnsafeScopePathsAndBodies();
   void rejectsDuplicateOversizedAndDeepFrames();
   void validatesDigestsCapabilitiesIdempotencyAndStreams();
+  void validatesSessionNegotiationBindings();
   void hardensLocalForwarding();
   void requestsAnOsAssignedSshPort();
+  void makesSshTeardownIdempotent();
 };
 
 namespace {
@@ -178,7 +180,7 @@ void FrameTest::acceptsAllSupportedFrames()
   QJsonObject ptyOpen = requestBase(QStringLiteral("pty.open"));
   ptyOpen.insert(QStringLiteral("ptyID"), QStringLiteral("pty_remote_1"));
   ptyOpen.insert(QStringLiteral("command"), QStringLiteral("bash"));
-  ptyOpen.insert(QStringLiteral("args"), QJsonArray{QStringLiteral("-lc"), QStringLiteral("printf ready")});
+  ptyOpen.insert(QStringLiteral("args"), QJsonArray{QString(), QStringLiteral("printf ready")});
   ptyOpen.insert(QStringLiteral("cwd"), QStringLiteral("/srv/slopcode/packages/protocol"));
   ptyOpen.insert(QStringLiteral("rows"), 40);
   ptyOpen.insert(QStringLiteral("cols"), 120);
@@ -221,7 +223,7 @@ void FrameTest::acceptsAllSupportedFrames()
   approval.insert(QStringLiteral("notificationID"), QStringLiteral("ntf_approval_1"));
   approval.insert(QStringLiteral("requestID"), QStringLiteral("req_http_1"));
   approval.insert(QStringLiteral("action"), QStringLiteral("shell"));
-  approval.insert(QStringLiteral("resources"), QJsonArray{QStringLiteral("bash -lc printf ready")});
+  approval.insert(QStringLiteral("resources"), QJsonArray{QStringLiteral("bash -lc\nprintf ready")});
   approval.insert(QStringLiteral("reason"), QStringLiteral("The session requested a shell command"));
   frames << approval;
 
@@ -243,7 +245,7 @@ void FrameTest::acceptsAllSupportedFrames()
 
   QJsonObject questionReply = requestBase(QStringLiteral("question.reply"));
   questionReply.insert(QStringLiteral("notificationID"), QStringLiteral("ntf_question_1"));
-  questionReply.insert(QStringLiteral("answers"), QJsonArray{QJsonArray{QStringLiteral("yes")}});
+  questionReply.insert(QStringLiteral("answers"), QJsonArray{QJsonArray{QStringLiteral("yes\n")}});
   frames << questionReply;
 
   QJsonObject questionReject = requestBase(QStringLiteral("question.reject"));
@@ -374,6 +376,18 @@ void FrameTest::rejectsUnsafeScopePathsAndBodies()
   QVERIFY(!parseFrame(QJsonDocument(request).toJson(QJsonDocument::Compact)));
   request.insert(QStringLiteral("body"), body(QString(64 * 1024 + 1, QChar('x'))));
   QVERIFY(!parseFrame(QJsonDocument(request).toJson(QJsonDocument::Compact)));
+
+  QJsonObject approval = eventBase(QStringLiteral("approval.request"));
+  approval.insert(QStringLiteral("notificationID"), QStringLiteral("ntf_approval_1"));
+  approval.insert(QStringLiteral("action"), QStringLiteral("shell"));
+  approval.insert(QStringLiteral("resources"), QJsonArray{QString()});
+  approval.insert(QStringLiteral("reason"), QStringLiteral("needs approval"));
+  QVERIFY(!parseFrame(QJsonDocument(approval).toJson(QJsonDocument::Compact)));
+
+  QJsonObject question = requestBase(QStringLiteral("question.reply"));
+  question.insert(QStringLiteral("notificationID"), QStringLiteral("ntf_question_1"));
+  question.insert(QStringLiteral("answers"), QJsonArray{QJsonArray{QString()}});
+  QVERIFY(!parseFrame(QJsonDocument(question).toJson(QJsonDocument::Compact)));
 }
 
 void FrameTest::rejectsDuplicateOversizedAndDeepFrames()
@@ -473,6 +487,34 @@ void FrameTest::validatesDigestsCapabilitiesIdempotencyAndStreams()
   QVERIFY(remoteStreamComplete(state));
 }
 
+void FrameTest::validatesSessionNegotiationBindings()
+{
+  QJsonObject opened = responseBase(QStringLiteral("session.opened"), QStringLiteral("req_open_1"));
+  opened.insert(QStringLiteral("sessionID"), QStringLiteral("ses_remote_1"));
+  opened.insert(QStringLiteral("capabilities"), QJsonObject{{QStringLiteral("accepted"), capabilities().value(QStringLiteral("offered"))}});
+
+  QString error;
+  QVERIFY2(remoteTransportSessionOpenedMatches(sessionOpen(), opened, &error), qPrintable(error));
+
+  QJsonObject mismatch = opened;
+  mismatch.insert(QStringLiteral("requestID"), QStringLiteral("req_other_1"));
+  QVERIFY(!remoteTransportSessionOpenedMatches(sessionOpen(), mismatch, &error));
+  mismatch = opened;
+  mismatch.insert(QStringLiteral("idempotencyKey"), QStringLiteral("idem_other_1"));
+  QVERIFY(!remoteTransportSessionOpenedMatches(sessionOpen(), mismatch, &error));
+  mismatch = opened;
+  mismatch.insert(QStringLiteral("requestDigest"), QString(64, QChar('b')));
+  QVERIFY(!remoteTransportSessionOpenedMatches(sessionOpen(), mismatch, &error));
+  mismatch = opened;
+  QJsonObject otherTarget = target();
+  otherTarget.insert(QStringLiteral("remoteDirectory"), QStringLiteral("/srv/other"));
+  mismatch.insert(QStringLiteral("target"), otherTarget);
+  QVERIFY(!remoteTransportSessionOpenedMatches(sessionOpen(), mismatch, &error));
+  mismatch = opened;
+  mismatch.insert(QStringLiteral("capabilities"), QJsonObject{{QStringLiteral("accepted"), QJsonArray{QStringLiteral("frame.bounds.v1")}}});
+  QVERIFY(!remoteTransportSessionOpenedMatches(sessionOpen(), mismatch, &error));
+}
+
 void FrameTest::hardensLocalForwarding()
 {
   LocalSlopcodeForwarder forwarder;
@@ -490,6 +532,22 @@ void FrameTest::hardensLocalForwarding()
                                          {}, {}, &error) != nullptr);
   QVERIFY(forwarder.forwardHTTPWithQuery(QByteArrayLiteral("GET"), QStringLiteral("/api"), QStringLiteral("q=%23"),
                                          {}, {}, &error) == nullptr);
+
+  const QUrl origin(QStringLiteral("http://127.0.0.1:43123"));
+  QUrl resolved;
+  QVERIFY2(LocalSlopcodeForwarder::validateRedirectLocation(origin, QByteArrayLiteral("/api/next?q=1"), &resolved, &error),
+           qPrintable(error));
+  QCOMPARE(resolved, QUrl(QStringLiteral("http://127.0.0.1:43123/api/next?q=1")));
+  for (const QByteArray &location : {
+         QByteArrayLiteral("../secrets"),
+         QByteArrayLiteral("/api/../secrets"),
+         QByteArrayLiteral("/api/%2e%2e/secrets"),
+         QByteArrayLiteral("/api?next=%23"),
+         QByteArrayLiteral("http://127.0.0.2:43123/api"),
+         QByteArrayLiteral("http://127.0.0.1:43123/api/../secrets"),
+       }) {
+    QVERIFY(!LocalSlopcodeForwarder::validateRedirectLocation(origin, location, &resolved, &error));
+  }
 }
 
 void FrameTest::requestsAnOsAssignedSshPort()
@@ -508,6 +566,17 @@ void FrameTest::requestsAnOsAssignedSshPort()
   QVERIFY(arguments.contains(QStringLiteral("127.0.0.1:0:127.0.0.1:43123")));
   QVERIFY(buildSshTunnelArguments(targetValue, targetValue.knownHostsPath, 43124, &error).isEmpty());
   QVERIFY(!validateRemoteFolder(QStringLiteral("/srv/slopcode/../secrets"), &error));
+}
+
+void FrameTest::makesSshTeardownIdempotent()
+{
+  SshTargetSupervisor supervisor;
+  supervisor.stop();
+  QCOMPARE(supervisor.state(), SshState::Stopped);
+  QCOMPARE(supervisor.localPort(), quint16(0));
+  supervisor.stop();
+  QCOMPARE(supervisor.state(), SshState::Stopped);
+  QCOMPARE(supervisor.localPort(), quint16(0));
 }
 
 QTEST_MAIN(FrameTest)

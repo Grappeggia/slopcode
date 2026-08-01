@@ -272,6 +272,7 @@ bool SshTargetSupervisor::start(const SshTarget &target, QString *error)
     return fail(error, QStringLiteral("SSH target supervisor is already running"));
   }
   if (!validateTarget(target, error)) {
+    teardownProcesses();
     return false;
   }
 
@@ -279,12 +280,13 @@ bool SshTargetSupervisor::start(const SshTarget &target, QString *error)
     pinnedKnownHosts_.setAutoRemove(true);
     pinnedKnownHosts_.setFileTemplate(QDir::tempPath() + QStringLiteral("/slopcode-remote-known-hosts-XXXXXX"));
     if (!pinnedKnownHosts_.open()) {
+      teardownProcesses();
       return fail(error, QStringLiteral("could not create pinned known_hosts file"));
     }
     const QStringList fields = target.pinnedHostKey.trimmed().split(QRegularExpression(QStringLiteral(R"(\s+)")), Qt::SkipEmptyParts);
     const QByteArray line = (hostPattern(target) + QStringLiteral(" ") + fields.at(0) + QStringLiteral(" ") + fields.at(1) + QStringLiteral("\n")).toUtf8();
     if (pinnedKnownHosts_.write(line) != line.size() || !pinnedKnownHosts_.flush()) {
-      cleanupKnownHosts();
+      teardownProcesses();
       return fail(error, QStringLiteral("could not write pinned known_hosts file"));
     }
     pinnedKnownHosts_.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
@@ -293,6 +295,7 @@ bool SshTargetSupervisor::start(const SshTarget &target, QString *error)
   } else {
     const QFileInfo info(target.knownHostsPath);
     if (!info.isFile() || !info.isReadable()) {
+      teardownProcesses();
       return fail(error, QStringLiteral("known_hosts path is not a readable file"));
     }
     knownHostsPath_ = target.knownHostsPath;
@@ -302,7 +305,7 @@ bool SshTargetSupervisor::start(const SshTarget &target, QString *error)
   tunnelError_.clear();
   QStringList execArguments = buildSshExecArguments(target, knownHostsPath_, error);
   if (execArguments.isEmpty()) {
-    cleanupKnownHosts();
+    teardownProcesses();
     return false;
   }
 
@@ -317,11 +320,21 @@ bool SshTargetSupervisor::start(const SshTarget &target, QString *error)
 void SshTargetSupervisor::stop()
 {
   if (state_ == SshState::Stopped) {
-    cleanupKnownHosts();
+    teardownProcesses();
     return;
   }
 
   setState(SshState::Stopped);
+  teardownProcesses();
+  emit stopped();
+}
+
+void SshTargetSupervisor::teardownProcesses()
+{
+  if (tearingDown_) {
+    return;
+  }
+  tearingDown_ = true;
   if (remoteProcess_.state() != QProcess::NotRunning) {
     remoteProcess_.closeWriteChannel();
     remoteProcess_.terminate();
@@ -341,7 +354,7 @@ void SshTargetSupervisor::stop()
   tunnelError_.clear();
   localPort_ = 0;
   cleanupKnownHosts();
-  emit stopped();
+  tearingDown_ = false;
 }
 
 void SshTargetSupervisor::cleanupKnownHosts()
@@ -362,17 +375,15 @@ void SshTargetSupervisor::setState(SshState state)
 
 void SshTargetSupervisor::failClosed(const QString &message)
 {
-  if (state_ == SshState::Failed || state_ == SshState::Stopped) {
+  if (state_ == SshState::Stopped) {
+    teardownProcesses();
     return;
   }
-  setState(SshState::Failed);
-  emit failed(message);
-  if (remoteProcess_.state() != QProcess::NotRunning) {
-    remoteProcess_.terminate();
+  if (state_ != SshState::Failed) {
+    setState(SshState::Failed);
+    emit failed(message);
   }
-  if (tunnelProcess_.state() != QProcess::NotRunning) {
-    tunnelProcess_.terminate();
-  }
+  teardownProcesses();
 }
 
 void SshTargetSupervisor::handleRemoteStarted()

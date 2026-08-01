@@ -143,6 +143,9 @@ bool verifyRemoteRequestDigest(const QJsonObject &request, QString *error = null
 bool remoteTransportCapabilitiesMatch(const QJsonObject &offered,
                                       const QJsonObject &accepted,
                                       QString *error = nullptr);
+bool remoteTransportSessionOpenedMatches(const QJsonObject &open,
+                                         const QJsonObject &opened,
+                                         QString *error = nullptr);
 
 ParseResult parseFrame(const QByteArray &bytes);
 

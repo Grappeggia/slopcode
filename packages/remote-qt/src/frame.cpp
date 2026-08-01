@@ -483,6 +483,7 @@ bool validateStringArray(const QJsonValue &value,
                          int maxItems,
                          int maxBytes,
                          int itemMaxBytes,
+                         bool nonEmpty,
                          bool controls,
                          const QString &label,
                          QString *error)
@@ -495,7 +496,7 @@ bool validateStringArray(const QJsonValue &value,
     return fail(error, label + QStringLiteral(" is too large"));
   }
   for (const QJsonValue &item : array) {
-    if (!validateString(item, itemMaxBytes, true, controls, nullptr, label + QStringLiteral(" item"), error)) {
+    if (!validateString(item, itemMaxBytes, nonEmpty, controls, nullptr, label + QStringLiteral(" item"), error)) {
       return false;
     }
   }
@@ -1035,7 +1036,7 @@ bool validateFrameObject(const QJsonObject &object, Frame *frame, QString *error
             optionalString(object, QStringLiteral("ptyID"), kMaxIdentifierBytes, true, false, &kPtyIDPattern, error) &&
             optionalString(object, QStringLiteral("command"), 2 * 1024, true, true, nullptr, error) &&
             (!object.contains(QStringLiteral("args")) ||
-             validateStringArray(object.value(QStringLiteral("args")), kMaxPtyArguments, kMaxArrayBytes, kMaxPtyArgumentBytes, false,
+             validateStringArray(object.value(QStringLiteral("args")), kMaxPtyArguments, kMaxArrayBytes, kMaxPtyArgumentBytes, false, true,
                                  QStringLiteral("args"), error)) &&
             (!object.contains(QStringLiteral("cwd")) ||
              (validateRemoteDirectory(object.value(QStringLiteral("cwd")), error) &&
@@ -1073,7 +1074,7 @@ bool validateFrameObject(const QJsonObject &object, Frame *frame, QString *error
             requiredString(object, QStringLiteral("notificationID"), kMaxIdentifierBytes, true, false, &kNotificationIDPattern, error) &&
             optionalString(object, QStringLiteral("requestID"), kMaxIdentifierBytes, true, false, &kRequestIDPattern, error) &&
             requiredString(object, QStringLiteral("action"), 512, true, false, nullptr, error) &&
-            validateStringArray(object.value(QStringLiteral("resources")), kMaxNotificationItems, kMaxArrayBytes, 2 * 1024, true,
+            validateStringArray(object.value(QStringLiteral("resources")), kMaxNotificationItems, kMaxArrayBytes, 2 * 1024, true, false,
                                 QStringLiteral("resources"), error) &&
             requiredString(object, QStringLiteral("reason"), 2 * 1024, true, false, nullptr, error) && optionalMetadata(object, error);
   } else if (type == QStringLiteral("question.request")) {
@@ -1103,7 +1104,7 @@ bool validateFrameObject(const QJsonObject &object, Frame *frame, QString *error
       const QJsonArray answers = object.value(QStringLiteral("answers")).toArray();
       valid = answers.size() <= 8 && QJsonDocument(answers).toJson(QJsonDocument::Compact).size() <= kMaxArrayBytes;
       for (const QJsonValue &answer : answers) {
-        valid = valid && validateStringArray(answer, 16, kMaxArrayBytes, 2 * 1024, true, QStringLiteral("answers"), error);
+        valid = valid && validateStringArray(answer, 16, kMaxArrayBytes, 2 * 1024, true, false, QStringLiteral("answers"), error);
       }
     }
   } else if (type == QStringLiteral("question.reject")) {
@@ -1511,6 +1512,38 @@ bool remoteTransportCapabilitiesMatch(const QJsonObject &offered,
     }
   }
   return true;
+}
+
+bool remoteTransportSessionOpenedMatches(const QJsonObject &open,
+                                         const QJsonObject &opened,
+                                         QString *error)
+{
+  Frame openFrame;
+  Frame openedFrame;
+  if (!validateFrameObject(open, &openFrame, error)) {
+    return false;
+  }
+  if (openFrame.type != QStringLiteral("session.open")) {
+    return fail(error, QStringLiteral("session negotiation requires a session.open frame"));
+  }
+  if (!validateFrameObject(opened, &openedFrame, error)) {
+    return false;
+  }
+  if (openedFrame.type != QStringLiteral("session.opened")) {
+    return fail(error, QStringLiteral("session negotiation requires a session.opened frame"));
+  }
+  for (const QString &field : {QStringLiteral("requestID"), QStringLiteral("idempotencyKey"),
+                               QStringLiteral("requestDigest")}) {
+    if (open.value(field) != opened.value(field)) {
+      return fail(error, QStringLiteral("session.opened does not match ") + field);
+    }
+  }
+  if (!sameTarget(open.value(QStringLiteral("target")).toObject(), opened.value(QStringLiteral("target")).toObject())) {
+    return fail(error, QStringLiteral("session.opened target does not match session.open"));
+  }
+  return remoteTransportCapabilitiesMatch(open.value(QStringLiteral("capabilities")).toObject(),
+                                           opened.value(QStringLiteral("capabilities")).toObject(),
+                                           error);
 }
 
 RemoteIdempotencyStore::RemoteIdempotencyStore(int maxEntries, qint64 ttlMs)

@@ -73,8 +73,13 @@ stream frames carry the exact scoped target and request binding fields:
 }
 ```
 
-The three capability names are mandatory and are negotiated strictly. Body
-values are `{ "encoding": "utf8" | "base64", "data": "..." }`; regular
+The three capability names are mandatory and are negotiated strictly. A
+`RemoteSession` sends exactly one `session.open`, retains the complete
+validated request while it is pending, rejects all other outbound frames
+until a matching `session.opened`, and rejects duplicate open/opened frames.
+The response must match `requestID`, `idempotencyKey`, `requestDigest`, the
+scoped target, and accepted capabilities before the session becomes
+negotiated. Body values are `{ "encoding": "utf8" | "base64", "data": "..." }`; regular
 HTTP bodies and response bodies are limited to 64 KiB, while
 `http.upload`/`http.upload.chunk` use ordered chunks with a declared
 `contentLength`, a 16 MiB aggregate limit, and a 256 KiB flow-control window.
@@ -111,15 +116,22 @@ It parses OpenSSH's assigned `127.0.0.1` listening port before emitting
 `LocalSlopcodeForwarder` accepts numeric loopback HTTP(S) origins only,
 disables proxies, permits only the RemoteV1 HTTP methods, applies header and
 body bounds, rejects secret/hop-by-hop/forwarding headers, and manually
-revalidates every redirect against the same loopback origin and safe path or
-query. It is a forwarding hook, not a transparent proxy or remote dispatch
-layer.
+validates each raw `Location` path/query before URL resolution. Redirects are
+resolved from the immutable original origin/current validated request URL and
+revalidated against that same origin; traversal and capability-changing
+normalization are rejected. It is a forwarding hook, not a transparent proxy
+or remote dispatch layer.
+
+SSH failure handling is idempotent: every failure path terminates, waits for,
+and kills still-running processes as needed, clears the assigned port and
+target state, and removes temporary pinned-host files.
 
 ## Verification status and intentional limits
 
-The Qt tests cover the discriminated frame variants, strict capabilities,
-auth/proof shape, duplicate keys, limits, paths/queries/headers, replay
-bindings, stream state, SSH dynamic-port arguments, and forwarding policy.
+The Qt tests cover the discriminated frame variants, strict capabilities and
+session response bindings, auth/proof shape, duplicate keys, limits,
+paths/queries/headers, raw redirect policy, replay bindings, stream state,
+SSH dynamic-port arguments and idempotent teardown, and forwarding policy.
 Qt 6.5 is not discoverable in the current development environment, so the Qt
 CMake configure/build/test executable cannot run here until the dependency is
 installed; static scope and whitespace checks are still run before commits.

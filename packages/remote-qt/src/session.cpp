@@ -39,14 +39,16 @@ RemoteSession::RemoteSession(QObject *parent)
     closingForError_ = false;
     textBuffer_.clear();
     textBytes_ = 0;
-    offeredCapabilities_ = {};
+    pendingOpen_.reset();
+    negotiated_ = false;
     setState(State::Connected);
     emit connected();
   });
   connect(socket_, &QWebSocket::disconnected, this, [this]() {
     textBuffer_.clear();
     textBytes_ = 0;
-    offeredCapabilities_ = {};
+    pendingOpen_.reset();
+    negotiated_ = false;
     if (!closingForError_) {
       setState(State::Disconnected);
     }
@@ -93,7 +95,8 @@ bool RemoteSession::connectTo(const QUrl &endpoint,
   closingForError_ = false;
   textBuffer_.clear();
   textBytes_ = 0;
-  offeredCapabilities_ = {};
+  pendingOpen_.reset();
+  negotiated_ = false;
   setState(State::Connecting);
   socket_->open(request);
   return true;
@@ -121,10 +124,41 @@ bool RemoteSession::send(const Frame &frame, QString *error)
   if (bytes.isEmpty()) {
     return false;
   }
-  if (frame.object.value(QStringLiteral("type")).toString() == QStringLiteral("session.open")) {
-    offeredCapabilities_ = frame.object.value(QStringLiteral("capabilities")).toObject();
+  const QString type = frame.object.value(QStringLiteral("type")).toString();
+  if (!negotiated_ && type != QStringLiteral("session.open")) {
+    if (error != nullptr) {
+      *error = QStringLiteral("session.open negotiation is required before other frames");
+    }
+    return false;
   }
-  socket_->sendTextMessage(QString::fromUtf8(bytes));
+  if (type == QStringLiteral("session.open")) {
+    if (negotiated_ || pendingOpen_.has_value()) {
+      if (error != nullptr) {
+        *error = QStringLiteral("duplicate session.open");
+      }
+      return false;
+    }
+  }
+  if (type == QStringLiteral("session.opened")) {
+    if (error != nullptr) {
+      *error = QStringLiteral("session.opened is a received negotiation response");
+    }
+    return false;
+  }
+  const bool opening = type == QStringLiteral("session.open");
+  if (opening) {
+    pendingOpen_ = frame.object;
+  }
+  const qint64 sent = socket_->sendTextMessage(QString::fromUtf8(bytes));
+  if (sent < 0) {
+    if (opening) {
+      pendingOpen_.reset();
+    }
+    if (error != nullptr) {
+      *error = QStringLiteral("WebSocket rejected the frame");
+    }
+    return false;
+  }
   return true;
 }
 
@@ -145,7 +179,8 @@ void RemoteSession::failClosed(const QString &message)
   closingForError_ = true;
   textBuffer_.clear();
   textBytes_ = 0;
-  offeredCapabilities_ = {};
+  pendingOpen_.reset();
+  negotiated_ = false;
   setState(State::Failed);
   emit protocolError(message);
   emit failed(message);
@@ -177,19 +212,25 @@ void RemoteSession::handleTextFrame(const QString &fragment, bool isLastFrame)
     return;
   }
   if (result.frame->type == QStringLiteral("session.open")) {
-    failClosed(QStringLiteral("reference adapter cannot verify Ed25519 session proofs"));
+    failClosed(pendingOpen_.has_value() || negotiated_ ? QStringLiteral("duplicate session.open")
+                                                        : QStringLiteral("reference adapter cannot verify Ed25519 session proofs"));
     return;
   }
   if (result.frame->type == QStringLiteral("session.opened")) {
-    QString capabilityError;
-    if (offeredCapabilities_.isEmpty() ||
-        !remoteTransportCapabilitiesMatch(offeredCapabilities_,
-                                          result.frame->object.value(QStringLiteral("capabilities")).toObject(),
-                                          &capabilityError)) {
-      failClosed(capabilityError.isEmpty() ? QStringLiteral("session capabilities were not negotiated") : capabilityError);
+    if (negotiated_ || !pendingOpen_.has_value()) {
+      failClosed(QStringLiteral("unexpected or duplicate session.opened"));
       return;
     }
-    offeredCapabilities_ = {};
+    QString capabilityError;
+    if (!remoteTransportSessionOpenedMatches(*pendingOpen_, result.frame->object, &capabilityError)) {
+      failClosed(capabilityError.isEmpty() ? QStringLiteral("session.opened did not match session.open") : capabilityError);
+      return;
+    }
+    pendingOpen_.reset();
+    negotiated_ = true;
+  } else if (!negotiated_) {
+    failClosed(QStringLiteral("session.opened negotiation is required before other frames"));
+    return;
   }
   emit frameReceived(*result.frame);
 }

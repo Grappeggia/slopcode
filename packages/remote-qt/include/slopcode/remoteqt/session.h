@@ -7,6 +7,8 @@
 #include <QSslConfiguration>
 #include <QUrl>
 
+#include <optional>
+
 class QWebSocket;
 
 namespace slopcode::remoteqt {
@@ -32,6 +34,7 @@ public:
 
   bool send(const Frame &frame, QString *error = nullptr);
   State state() const { return state_; }
+  bool negotiated() const { return negotiated_; }
   QWebSocket *socket() const { return socket_; }
 
 signals:
@@ -51,7 +54,8 @@ private:
   State state_ = State::Disconnected;
   QString textBuffer_;
   qsizetype textBytes_ = 0;
-  QJsonObject offeredCapabilities_;
+  std::optional<QJsonObject> pendingOpen_;
+  bool negotiated_ = false;
   bool closingForError_ = false;
 };
 

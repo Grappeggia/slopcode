@@ -68,6 +68,7 @@ signals:
 
 private:
   void cleanupKnownHosts();
+  void teardownProcesses();
   void setState(SshState state);
   void failClosed(const QString &message);
   void handleRemoteStarted();
@@ -85,6 +86,7 @@ private:
   QByteArray tunnelError_;
   quint16 localPort_ = 0;
   SshState state_ = SshState::Stopped;
+  bool tearingDown_ = false;
 };
 
 } // namespace slopcode::remoteqt

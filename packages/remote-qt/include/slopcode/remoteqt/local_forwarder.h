@@ -42,6 +42,10 @@ public:
                                QString *error = nullptr);
 
   static bool validateLoopbackURL(const QUrl &url, QString *error = nullptr);
+  static bool validateRedirectLocation(const QUrl &origin,
+                                       const QByteArray &rawLocation,
+                                       QUrl *resolvedURL = nullptr,
+                                       QString *error = nullptr);
 
 private:
   bool makeURL(const QString &path, const QString &query, QUrl *url, QString *error) const;

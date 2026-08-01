@@ -179,6 +179,59 @@ bool validateURL(const QUrl &url, bool allowQuery, QString *error)
   return true;
 }
 
+bool validateRedirectReference(const QUrl &origin,
+                               const QUrl &resolutionBase,
+                               const QByteArray &rawLocation,
+                               QUrl *resolvedURL,
+                               QString *error)
+{
+  if (!validateURL(origin, false, error) || !validateURL(resolutionBase, true, error) ||
+      !sameOrigin(resolutionBase, origin)) {
+    return false;
+  }
+  if (rawLocation.isEmpty() || rawLocation.size() > 16 * 1024 || hasControl(rawLocation) || rawLocation.contains('\\')) {
+    return fail(error, QStringLiteral("redirect Location is empty, too large, or unsafe"));
+  }
+  const QString reference = QString::fromUtf8(rawLocation);
+  if (reference.toUtf8() != rawLocation || reference.contains('#')) {
+    return fail(error, QStringLiteral("redirect Location is not a safe UTF-8 reference"));
+  }
+  const QUrl parsed(reference, QUrl::StrictMode);
+  if (!parsed.isValid()) {
+    return fail(error, QStringLiteral("redirect Location is not a valid URL reference"));
+  }
+
+  const int queryIndex = reference.indexOf('?');
+  const QString beforeQuery = queryIndex < 0 ? reference : reference.left(queryIndex);
+  const QString query = queryIndex < 0 ? QString() : reference.mid(queryIndex + 1);
+  const int schemeSeparator = beforeQuery.indexOf(QStringLiteral("://"));
+  if (!parsed.scheme().isEmpty() && schemeSeparator < 0) {
+    return fail(error, QStringLiteral("redirect Location has an unsupported URL form"));
+  }
+
+  QString rawPath = beforeQuery;
+  const bool authorityReference = beforeQuery.startsWith(QStringLiteral("//")) || schemeSeparator >= 0;
+  if (authorityReference) {
+    const int authorityStart = beforeQuery.startsWith(QStringLiteral("//")) ? 2 : schemeSeparator + 3;
+    const int slash = beforeQuery.indexOf('/', authorityStart);
+    rawPath = slash < 0 ? QString() : beforeQuery.mid(slash);
+  }
+  const QString path = rawPath.isEmpty() ? QStringLiteral("/")
+                                         : rawPath.startsWith('/') ? rawPath : QStringLiteral("/") + rawPath;
+  if (path.toUtf8().size() > 4 * 1024 || !safePath(path) || !safeQuery(query)) {
+    return fail(error, QStringLiteral("redirect Location path or query is outside forwarding bounds"));
+  }
+
+  const QUrl candidate = resolutionBase.resolved(parsed);
+  if (!validateURL(candidate, true, error) || !sameOrigin(candidate, origin)) {
+    return fail(error, QStringLiteral("redirect Location escaped the configured loopback origin"));
+  }
+  if (resolvedURL != nullptr) {
+    *resolvedURL = candidate;
+  }
+  return true;
+}
+
 } // namespace
 
 LocalSlopcodeForwarder::LocalSlopcodeForwarder(const QUrl &baseURL, QObject *parent)
@@ -241,13 +294,16 @@ QNetworkReply *LocalSlopcodeForwarder::forwardHTTPWithQuery(const QByteArray &me
     return nullptr;
   }
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+  const QUrl origin = baseURL_;
+  const QUrl requestBase = url;
   QNetworkReply *reply = manager_->sendCustomRequest(request, method, body);
-  connect(reply, &QNetworkReply::redirected, reply, [this, reply](const QUrl &redirect) {
-    const QUrl candidate = baseURL_.resolved(redirect);
-    if (!validateURL(candidate, true, nullptr) || !sameOrigin(candidate, baseURL_)) {
+  connect(reply, &QNetworkReply::redirected, reply, [reply, origin, requestBase](const QUrl &) mutable {
+    QUrl candidate;
+    if (!validateRedirectReference(origin, requestBase, reply->rawHeader(QByteArrayLiteral("Location")), &candidate, nullptr)) {
       reply->abort();
       return;
     }
+    requestBase = candidate;
     reply->redirectAllowed();
   });
   connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64 total) {
@@ -285,6 +341,14 @@ QWebSocket *LocalSlopcodeForwarder::forwardWebSocket(const QString &path,
 bool LocalSlopcodeForwarder::validateLoopbackURL(const QUrl &url, QString *error)
 {
   return validateURL(url, false, error);
+}
+
+bool LocalSlopcodeForwarder::validateRedirectLocation(const QUrl &origin,
+                                                       const QByteArray &rawLocation,
+                                                       QUrl *resolvedURL,
+                                                       QString *error)
+{
+  return validateRedirectReference(origin, origin, rawLocation, resolvedURL, error);
 }
 
 bool LocalSlopcodeForwarder::makeURL(const QString &path, const QString &query, QUrl *url, QString *error) const
