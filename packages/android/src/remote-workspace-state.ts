@@ -25,12 +25,27 @@ export type RemoteWorkspaceRecord = {
     mode?: "local" | "ssh"
     directory?: string
     remoteDirectory?: string
+    agent?: RemoteAgent
     ssh?: {
       host?: string
       port?: number
       user?: string
     }
   }
+}
+
+export const REMOTE_AGENTS = ["local-slopcode", "codex-cli", "opencode-cli"] as const
+export type RemoteAgent = (typeof REMOTE_AGENTS)[number]
+export const DEFAULT_REMOTE_AGENT: RemoteAgent = "local-slopcode"
+
+export type RemoteFolderScope = {
+  origin: string
+  workspaceID: string
+  authority: string
+}
+
+export type RemoteFolderHistory = RemoteFolderScope & {
+  paths: string[]
 }
 
 export type RemoteWorkspaceCapability = {
@@ -60,6 +75,7 @@ export type RemoteWorkspaceState = {
   serverUrl?: string
   serverSelection?: RemoteServerSelection
   workspace?: RemoteWorkspaceRecord
+  recentFolders?: RemoteFolderHistory[]
   savedAt?: string
 }
 
@@ -78,6 +94,8 @@ const RECORD_KEY = "remote.workspace.v2"
 const LEGACY_STATE_KEY = "remote.workspace"
 const LEGACY_SECRET_KEY = "remote.workspace.secret"
 const NAMESPACE = "slopcode.android.remote.dat"
+const MAX_RECENT_SCOPES = 8
+const MAX_RECENT_FOLDERS = 3
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -99,7 +117,39 @@ function workspaceID(value: unknown) {
 function absolutePath(value: unknown) {
   const next = text(value)
   if (!next || !next.startsWith("/") || next.includes("\\") || next.includes("\u0000")) return
-  if (next.includes("//") || next.split("/").some((part) => part === "." || part === "..")) return
+  if (
+    next.length > 4_096 ||
+    (next !== "/" && next.endsWith("/")) ||
+    next.includes("//") ||
+    /[\u0000-\u001f\u007f\r\n?#]/.test(next) ||
+    next.split("/").some((part) => part === "." || part === "..")
+  ) return
+  return next
+}
+
+function remoteAgent(value: unknown) {
+  if (value === undefined) return DEFAULT_REMOTE_AGENT
+  if (REMOTE_AGENTS.includes(value as RemoteAgent)) return value as RemoteAgent
+}
+
+function safeAuthority(value: unknown) {
+  const next = text(value)
+  if (!next || next.length > 320 || /[\u0000-\u001f\u007f\r\n;&|$`"'<>()[\]{}*?!~\\]/.test(next)) return
+  const at = next.indexOf("@")
+  if (at < 1 || at !== next.lastIndexOf("@") || !/^[A-Za-z_][A-Za-z0-9._-]{0,63}$/.test(next.slice(0, at))) return
+  const target = next.slice(at + 1)
+  if (!target) return
+  if (target.startsWith("[")) {
+    const close = target.indexOf("]")
+    if (close < 0 || target.slice(close + 1) && !/^:[1-9][0-9]{0,4}$/.test(target.slice(close + 1))) return
+    if (!/^[0-9A-Fa-f:.]+$/.test(target.slice(1, close)) || !target.slice(1, close).includes(":")) return
+    return next
+  }
+  const colons = [...target].filter((character) => character === ":").length
+  if (colons > 1) return
+  const host = colons === 1 ? target.slice(0, target.lastIndexOf(":")) : target
+  const suffix = colons === 1 ? target.slice(target.lastIndexOf(":")) : ""
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) || host.includes("..") || (suffix && !/^:[1-9][0-9]{0,4}$/.test(suffix))) return
   return next
 }
 
@@ -179,12 +229,15 @@ function normalizeCapability(value: unknown) {
 
 function normalizeWorkspace(value: unknown) {
   if (!isRecord(value)) return
+  const agent = remoteAgent(value.agent)
+  if (!agent) return
   const record = clean({
     id: text(value.id),
     name: text(value.name),
     mode: mode(value.mode),
     directory: absolutePath(value.directory),
     remoteDirectory: absolutePath(value.remoteDirectory),
+    agent: value.mode === "ssh" ? agent : undefined,
     ssh: normalizeSsh(value.ssh),
   } satisfies NonNullable<RemoteWorkspaceRecord["workspace"]>)
   if (!record) return
@@ -197,6 +250,27 @@ function normalizeWorkspace(value: unknown) {
     })
   }
   return clean(record)
+}
+
+function normalizeRecentFolders(value: unknown) {
+  if (!Array.isArray(value)) return
+  return value
+    .slice(0, MAX_RECENT_SCOPES)
+    .flatMap((item) => {
+      if (!isRecord(item)) return []
+      const origin = normalizeHttpsUrl(item.origin)
+      const workspaceIDValue = workspaceID(item.workspaceID)
+      const authority = safeAuthority(item.authority)
+      if (!origin || !workspaceIDValue || !authority || !Array.isArray(item.paths)) return []
+      const paths = item.paths
+        .filter((path): path is string => typeof path === "string")
+        .map(absolutePath)
+        .filter((path): path is string => !!path)
+        .filter((path, index, all) => all.indexOf(path) === index)
+        .slice(0, MAX_RECENT_FOLDERS)
+      if (paths.length === 0) return []
+      return [{ origin, workspaceID: workspaceIDValue, authority, paths }]
+    })
 }
 
 function normalizeWorkspaceRecord(value: unknown): RemoteWorkspaceRecord | undefined {
@@ -256,6 +330,7 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
   const serverUrl = normalizeHttpsUrl(value.serverUrl)
   const selection = normalizeServerSelection(value.serverSelection, serverUrl)
   const selectedUrl = selection?.url ?? serverUrl
+  const recentFolders = normalizeRecentFolders(value.recentFolders)
   return {
     version: 1,
     serverUrl: selectedUrl,
@@ -274,8 +349,44 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
           }
         : undefined),
     workspace: normalizeWorkspaceRecord(value.workspace ?? value.pairing),
+    ...(recentFolders ? { recentFolders } : {}),
     savedAt: text(value.savedAt),
   }
+}
+
+export function remoteFoldersForScope(state: RemoteWorkspaceState, scope: RemoteFolderScope) {
+  const origin = normalizeHttpsUrl(scope.origin)
+  const workspaceIDValue = workspaceID(scope.workspaceID)
+  const authority = safeAuthority(scope.authority)
+  if (!origin || !workspaceIDValue || !authority) return []
+  const found = state.recentFolders?.find(
+    (item) => item.origin === origin && item.workspaceID === workspaceIDValue && item.authority === authority,
+  )
+  return found?.paths.slice(0, MAX_RECENT_FOLDERS) ?? []
+}
+
+export function rememberRemoteFolder(state: RemoteWorkspaceState, scope: RemoteFolderScope, path: string) {
+  const origin = normalizeHttpsUrl(scope.origin)
+  const workspaceIDValue = workspaceID(scope.workspaceID)
+  const authority = safeAuthority(scope.authority)
+  const folder = absolutePath(path)
+  if (!origin || !workspaceIDValue || !authority || !folder) return normalizeRemoteWorkspaceState(state)
+
+  const current = normalizeRemoteWorkspaceState(state)
+  const history = current.recentFolders ?? []
+  const index = history.findIndex(
+    (item) => item.origin === origin && item.workspaceID === workspaceIDValue && item.authority === authority,
+  )
+  const paths = [folder, ...(index < 0 ? [] : history[index].paths.filter((item) => item !== folder))].slice(
+    0,
+    MAX_RECENT_FOLDERS,
+  )
+  const next = { origin, workspaceID: workspaceIDValue, authority, paths }
+  const recentFolders =
+    index < 0
+      ? [next, ...history].slice(0, MAX_RECENT_SCOPES)
+      : history.map((item, itemIndex) => (itemIndex === index ? next : item))
+  return { ...current, recentFolders }
 }
 
 function initialState() {
@@ -322,7 +433,7 @@ function parseJson(value: string) {
 }
 
 function hasState(state: RemoteWorkspaceState) {
-  return !!state.serverUrl || !!state.workspace || !!state.savedAt || !!state.serverSelection
+  return !!state.serverUrl || !!state.workspace || !!state.savedAt || !!state.serverSelection || !!state.recentFolders?.length
 }
 
 function stored(state: RemoteWorkspaceState, secret?: RemoteWorkspaceSecret): StoredRemoteWorkspace {

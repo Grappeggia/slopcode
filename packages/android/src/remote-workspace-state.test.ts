@@ -4,6 +4,8 @@ import {
   readRemoteWorkspace,
   normalizeHttpsUrl,
   normalizeRemoteWorkspaceState,
+  rememberRemoteFolder,
+  remoteFoldersForScope,
   readRemoteWorkspaceSecret,
   readRemoteWorkspaceState,
   writeRemoteWorkspaceSecret,
@@ -153,6 +155,7 @@ describe("remote workspace state persistence", () => {
           id: "wrk_remote123",
           name: "slopcode",
           mode: "ssh",
+          agent: "local-slopcode",
           directory: "/workspace/slopcode",
           remoteDirectory: "/srv/slopcode",
           ssh: {
@@ -295,5 +298,78 @@ describe("remote workspace state persistence", () => {
     }
     await expect(readRemoteWorkspace(readFailure)).rejects.toThrow("transient read")
     expect(readFailure.values.has("slopcode.android.remote.dat:remote.workspace.v2")).toBeTrue()
+  })
+
+  test("bounds, deduplicates, and scopes recent folders without storing credentials", () => {
+    const state = normalizeRemoteWorkspaceState({
+      version: 1,
+      serverUrl: "https://remote.example.test",
+      workspace: pairing,
+      recentFolders: [
+        {
+          origin: "https://remote.example.test",
+          workspaceID: "wrk_remote123",
+          authority: "marcos@example.test:22",
+          paths: ["/one", "/one", "/two", "/three", "/four", "/../bad"],
+        },
+        {
+          origin: "https://other.example.test",
+          workspaceID: "wrk_remote123",
+          authority: "marcos@example.test:22",
+          paths: ["/other"],
+        },
+      ],
+    })
+    expect(state.recentFolders).toEqual([
+      {
+        origin: "https://remote.example.test",
+        workspaceID: "wrk_remote123",
+        authority: "marcos@example.test:22",
+        paths: ["/one", "/two", "/three"],
+      },
+      {
+        origin: "https://other.example.test",
+        workspaceID: "wrk_remote123",
+        authority: "marcos@example.test:22",
+        paths: ["/other"],
+      },
+    ])
+
+    const scope = {
+      origin: "https://remote.example.test",
+      workspaceID: "wrk_remote123",
+      authority: "marcos@example.test:22",
+    }
+    const next = rememberRemoteFolder(state, scope, "/two")
+    expect(remoteFoldersForScope(next, scope)).toEqual(["/two", "/one", "/three"])
+    expect(remoteFoldersForScope(next, { ...scope, authority: "other@example.test:22" })).toEqual([])
+    expect(JSON.stringify(next)).not.toContain("password")
+  })
+
+  test("fails closed on an unknown persisted agent", () => {
+    const state = normalizeRemoteWorkspaceState({
+      version: 1,
+      serverUrl: "https://remote.example.test",
+      workspace: {
+        ...pairing,
+        workspace: { ...pairing.workspace, agent: "unknown-agent" },
+      },
+    })
+    expect(state.workspace?.workspace).toBeUndefined()
+  })
+
+  test("round-trips the explicit OpenCode CLI agent selection", async () => {
+    const storage = memoryStorage()
+    await writeRemoteWorkspaceState(storage, {
+      version: 1,
+      serverUrl: "https://remote.example.test",
+      workspace: {
+        ...(pairing as unknown as Record<string, unknown>),
+        workspace: { ...pairing.workspace, agent: "opencode-cli" },
+      } as never,
+    })
+    await expect(readRemoteWorkspaceState(storage)).resolves.toMatchObject({
+      workspace: { workspace: { agent: "opencode-cli" } },
+    })
   })
 })

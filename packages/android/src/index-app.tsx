@@ -10,6 +10,7 @@ import {
 import "@slopcode-ai/app/index.css"
 import pkg from "../package.json"
 import { appStorage, persistServerSelection, readInitialWorkspaceState, shellBridge } from "./platform"
+import { RemoteAgentSession } from "./codex-cli"
 import { RemoteConnect } from "./remote-connect"
 import { remoteCapabilityEnabled } from "./remote-workspace-state"
 
@@ -43,6 +44,23 @@ export async function mountAndroidApp() {
       workspaceID: initial.state.workspace?.workspace?.id,
       directory: initial.state.workspace?.workspace?.remoteDirectory ?? initial.state.workspace?.workspace?.directory,
     } as const)
+  const selectedAgent = workspace?.agent
+  if (selectedAgent === "codex-cli" || selectedAgent === "opencode-cli") {
+    render(
+      () => (
+        <RemoteAgentSession
+          agent={selectedAgent}
+          serverUrl={selection.url}
+          username={initial.secret?.username}
+          password={initial.secret?.password ?? ""}
+          workspaceID={selection.workspaceID ?? ""}
+          directory={selection.directory ?? ""}
+        />
+      ),
+      root,
+    )
+    return
+  }
   const server = {
     type: "http",
     authToken: !!initial.secret?.password,
