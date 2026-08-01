@@ -15,10 +15,12 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network WebSockets)
 
 add_library(slopcode_remote_qt STATIC
   include/slopcode/remoteqt/frame.h
+  include/slopcode/remoteqt/http_bridge.h
   include/slopcode/remoteqt/local_forwarder.h
   include/slopcode/remoteqt/session.h
   include/slopcode/remoteqt/ssh_supervisor.h
   src/frame.cpp
+  src/http_bridge.cpp
   src/local_forwarder.cpp
   src/session.cpp
   src/ssh_supervisor.cpp
@@ -46,4 +48,8 @@ if(SLOPCODE_REMOTE_QT_BUILD_TESTS)
   add_executable(slopcode_remote_qt_parser_test tests/frame_test.cpp)
   target_link_libraries(slopcode_remote_qt_parser_test PRIVATE slopcode_remote_qt Qt6::Test)
   add_test(NAME slopcode_remote_qt_parser COMMAND slopcode_remote_qt_parser_test)
+
+  add_executable(slopcode_remote_qt_http_bridge_test tests/http_bridge_test.cpp)
+  target_link_libraries(slopcode_remote_qt_http_bridge_test PRIVATE slopcode_remote_qt Qt6::Test)
+  add_test(NAME slopcode_remote_qt_http_bridge COMMAND slopcode_remote_qt_http_bridge_test)
 endif()

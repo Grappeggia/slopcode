@@ -122,6 +122,26 @@ revalidated against that same origin; traversal and capability-changing
 normalization are rejected. It is a forwarding hook, not a transparent proxy
 or remote dispatch layer.
 
+## Host HTTP bridge
+
+`RemoteHttpBridge` is the reusable host-side dispatcher. Attach it to the
+negotiated `RemoteSession`, set one validated scoped target, and inject the
+`LocalSlopcodeForwarder` that points to the host's local Slopcode server. It
+only handles negotiated `http.request` frames for that exact target, verifies
+the canonical request digest, decodes the `utf8`/`base64` body, and returns a
+bound `http.response` with the original request ID, idempotency key, digest,
+and target. Response bodies are re-encoded as UTF-8 when possible and base64
+otherwise. Secret, hop-by-hop, and forwarding headers are never forwarded or
+returned; local network failures become bounded RemoteV1 `error` frames.
+
+The embedding application must install `RemoteHttpBridge::setAuthorizer`.
+The callback receives each already shape-validated request and must authorize
+its pairing/proof and target against the application's pairing registry or
+proof authority. Without a callback the bridge fails closed and forwards
+nothing. This package intentionally does not provide a relay, pairing
+registry, challenge-consumption store, Ed25519 verifier, or any other proof
+authority.
+
 SSH failure handling is idempotent: every failure path terminates, waits for,
 and kills still-running processes as needed, clears the assigned port and
 target state, and removes temporary pinned-host files.
