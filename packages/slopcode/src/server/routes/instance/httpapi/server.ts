@@ -107,6 +107,7 @@ import { isolatedSessionServices, rawHandlers } from "@slopcode-ai/server/handle
 import { SessionGraph } from "@slopcode-ai/server/session-graph"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@slopcode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
+import { remoteRuntimeHandlers } from "./handlers/remote-runtime"
 import { defaultLayer as remotePairingLayer } from "./remote-pairing"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { serverWorkspaceRoutingLayer } from "./middleware/server-workspace-routing"
@@ -118,6 +119,7 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { AppProcess } from "@slopcode-ai/core/process"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -179,6 +181,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     syncHandlers,
     tuiHandlers,
     workspaceHandlers,
+    remoteRuntimeHandlers,
   ]),
   Layer.provide(remotePairingLayer),
 )
@@ -283,8 +286,7 @@ const app = LayerNode.group([
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
-  sessionNode,
-  sessionGraphNode,
+  AppProcess.node,
 ])
 
 type Method = (...args: readonly unknown[]) => Effect.Effect<unknown, unknown, unknown>
