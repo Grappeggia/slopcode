@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
-import { tmpdir } from "node:os"
+import { platform, tmpdir } from "node:os"
 import path, { posix } from "node:path"
 import { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
 import { Schema } from "effect"
@@ -1054,7 +1054,9 @@ type ProcessExit = {
 type ProcessRecord = {
   child: ChildProcess
   errors: Error[]
-  ended: boolean
+  exited: boolean
+  closed: boolean
+  group: boolean
   exit?: ProcessExit
   termination: Promise<void>
   close: Promise<void>
@@ -1070,13 +1072,15 @@ type TunnelConnection = {
   error?: Error
 }
 
-function observeProcess(child: ChildProcess): ProcessRecord {
+function observeProcess(child: ChildProcess, group = false): ProcessRecord {
   let resolveTermination!: () => void
   let resolveClose!: () => void
   const record: ProcessRecord = {
     child,
     errors: [],
-    ended: false,
+    exited: false,
+    closed: false,
+    group,
     termination: new Promise<void>((resolve) => {
       resolveTermination = resolve
     }),
@@ -1086,15 +1090,16 @@ function observeProcess(child: ChildProcess): ProcessRecord {
   }
   const exit = (code: number | null, signal: NodeJS.Signals | null) => {
     record.exit ??= { code, signal }
-    if (record.ended) return
-    record.ended = true
+    if (record.exited) return
+    record.exited = true
     resolveTermination()
   }
   const close = (code: number | null, signal: NodeJS.Signals | null) => {
     record.exit ??= { code, signal }
+    record.closed = true
     resolveClose()
-    if (record.ended) return
-    record.ended = true
+    if (record.exited) return
+    record.exited = true
     resolveTermination()
   }
   child.once("exit", exit)
@@ -1122,14 +1127,17 @@ function streamDrain(stream: NodeJS.ReadableStream | null | undefined, closed: P
 
 function requestKill(record: ProcessRecord, signal: NodeJS.Signals | undefined, label: string) {
   try {
-    if (!record.child.kill(signal)) record.errors.push(new Error(`${label} kill returned false`))
+    const killed = record.group && platform() !== "win32" && record.child.pid
+      ? globalThis.process.kill(-record.child.pid, signal ?? "SIGTERM")
+      : record.child.kill(signal)
+    if (!killed) record.errors.push(new Error(`${label} kill returned false`))
   } catch (error) {
     record.errors.push(new Error(`${label} kill failed: ${errorMessage(error)}`))
   }
 }
 
 async function forceProcess(record: ProcessRecord, label: string, spawnProcess: typeof spawn) {
-  if (process.platform !== "win32" || !record.child.pid) {
+  if (platform() !== "win32" || !record.child.pid) {
     requestKill(record, "SIGKILL", `${label} SIGKILL`)
     return
   }
@@ -1166,11 +1174,11 @@ async function forceProcess(record: ProcessRecord, label: string, spawnProcess: 
 function terminateProcess(record: ProcessRecord, label: string, spawnProcess: typeof spawn = spawn) {
   if (record.stop) return record.stop
   record.stop = (async () => {
-    if (record.ended) return
-    requestKill(record, undefined, label)
-    if (await bounded(record.termination, SSH_TUNNEL_FORCE_KILL_DELAY_MS)) return
+    if (record.closed) return
+    if (!record.exited) requestKill(record, undefined, label)
+    if (await bounded(record.close, SSH_TUNNEL_FORCE_KILL_DELAY_MS)) return
     await forceProcess(record, label, spawnProcess)
-    if (await bounded(record.termination, SSH_TUNNEL_CLEANUP_TIMEOUT_MS - SSH_TUNNEL_FORCE_KILL_DELAY_MS)) return
+    if (await bounded(record.close, SSH_TUNNEL_CLEANUP_TIMEOUT_MS - SSH_TUNNEL_FORCE_KILL_DELAY_MS)) return
     throw new Error(`${label} termination was not confirmed after kill escalation${processErrors(record)}`)
   })()
   return record.stop
@@ -1193,12 +1201,13 @@ function runSsh(args: string[], script: string, timeoutMs: number, signal?: Abor
       child = spawn("ssh", args, {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        detached: platform() !== "win32",
       })
     } catch (error) {
       reject(new Error(`ssh spawn failed: ${errorMessage(error)}`))
       return
     }
-    const process = observeProcess(child)
+    const process = observeProcess(child, platform() !== "win32")
     let stdout = ""
     let stderr = ""
     let settled = false
@@ -1315,12 +1324,13 @@ export function openSshTunnel(
       child = spawnProcess("ssh", args, {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        detached: platform() !== "win32",
       })
     } catch (error) {
       client.destroy()
       return
     }
-    const process = observeProcess(child)
+    const process = observeProcess(child, platform() !== "win32")
     const connection: TunnelConnection = { client, process, closed: false }
     processes.add(process)
     connections.add(connection)
@@ -1339,11 +1349,14 @@ export function openSshTunnel(
     client.pipe(child.stdin)
     child.stdout.pipe(client)
     void process.termination.then(() => {
+      if (!connection.closed && !stopping) {
+        connection.closed = true
+        connections.delete(connection)
+        client.destroy()
+      }
+      return process.close
+    }).then(() => {
       processes.delete(process)
-      if (connection.closed || stopping) return
-      connection.closed = true
-      connections.delete(connection)
-      client.destroy()
     })
   }
   const closeProxy = () => {

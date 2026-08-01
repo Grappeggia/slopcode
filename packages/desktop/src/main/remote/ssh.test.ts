@@ -256,6 +256,28 @@ describe("openSshTunnel", () => {
     }
   })
 
+  test("retains an exited forwarding child until close before escalating cleanup", async () => {
+    const child = new TunnelChild()
+    const tunnel = openSshTunnel(
+      ["-W", "127.0.0.1:4315"],
+      4315,
+      (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn,
+    )
+    const port = await tunnel.port
+    const client = createConnection(port, "127.0.0.1")
+    await onceConnected(client)
+
+    child.finish(0, false)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const stopping = tunnel.stop()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(child.killSignals).toEqual(["SIGKILL"])
+
+    child.close()
+    await stopping
+  })
+
   test("rejects bounded cleanup when child termination is never confirmed", async () => {
     const child = new TunnelChild()
     child.killError = new Error("permission denied")
@@ -1303,6 +1325,7 @@ class TunnelChild extends EventEmitter {
   killSignals: Array<NodeJS.Signals | undefined> = []
   killError: Error | undefined
   exited = false
+  closed = false
 
   constructor() {
     super()
@@ -1316,10 +1339,20 @@ class TunnelChild extends EventEmitter {
     return true
   }
 
-  finish(code: number | null = null) {
+  close(code: number | null = null) {
+    if (this.closed) return
+    this.closed = true
+    this.stdin.end()
+    this.stdout.end()
+    this.stderr.end()
+    this.emit("close", code, null)
+  }
+
+  finish(code: number | null = null, close = true) {
     if (this.exited) return
     this.exited = true
     this.emit("exit", code, null)
+    if (close) this.close(code)
   }
 }
 
