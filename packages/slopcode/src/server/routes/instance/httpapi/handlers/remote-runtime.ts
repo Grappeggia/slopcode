@@ -79,6 +79,13 @@ function agentCommand(agent: Agent, prompt: string, config?: Config) {
   const command = AGENT_COMMANDS[agent]
   if (!executable || !command) return undefined
   const args: Array<string> = [command]
+  if (agent === "opencode-cli") {
+    if (config?.sandbox || config?.approval) return undefined
+    if (config?.model) args.push("--model", config.model)
+    if (config?.profile) args.push("--agent", config.profile)
+    args.push("--", prompt)
+    return { executable, args }
+  }
   if (config?.model) args.push("--model", config.model)
   if (config?.profile) args.push("--profile", config.profile)
   if (config?.sandbox) args.push("--sandbox", config.sandbox)
@@ -101,7 +108,12 @@ export const runAgentPrompt = Effect.fn("RemoteRuntime.agentPrompt")(function* (
 }) {
   const process = yield* AppProcess.Service
   const selected = agentCommand(input.agent, input.prompt, input.config)
-  if (!selected) return yield* new InvalidRequestError({ message: "unsupported agent", field: "agent" })
+  if (!selected) {
+    return yield* new InvalidRequestError({
+      message: input.agent === "opencode-cli" ? "unsupported OpenCode configuration" : "unsupported agent",
+      field: input.agent === "opencode-cli" ? "config" : "agent",
+    })
+  }
   const command = ChildProcess.make(selected.executable, selected.args, {
     cwd: input.directory,
     extendEnv: true,

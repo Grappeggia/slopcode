@@ -181,6 +181,9 @@ export async function promptRemoteAgent(input: RemoteAgentPromptInput, fetcher: 
   if (!serverUrl) throw new Error("Remote agent requires an exact HTTPS desktop or relay URL.")
   if (!workspace || !remoteDirectory || !selectedAgent || !prompt) throw new Error("Remote agent requires a workspace, folder, agent, and prompt.")
   if (input.config !== undefined && !parsedConfig) throw new Error("Remote agent configuration is invalid.")
+  if (selectedAgent === "opencode-cli" && (parsedConfig?.sandbox !== undefined || parsedConfig?.approval !== undefined)) {
+    throw new Error("OpenCode configuration supports only model and profile.")
+  }
 
   const endpoint = new URL(`${serverUrl}/remote/agent/prompt`)
   endpoint.searchParams.set("workspace", workspace)

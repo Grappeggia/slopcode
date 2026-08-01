@@ -45,7 +45,7 @@ describe("Android remote agent session", () => {
       {
         ...input,
         agent: "opencode-cli",
-        config: { model: "gpt-5", profile: "safe-profile", sandbox: "workspace-write", approval: "on-request" },
+        config: { model: "openai/gpt-5", profile: "build" },
       },
       async (url, init) => {
         request = { url: String(url), init }
@@ -59,7 +59,7 @@ describe("Android remote agent session", () => {
     expect(JSON.parse(String(request?.init?.body))).toEqual({
       agent: "opencode-cli",
       prompt: input.prompt,
-      config: { model: "gpt-5", profile: "safe-profile", sandbox: "workspace-write", approval: "on-request" },
+      config: { model: "openai/gpt-5", profile: "build" },
     })
   })
 
@@ -86,6 +86,9 @@ describe("Android remote agent session", () => {
     }
     await expect(promptCodexCli({ ...input, directory: "/Users/../private" }, fetcher)).rejects.toThrow("workspace")
     await expect(promptRemoteAgent({ ...input, agent: "invalid-agent" as never }, fetcher)).rejects.toThrow("workspace")
+    await expect(
+      promptRemoteAgent({ ...input, agent: "opencode-cli", config: { sandbox: "workspace-write" } }, fetcher),
+    ).rejects.toThrow("OpenCode")
     await expect(promptRemoteAgent({ ...input, agent: "opencode-cli", config: { command: "sh" } as never }, fetcher)).rejects.toThrow("configuration")
     await expect(promptCodexCli({ ...input, prompt: "x".repeat(32 * 1024 + 1) }, fetcher)).rejects.toThrow("workspace")
     expect(calls).toBe(0)

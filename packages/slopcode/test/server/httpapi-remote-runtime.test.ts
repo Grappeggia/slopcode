@@ -225,7 +225,11 @@ describe("remote agent runtime", () => {
         prompt,
       ],
     })
-    expect(buildAgentCommand("opencode-cli", prompt)).toEqual({ executable: "opencode", args: ["run", "--", prompt] })
+    expect(buildAgentCommand("opencode-cli", prompt, { model: "openai/gpt-5", profile: "build" })).toEqual({
+      executable: "opencode",
+      args: ["run", "--model", "openai/gpt-5", "--agent", "build", "--", prompt],
+    })
+    expect(buildAgentCommand("opencode-cli", prompt, { sandbox: "workspace-write" })).toBeUndefined()
   })
 
   test("runs both selected executables with cwd and no client-controlled shell options", async () => {
