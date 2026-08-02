@@ -34,7 +34,10 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'teamslop/slopcode'
     permissions:
-      contents: read
+      # Draft releases are only returned to tokens with repository write access.
+      # The job only reads release metadata, but it must be able to resolve the
+      # draft created by the local release preparation step.
+      contents: write
     steps:
       - uses: actions/checkout@v5
         with:
