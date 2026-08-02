@@ -189,15 +189,15 @@ if (mode === "prep") {
   await import(`../packages/slopcode/script/publish.ts`)
 
   if (Script.release && !Script.preview) {
-    const draft = (
-      await $`gh release view v${Script.version} --json isDraft --jq .isDraft --repo ${process.env.GH_REPO}`.text()
-    ).trim()
-    if (draft === "true") {
-      await $`gh release edit v${Script.version} --draft=false --repo ${process.env.GH_REPO}`
-    } else if (draft === "false") {
-      console.log(`release: already finalized v${Script.version}`)
+    type Release = { id: number; tag_name: string; draft: boolean }
+    const repo = process.env.GH_REPO ?? "teamslop/slopcode"
+    const releases = (await $`gh api repos/${repo}/releases?per_page=100`.json()) as Release[]
+    const release = releases.find((item) => item.tag_name === `v${Script.version}`)
+    if (!release) throw new Error(`Could not find release v${Script.version}.`)
+    if (release.draft) {
+      await $`gh api --method PATCH repos/${repo}/releases/${release.id} -f draft=false`
     } else {
-      throw new Error(`Could not verify draft state for v${Script.version}.`)
+      console.log(`release: already finalized v${Script.version}`)
     }
   }
 }

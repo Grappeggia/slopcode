@@ -152,14 +152,18 @@ if (early && (earlyPlan === "success" || earlyPlan === "wait")) {
   process.exit(0)
 }
 if (early && earlyPlan === "rerun") {
-  const draft = (await $`gh release view ${lineage.target} --json isDraft --jq .isDraft --repo ${repo}`.text()).trim()
-  if (draft === "false") {
+  const releases = (await $`gh api repos/${repo}/releases?per_page=100`.json()) as Array<{
+    tag_name: string
+    draft: boolean
+  }>
+  const release = releases.find((item) => item.tag_name === lineage.target)
+  if (release?.draft === false) {
     await $`gh run rerun ${early.databaseId}`.nothrow()
     const url = await waitForRerun(early.databaseId, runWait)
     console.log(`Recovered finalized publish.yml run: ${url}`)
     process.exit(0)
   }
-  if (draft !== "true") throw new Error(`Could not verify draft state for ${lineage.target}.`)
+  if (release?.draft !== true) throw new Error(`Could not verify draft state for ${lineage.target}.`)
 }
 
 const output = path.join(os.tmpdir(), `slopcode-release-${process.pid}-${crypto.randomUUID()}.json`)

@@ -3,6 +3,16 @@
 import { $ } from "bun"
 import { Script } from "@slopcode-ai/script"
 
+type Release = {
+  id: number
+  tag_name: string
+  draft: boolean
+  body?: string
+}
+
+const releases = async (repo: string) =>
+  (await $`gh api repos/${repo}/releases?per_page=100`.json()) as Release[]
+
 export const releaseInfo = async (repo = process.env.GH_REPO ?? "teamslop/slopcode") => {
   const tag = `v${Script.version}`
   const output = {
@@ -14,11 +24,7 @@ export const releaseInfo = async (repo = process.env.GH_REPO ?? "teamslop/slopco
 
   if (!Script.preview) {
     const explicit = process.env.SLOPCODE_RELEASE_NOTES?.trim()
-    const existing = await $`gh release view ${tag} --json tagName,id,isDraft,body --repo ${repo}`.quiet().nothrow()
-    const current =
-      existing.exitCode === 0
-        ? ((await existing.json()) as { tagName: string; id: string; isDraft: boolean; body?: string })
-        : undefined
+    const current = (await releases(repo)).find((item) => item.tag_name === tag)
     const inferred = (await $`git log -n 20 --pretty=format:%s`.text())
       .split(/\r?\n/)
       .filter((line) => line && !/^(chore|ci|release|test)(\(|:)/i.test(line))
@@ -32,15 +38,16 @@ export const releaseInfo = async (repo = process.env.GH_REPO ?? "teamslop/slopco
     }
     if (!current) {
       await $`gh release create ${tag} -d --title ${tag} --notes ${notes} --repo ${repo}`
-    } else if (!current.isDraft) {
+    } else if (!current.draft) {
       throw new Error(`Release ${tag} is already published; only draft releases can be resumed.`)
     } else {
-      await $`gh release edit ${tag} --notes ${notes} --repo ${repo}`
+      await $`gh api --method PATCH repos/${repo}/releases/${current.id} -f body=${notes}`
     }
 
-    const release = await $`gh release view ${tag} --json tagName,id,isDraft --repo ${repo}`.json()
+    const release = (await releases(repo)).find((item) => item.tag_name === tag)
+    if (!release) throw new Error(`Could not find draft release ${tag}.`)
     output.release = `${release.id}`
-    output.tag = release.tagName
+    output.tag = release.tag_name
   }
 
   return output

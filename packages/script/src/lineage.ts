@@ -308,13 +308,20 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
   const stateSha = await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`)
   const all = await releases(options.cwd, tags)
   const anchor = stateSha ? all.find((item) => item.sha === stateSha) : undefined
-  const published = stateSha
-    ? (await history(options.cwd, all, stateSha)).filter(
+  const ancestry = stateSha ? await history(options.cwd, all, stateSha) : []
+  const family = stateSha
+    ? ancestry.filter(
         (item) =>
           item.ancestor &&
           (!anchor ||
             (semver.major(item.version) === semver.major(anchor.version) &&
               semver.minor(item.version) === semver.minor(anchor.version))),
+      )
+    : all
+  const predecessor = stateSha && anchor ? ancestry.find((item) => semver.lt(item.version, anchor.version)) : undefined
+  const published = stateSha
+    ? [...family, ...(predecessor && !family.some((item) => item.tag === predecessor.tag) ? [predecessor] : [])].sort(
+        (a, b) => semver.rcompare(a.version, b.version) || b.tag.localeCompare(a.tag),
       )
     : all
   return {

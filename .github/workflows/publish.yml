@@ -69,7 +69,7 @@ jobs:
           args=(bun run --cwd packages/script lineage verify --tag "v$VERSION" --source "$SOURCE" --require-previous-if-any --remote origin --branch dev)
           if [ -n "$PREVIOUS" ]; then args+=(--previous-tag "$PREVIOUS"); fi
           "${args[@]}"
-          release=$(gh release view "v$VERSION" --json id --jq .id --repo "$GITHUB_REPOSITORY")
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"v$VERSION\") | .id" | head -n 1)
           test -n "$release"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
@@ -341,8 +341,16 @@ jobs:
         run: |
           rm -rf packages/slopcode/dist
           mkdir -p packages/slopcode/dist
+          download_asset() {
+            local name="$1"
+            local output="$2"
+            local asset
+            asset="$(gh api "repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}/assets?per_page=100" --jq ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+            test -n "$asset"
+            gh api -H "Accept: application/octet-stream" "repos/${{ needs.version.outputs.repo }}/releases/assets/$asset" > "$output"
+          }
           for attempt in $(seq 1 30); do
-            if gh release download "${{ needs.version.outputs.tag }}" --pattern "slopcode-cli-dist.tar.gz" --pattern "release-manifest.json" --dir packages/slopcode/dist --repo "${{ needs.version.outputs.repo }}"; then
+            if download_asset "slopcode-cli-dist.tar.gz" packages/slopcode/dist/slopcode-cli-dist.tar.gz && download_asset "release-manifest.json" packages/slopcode/dist/release-manifest.json; then
               bun ./packages/slopcode/script/artifact-manifest.ts verify --dir packages/slopcode/dist --source "${{ inputs.source_sha }}" --version "${{ inputs.version }}" --artifact slopcode-cli-dist.tar.gz
               tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
               rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
@@ -367,7 +375,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          draft=$(gh release view '${{ needs.version.outputs.tag }}' --json isDraft --jq .isDraft --repo '${{ needs.version.outputs.repo }}')
+          draft=$(gh api 'repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}' --jq .draft)
           test "$draft" = "true" || test "$draft" = "false"
           echo "SLOPCODE_RELEASE_DRAFT=$draft" >> "$GITHUB_ENV"
 
