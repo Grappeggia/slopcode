@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
-import { createEffect, createMemo, For, Match, Show, Switch, untrack } from "solid-js"
+import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
@@ -9,7 +9,6 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
-import { permissionActions, permissionProjectLines, type PermissionScopeLabel } from "./permission-copy"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -18,21 +17,8 @@ import { useTuiConfig } from "../../config"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { density, isCompact } from "../../util/density"
-import { errorMessage } from "../../util/error"
-import { useToast } from "../../ui/toast"
-import {
-  createPermissionBatchState,
-  permissionBatchActions,
-  permissionBatchMove,
-  permissionBatchReply,
-  permissionBatchSubmit,
-  permissionBatchSync,
-  permissionBatchToggle,
-  permissionQueue,
-  type PermissionBatchOption,
-} from "./permission-batch"
 
-type PermissionStage = "permission" | "project" | "reject"
+type PermissionStage = "permission" | "always" | "reject"
 
 function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
@@ -123,7 +109,7 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-function PermissionSinglePrompt(props: { request: PermissionRequest; directory?: string }) {
+export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
@@ -131,22 +117,6 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
     stage: "permission" as PermissionStage,
   })
   const pathFormatter = usePathFormatter()
-  const scope = createMemo<PermissionScopeLabel | undefined>(() => {
-    if (!project.data.project.id) return undefined
-    return project.data.project.vcs === "git" ? "project" : "folder"
-  })
-
-  let requestID = props.request.id
-  createEffect(() => {
-    const id = props.request.id
-    if (id === requestID) return
-    requestID = id
-    setStore("stage", "permission")
-  })
-
-  createEffect(() => {
-    if (!scope()) setStore("stage", "permission")
-  })
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
@@ -166,23 +136,38 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
 
   return (
     <Switch>
-      <Match when={store.stage === "project"}>
+      <Match when={store.stage === "always"}>
         <Prompt
-          title={`Always allow these patterns for this ${scope()}`}
+          title="Always allow"
           body={
-            <box paddingLeft={1} gap={1}>
-              <For each={permissionProjectLines(props.request.always, scope())}>
-                {(line, index) => <text fg={index() < 2 ? theme.textMuted : theme.text}>{line}</text>}
-              </For>
-            </box>
+            <Switch>
+              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
+                <TextBody title={"This will allow " + props.request.permission + " until SlopCode is restarted."} />
+              </Match>
+              <Match when={true}>
+                <box paddingLeft={1} gap={1}>
+                  <text fg={theme.textMuted}>This will allow the following patterns until SlopCode is restarted</text>
+                  <box>
+                    <For each={props.request.always}>
+                      {(pattern) => (
+                        <text fg={theme.text}>
+                          {"- "}
+                          {pattern}
+                        </text>
+                      )}
+                    </For>
+                  </box>
+                </box>
+              </Match>
+            </Switch>
           }
           options={{ confirm: "Confirm", cancel: "Cancel" }}
           escapeKey="cancel"
           onSelect={(option) => {
             setStore("stage", "permission")
-            if (option === "cancel" || !scope()) return
+            if (option === "cancel") return
             void sdk.client.permission.reply({
-              reply: "project",
+              reply: "always",
               requestID: props.request.id,
               directory: props.directory,
               workspace: project.workspace.current(),
@@ -420,22 +405,12 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
               title="Permission required"
               header={header()}
               body={current.body}
-              options={permissionActions(props.request.always, scope())}
+              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
-                if (option === "project") {
-                  if (!scope()) return
-                  setStore("stage", "project")
-                  return
-                }
                 if (option === "always") {
-                  void sdk.client.permission.reply({
-                    reply: "always",
-                    requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
-                  })
+                  setStore("stage", "always")
                   return
                 }
                 if (option === "reject") {
@@ -465,187 +440,6 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
         })()}
       </Match>
     </Switch>
-  )
-}
-
-function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory?: string }) {
-  const sdk = useSDK()
-  const project = useProject()
-  const toast = useToast()
-  const { theme } = useTheme()
-  const [store, setStore] = createStore({
-    ...createPermissionBatchState(props.requests),
-    submitting: false,
-  })
-  const selected = createMemo(() => props.requests.filter((item) => store.selected.includes(item.id)))
-  const scope = createMemo<PermissionScopeLabel | undefined>(() => {
-    if (!project.data.project.id) return undefined
-    return project.data.project.vcs === "git" ? "project" : "folder"
-  })
-
-  createEffect(() => {
-    const requests = props.requests
-    const next = untrack(() => permissionBatchSync(store, requests))
-    setStore(!scope() && next.stage === "project" ? { ...next, stage: "review" } : next)
-  })
-
-  const submit = (reply: NonNullable<ReturnType<typeof permissionBatchReply>["reply"]>) => {
-    setStore("submitting", true)
-    void permissionBatchSubmit({
-      send: () =>
-        sdk.client.permission.replyBatch({
-          ...reply,
-          directory: props.directory,
-          workspace: project.workspace.current(),
-        }),
-      error: (error) => toast.show({ variant: "error", message: errorMessage(error) }),
-      done: () => setStore("submitting", false),
-    })
-  }
-
-  const run = (option: PermissionBatchOption) => {
-    if (store.submitting) return
-    if ((option === "project" || option === "confirm") && !scope()) return
-    const next = permissionBatchReply(store, props.requests, option)
-    if (next.state.stage !== store.stage) setStore("stage", next.state.stage)
-    if (next.reply) submit(next.reply)
-  }
-
-  useBindings(() => ({
-    mode: SLOPCODE_BASE_MODE,
-    bindings: [
-      {
-        key: "up",
-        desc: "Previous forecast permission",
-        group: "Permission",
-        cmd: () => setStore(permissionBatchMove(store, props.requests, -1)),
-      },
-      {
-        key: "k",
-        desc: "Previous forecast permission",
-        group: "Permission",
-        cmd: () => setStore(permissionBatchMove(store, props.requests, -1)),
-      },
-      {
-        key: "down",
-        desc: "Next forecast permission",
-        group: "Permission",
-        cmd: () => setStore(permissionBatchMove(store, props.requests, 1)),
-      },
-      {
-        key: "j",
-        desc: "Next forecast permission",
-        group: "Permission",
-        cmd: () => setStore(permissionBatchMove(store, props.requests, 1)),
-      },
-      {
-        key: "space",
-        desc: "Toggle forecast permission",
-        group: "Permission",
-        cmd: () => {
-          if (store.stage !== "review") return
-          const request = props.requests[store.focused]
-          if (request) setStore(permissionBatchToggle(store, request.id))
-        },
-      },
-    ],
-  }))
-
-  return (
-    <Switch>
-      <Match when={store.stage === "project"}>
-        <Prompt
-          title={`Always allow these patterns for this ${scope()}`}
-          body={
-            <box paddingLeft={1} flexDirection="column" gap={1}>
-              <text fg={theme.textMuted}>
-                {`This approval survives restarts and remains active for this ${scope()} until revoked.`}
-              </text>
-              <text fg={theme.textMuted}>The following exact patterns will always be allowed:</text>
-              <For each={selected()}>
-                {(request) => (
-                  <box flexDirection="column">
-                    <text fg={theme.text}>{request.permission}</text>
-                    <For each={request.always}>{(resource) => <text fg={theme.textMuted}>{"- " + resource}</text>}</For>
-                  </box>
-                )}
-              </For>
-            </box>
-          }
-          options={{ confirm: "Confirm", cancel: "Cancel" }}
-          escapeKey="cancel"
-          onSelect={(option) => run(option)}
-        />
-      </Match>
-      <Match when={true}>
-        <Prompt
-          title="Review build permissions"
-          header={
-            <box flexDirection="column">
-              <box flexDirection="row" gap={1}>
-                <text fg={theme.warning}>△</text>
-                <text fg={theme.text}>Review build permissions</text>
-                <text fg={theme.textMuted}>{`(${selected().length}/${props.requests.length} selected)`}</text>
-              </box>
-              <box paddingLeft={2}>
-                <text fg={theme.textMuted}>Up/down focuses, space toggles. Unselected permissions are skipped.</text>
-              </box>
-            </box>
-          }
-          body={
-            <scrollbox height={Math.min(Math.max(props.requests.length * 3, 6), 12)}>
-              <box flexDirection="column">
-                <For each={props.requests}>
-                  {(request, index) => {
-                    const focused = () => index() === store.focused
-                    const picked = () => store.selected.includes(request.id)
-                    return (
-                      <box
-                        paddingLeft={1}
-                        paddingRight={1}
-                        flexDirection="column"
-                        backgroundColor={focused() ? theme.backgroundElement : undefined}
-                        onMouseOver={() => setStore("focused", index())}
-                        onMouseUp={() => setStore(permissionBatchToggle(store, request.id))}
-                      >
-                        <text fg={focused() ? theme.secondary : picked() ? theme.text : theme.textMuted}>
-                          {`${picked() ? "[x]" : "[ ]"} ${request.permission}: ${request.patterns.join(", ")}`}
-                        </text>
-                        <box paddingLeft={4}>
-                          <text fg={theme.textMuted}>{request.reason}</text>
-                        </box>
-                      </box>
-                    )
-                  }}
-                </For>
-              </box>
-            </scrollbox>
-          }
-          options={permissionBatchActions(store, props.requests, scope())}
-          escapeKey="reject"
-          fullscreen
-          onSelect={(option) => {
-            if (option === "once" || option === "always" || option === "project" || option === "reject") run(option)
-          }}
-        />
-      </Match>
-    </Switch>
-  )
-}
-
-export function PermissionPrompt(props: { requests: PermissionRequest[]; directory?: string }) {
-  const requests = createMemo(() => permissionQueue(props.requests))
-  return (
-    <Show when={requests()[0]}>
-      {(request) => (
-        <Show
-          when={request().kind === "forecast"}
-          fallback={<PermissionSinglePrompt request={request()} directory={props.directory} />}
-        >
-          <PermissionBatchPrompt requests={requests()} directory={props.directory} />
-        </Show>
-      )}
-    </Show>
   )
 }
 
@@ -739,7 +533,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
   )
 }
 
-export function Prompt<const T extends Record<string, string>>(props: {
+function Prompt<const T extends Record<string, string>>(props: {
   title: string
   header?: JSX.Element
   body: JSX.Element
@@ -751,19 +545,14 @@ export function Prompt<const T extends Record<string, string>>(props: {
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
-  const keys = createMemo(() => Object.keys(props.options) as (keyof T)[])
+  const keys = Object.keys(props.options) as (keyof T)[]
   const [store, setStore] = createStore({
-    selected: keys()[0],
+    selected: keys[0],
     expanded: false,
   })
   const narrow = createMemo(() => dimensions().width < 80)
   const compact = createMemo(() => isCompact(density(dimensions())))
   const fullscreenHint = useCommandShortcut("permission.prompt.fullscreen")
-
-  createEffect(() => {
-    const list = keys()
-    if (!list.includes(store.selected)) setStore("selected", list[0])
-  })
 
   useBindings(() => ({
     mode: SLOPCODE_BASE_MODE,
@@ -793,9 +582,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
         desc: "Previous permission option",
         group: "Permission",
         cmd: () => {
-          const list = keys()
-          const idx = list.indexOf(store.selected)
-          const next = list[(idx - 1 + list.length) % list.length]
+          const idx = keys.indexOf(store.selected)
+          const next = keys[(idx - 1 + keys.length) % keys.length]
           setStore("selected", next)
         },
       },
@@ -804,9 +592,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
         desc: "Previous permission option",
         group: "Permission",
         cmd: () => {
-          const list = keys()
-          const idx = list.indexOf(store.selected)
-          const next = list[(idx - 1 + list.length) % list.length]
+          const idx = keys.indexOf(store.selected)
+          const next = keys[(idx - 1 + keys.length) % keys.length]
           setStore("selected", next)
         },
       },
@@ -815,9 +602,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
         desc: "Next permission option",
         group: "Permission",
         cmd: () => {
-          const list = keys()
-          const idx = list.indexOf(store.selected)
-          const next = list[(idx + 1) % list.length]
+          const idx = keys.indexOf(store.selected)
+          const next = keys[(idx + 1) % keys.length]
           setStore("selected", next)
         },
       },
@@ -826,9 +612,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
         desc: "Next permission option",
         group: "Permission",
         cmd: () => {
-          const list = keys()
-          const idx = list.indexOf(store.selected)
-          const next = list[(idx + 1) % list.length]
+          const idx = keys.indexOf(store.selected)
+          const next = keys[(idx + 1) % keys.length]
           setStore("selected", next)
         },
       },
@@ -915,7 +700,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
         alignItems={narrow() ? "flex-start" : "center"}
       >
         <box flexDirection="row" gap={1} flexShrink={0}>
-          <For each={keys()}>
+          <For each={keys}>
             {(option) => (
               <box
                 paddingLeft={1}

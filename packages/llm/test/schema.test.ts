@@ -2,20 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import * as OpenAIResponses from "../src/protocols/openai-responses"
-import {
-  CacheHint,
-  ContentPart,
-  CustomToolDefinition,
-  LLMEvent,
-  LLMRequest,
-  Model,
-  ModelID,
-  ProviderID,
-  ToolCallPart,
-  ToolDefinition,
-  ToolResultPart,
-  Usage,
-} from "../src/schema"
+import { ContentPart, LLMEvent, LLMRequest, Model, ModelID, ProviderID, Usage } from "../src/schema"
 import { ProviderShared } from "../src/protocols/shared"
 
 const model = new Model({
@@ -68,85 +55,6 @@ describe("llm schema", () => {
   test("content part tagged union exposes guards", () => {
     expect(ContentPart.guards.text({ type: "text", text: "hi" })).toBe(true)
     expect(ContentPart.guards.media({ type: "text", text: "hi" })).toBe(false)
-  })
-
-  test("constructs function and custom tool definitions without changing function tools", () => {
-    const fn = new ToolDefinition({
-      name: "lookup",
-      description: "Lookup data.",
-      inputSchema: { type: "object" },
-    })
-    const custom = CustomToolDefinition.make({
-      name: "patch",
-      description: "Apply a patch.",
-      format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-      cache: new CacheHint({ type: "ephemeral" }),
-      metadata: { source: "test" },
-      native: { owner: "client" },
-    })
-
-    expect(ToolDefinition.make(fn)).toBe(fn)
-    expect(ToolDefinition.make(custom)).toBe(custom)
-    expect(fn).toEqual({ name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } })
-    expect(custom).toEqual({
-      type: "custom",
-      name: "patch",
-      description: "Apply a patch.",
-      format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-      cache: { type: "ephemeral" },
-      metadata: { source: "test" },
-      native: { owner: "client" },
-    })
-    expect("inputSchema" in custom).toBe(false)
-  })
-
-  test("retains explicit custom call kind and raw string input in parts and events", () => {
-    const call = ToolCallPart.make({ id: "call_1", name: "patch", input: "*** Begin Patch", toolType: "custom" })
-    const result = ToolResultPart.make({
-      id: "call_1",
-      name: "patch",
-      result: "applied",
-      resultType: "text",
-      toolType: "custom",
-    })
-
-    expect(call).toMatchObject({ input: "*** Begin Patch", toolType: "custom" })
-    expect(result).toMatchObject({ toolType: "custom" })
-    expect(Schema.decodeUnknownSync(ToolCallPart)(call)).toEqual(call)
-    expect(Schema.decodeUnknownSync(ToolResultPart)(result)).toEqual(result)
-    expect(LLMEvent.toolCall(call)).toMatchObject({ input: "*** Begin Patch", toolType: "custom" })
-    expect(
-      LLMEvent.toolResult({ id: result.id, name: result.name, result: result.result, toolType: result.toolType }),
-    ).toMatchObject({ toolType: "custom" })
-  })
-
-  test("rejects custom calls without string input at schema and construction boundaries", () => {
-    const invalid = { id: "call_1", name: "patch", input: { patch: "bad" }, toolType: "custom" }
-
-    expect(() => Schema.decodeUnknownSync(ToolCallPart)({ type: "tool-call", ...invalid })).toThrow()
-    expect(() => ToolCallPart.make(invalid as unknown as Parameters<typeof ToolCallPart.make>[0])).toThrow()
-    expect(() => decodeLLMEvent({ type: "tool-call", ...invalid })).toThrow()
-    expect(() => LLMEvent.toolCall(invalid as unknown as Parameters<typeof LLMEvent.toolCall>[0])).toThrow()
-  })
-
-  test("preserves legacy function call and result constructor shapes", () => {
-    expect(ToolCallPart.make({ id: "call_1", name: "lookup", input: { city: "Paris" } })).toEqual({
-      type: "tool-call",
-      id: "call_1",
-      name: "lookup",
-      input: { city: "Paris" },
-    })
-    expect(ToolResultPart.make({ id: "call_1", name: "lookup", result: { temperature: 22 } })).toEqual({
-      type: "tool-result",
-      id: "call_1",
-      name: "lookup",
-      result: { type: "json", value: { temperature: 22 } },
-      toolType: undefined,
-      providerExecuted: undefined,
-      cache: undefined,
-      metadata: undefined,
-      providerMetadata: undefined,
-    })
   })
 })
 

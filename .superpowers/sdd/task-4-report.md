@@ -107,3 +107,118 @@ Coverage exercised by the focused server tests includes:
 - Desktop / relay / Qt consumption of the new supervisor-target handoff is intentionally deferred. This slice defines the authenticated server contract and routing behavior, but the desktop host still needs to supply the supervisor token and post validated target registrations in production flows.
 - New imports were not switched to `@slopcode-ai/protocol` in `packages/server` / `packages/slopcode` because those package manifests do not currently declare that dependency.
 - The PTY WebSocket proxy coverage passes, but the underlying Effect/Node server still logs a `Socket already assigned` warning during the successful PTY upgrade path. The test remains green; the warning is worth a follow-up if you want a quieter websocket harness.
+
+## Task 4 implementation
+
+Status: DONE_WITH_CONCERNS
+
+Implementation commit: `74ae2384d5` (`feat(app): complete titlebar tab parity`)
+
+Changed files:
+
+- `packages/app/src/app.tsx`
+- `packages/app/src/components/titlebar-sortable-tab.tsx`
+- `packages/app/src/components/titlebar.tsx`
+- `packages/app/src/context/local.tsx`
+- `packages/app/src/context/tab-key.ts`
+- `packages/app/src/context/tab-migration.ts`
+- `packages/app/src/context/tab-state.test.ts`
+- `packages/app/src/context/tab-state.ts`
+- `packages/app/src/context/tabs.test.ts`
+- `packages/app/src/context/tabs.tsx`
+- `packages/app/src/pages/directory-layout.tsx`
+
+Implemented:
+
+- Persistent user-reordering for V2 titlebar tabs using the app's existing Solid drag-and-drop stack.
+- A titlebar Home toggle and `mod+b` command that work in both V2 and legacy layouts and restore the most recent open tab across server routes.
+- Bounded, deduplicated, stale-pruned recent-tab persistence, including close, reopen, promotion, server removal, and session removal paths.
+- Selected model and variant carryover into new draft tabs, with draft model state retained through tab persistence and migration.
+- Reordered keyboard tab selection and close/reopen behavior continue to follow the persisted tab order.
+
+Validation from `packages/app`:
+
+- `bun test --preload ./happydom.ts ./src/context/tab-state.test.ts ./src/context/tabs.test.ts` — 17 passed, 0 failed, 45 assertions.
+- `bun run typecheck` — passed.
+- `bun run build` — passed; 2,160 modules transformed in 15.18s. Existing Vite warnings remained for the Virtua JSX pragma, static/dynamic theme import, duplicate WASM sourcemap, and large chunks.
+- `git diff --check` and staged diff check — passed.
+
+Concerns:
+
+- No live desktop pointer/keyboard interaction run was performed in this task; Task 8 owns installed-desktop smoke verification.
+- `bunx oxlint` could not parse the repository's existing `.oxlintrc.json` because `options.typeAware` is placed where the invoked oxlint version rejects it. Typecheck and production build passed.
+
+## Task 4 implementation review fixes
+
+Status: COMPLETE
+
+Implementation commits:
+
+- `74ae2384d5` (`feat(app): complete titlebar tab parity`)
+- `5928f847ac` (`fix(app): close task 4 parity gaps`)
+- `a4b34e3d7a` (`fix(app): preserve routed tab identity`)
+- `e0d51eb8f2` (`fix(app): close active branch tabs`)
+
+Review fixes completed:
+
+- Preserved canonical server identity while retaining legacy session-route compatibility.
+- Added the Home toggle to both titlebar layouts and removed keyboard/menu shortcut collisions.
+- Added accessible keyboard tab reordering with live announcements alongside pointer reordering.
+- Made recent-tab hydration merge queued updates into persisted state, bounded and deduplicated to 25 valid open tabs.
+- Preserved selected model and variant state through draft creation, persistence, migration, and promotion.
+- Corrected draft-close matching when extra query parameters are present.
+- Made closing the selected parent tab while viewing a child branch navigate away correctly, preventing route synchronization from recreating the closed tab.
+
+Additional changed files:
+
+- `packages/app/src/components/titlebar-tab-keyboard.ts`
+- `packages/app/src/components/titlebar-tab-keyboard.test.ts`
+- `packages/app/src/context/command-keybinds.ts`
+- `packages/app/src/context/command-keybinds.test.ts`
+- `packages/app/src/context/layout-route.ts`
+- `packages/app/src/context/layout-route.test.ts`
+- `packages/app/src/context/layout.tsx`
+- `packages/app/src/context/tab-controller.ts`
+- `packages/app/src/desktop-menu.ts`
+- `packages/app/src/pages/layout.tsx`
+
+Final validation from `packages/app`:
+
+- `bun test --preload ./happydom.ts ./src/context/tab-state.test.ts ./src/context/tabs.test.ts ./src/context/layout-route.test.ts ./src/context/command-keybinds.test.ts ./src/components/titlebar-tab-keyboard.test.ts` — 26 passed, 0 failed, 70 assertions.
+- `bun run typecheck` — passed.
+- `bun run build` — passed; 2,163 modules transformed in 16.03s. Existing Vite warnings remained for the Virtua JSX pragma, static/dynamic theme import, duplicate WASM sourcemap, and large chunks.
+- `git diff --check` — passed.
+- Final bounded independent review — `Spec Compliance: ✅`; `Code Quality: Approved`.
+
+Remaining concerns:
+
+- Installed-desktop pointer/keyboard smoke testing remains deferred to Task 8, as required by the plan scope.
+- The repository's existing oxlint configuration/version incompatibility remains outside Task 4; package typecheck and production build are clean.
+
+## Review fixes
+
+Status: COMPLETE
+
+Implementation commit: current Task 4 review-fix commit (`fix(app): isolate draft tab model state`)
+
+Changed files:
+
+- `packages/app/src/app.tsx`
+- `packages/app/src/components/titlebar.tsx`
+- `packages/app/src/context/draft-route.ts`
+- `packages/app/src/context/draft-route.test.ts`
+
+Review fixes completed:
+
+- Draft route provider scope now includes both the draft ID and directory, so switching between drafts in one directory creates isolated local model/variant state while moving one draft to another directory still reinitializes its data providers.
+- Session-tab close controls now expose the localized `common.closeTab` name and tooltip.
+- Added regression coverage for draft route scope identity.
+
+Validation from `packages/app`:
+
+- `bun test --preload ./happydom.ts ./src/context/draft-route.test.ts ./src/context/tab-state.test.ts ./src/context/tabs.test.ts ./src/components/titlebar-tab-keyboard.test.ts` — 23 passed, 0 failed, 62 assertions.
+- `bun run typecheck` — passed.
+
+Remaining concerns:
+
+- Installed-desktop interaction testing remains scoped to Task 8.

@@ -37,6 +37,7 @@ import {
   applyThemePreference,
   Footer,
   getGitHubStars,
+  githubLink,
   Header,
   isThemePreference,
   themeStorageKey,
@@ -154,7 +155,7 @@ export default function StatsModel() {
       <Meta name="description" content={modelDescription()} />
       <LocaleLinks path={modelPath()} />
       <Meta property="og:type" content="website" />
-      <Meta property="og:site_name" content="OpenCode" />
+      <Meta property="og:site_name" content="SlopCode" />
       <Meta property="og:title" content={modelTitle()} />
       <Meta property="og:description" content={modelDescription()} />
       <Meta property="og:url" content={modelUrl()} />
@@ -168,7 +169,11 @@ export default function StatsModel() {
       <Meta name="twitter:description" content={modelDescription()} />
       <Meta name="twitter:image" content={statsUnfurlUrl} />
       <Meta name="twitter:image:alt" content={i18n.t("app.unfurlAlt")} />
-      <Header githubStars={githubStars() ?? "150K"} links={modelHeaderLinks()} brandHref={import.meta.env.BASE_URL} />
+      <Header
+        githubStars={githubStars() ?? githubLink.fallbackStars}
+        links={modelHeaderLinks()}
+        brandHref={import.meta.env.BASE_URL}
+      />
       <div data-component="container">
         <div data-component="content">
           <Show when={catalogEntry() || stats() !== undefined} fallback={<ModelLoading />}>

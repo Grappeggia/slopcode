@@ -53,7 +53,7 @@ SlopCode config.
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -70,7 +70,7 @@ You can globally configure a model's options through the config.
 
 ```jsonc title="slopcode.jsonc" {7-12,19-24}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "openai": {
       "models": {
@@ -109,7 +109,7 @@ You can also define custom variants that extend built-in ones. Variants let you 
 
 ```jsonc title="slopcode.jsonc" {6-21}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "slopcode": {
       "models": {
@@ -176,7 +176,7 @@ You can override existing variants or add your own:
 
 ```jsonc title="slopcode.jsonc" {7-18}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "openai": {
       "models": {
@@ -213,7 +213,7 @@ When SlopCode starts up, it checks for models in the following priority order:
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

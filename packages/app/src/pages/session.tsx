@@ -53,6 +53,7 @@ import { useServer } from "@/context/server"
 import { syncSessionModel } from "@/pages/session/session-model-helpers"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { TerminalPanel } from "@/pages/session/terminal-panel"
+import { TerminalPanelV2 } from "@/pages/session/terminal-panel-v2"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { Identifier } from "@/utils/id"
@@ -981,6 +982,8 @@ export default function Page() {
   const reviewContent = (input: {
     diffStyle: DiffStyle
     onDiffStyleChange?: (style: DiffStyle) => void
+    diffs?: () => ReturnType<typeof reviewDiffs>
+    focusedFile?: string
     classes?: SessionReviewTabProps["classes"]
     loadingClass: string
     emptyClass: string
@@ -989,12 +992,12 @@ export default function Page() {
       <SessionReviewTab
         title={changesTitle()}
         empty={reviewEmpty(input)}
-        diffs={reviewDiffs}
+        diffs={input.diffs ?? reviewDiffs}
         view={view}
         diffStyle={input.diffStyle}
         onDiffStyleChange={input.onDiffStyleChange}
         onScrollRef={(el) => setTree("reviewScroll", el)}
-        focusedFile={tree.activeDiff}
+        focusedFile={input.focusedFile ?? tree.activeDiff}
         onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
         onLineCommentUpdate={updateCommentInContext}
         onLineCommentDelete={removeCommentFromContext}
@@ -1017,6 +1020,30 @@ export default function Page() {
         {reviewContent({
           diffStyle: layout.review.diffStyle(),
           onDiffStyleChange: layout.review.setDiffStyle,
+          loadingClass: "px-6 py-4 text-text-weak",
+          emptyClass: "h-full pb-64 -mt-4 flex flex-col items-center justify-center text-center gap-6",
+        })}
+      </div>
+    </div>
+  )
+
+  const reviewPanelV2 = (path: string | undefined) => (
+    <div class="flex flex-col h-full overflow-hidden bg-background-stronger contain-strict">
+      <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+        {reviewContent({
+          diffStyle: layout.review.diffStyle(),
+          onDiffStyleChange: layout.review.setDiffStyle,
+          diffs: () => {
+            const diffs = reviewDiffs()
+            if (!path) return diffs.slice(0, 1)
+            return diffs.filter((diff) => diff.file === path)
+          },
+          focusedFile: path,
+          classes: {
+            root: "pb-8 pr-3",
+            header: "pl-10 pr-3",
+            container: "px-3",
+          },
           loadingClass: "px-6 py-4 text-text-weak",
           emptyClass: "h-full pb-64 -mt-4 flex flex-col items-center justify-center text-center gap-6",
         })}
@@ -1838,6 +1865,7 @@ export default function Page() {
           hasReview={hasReview}
           reviewCount={reviewCount}
           reviewPanel={reviewPanel}
+          reviewPanelV2={reviewPanelV2}
           activeDiff={tree.activeDiff}
           focusReviewDiff={focusReviewDiff}
           reviewSnap={ui.reviewSnap}
@@ -1845,7 +1873,9 @@ export default function Page() {
         />
       </div>
 
-      <TerminalPanel />
+      <Show when={settings.general.newLayoutDesigns()} fallback={<TerminalPanel />}>
+        <TerminalPanelV2 />
+      </Show>
     </div>
   )
 }

@@ -11,6 +11,7 @@ import { EventV2 } from "./event"
 import { LayerNode } from "./effect/layer-node"
 import { httpClient } from "./effect/layer-node-platform"
 import { fallback as bundledFallback } from "./models-dev-fallback"
+import { normalize } from "./models-dev-normalize"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -211,39 +212,31 @@ export const layer = Layer.effect(
 
     const fallback = bundledFallback as Record<string, Provider>
     const mergeFallback = (data?: Record<string, Provider>) => {
-      if (Flag.SLOPCODE_MODELS_PATH !== undefined && !data) return data
-      if (Object.keys(fallback).length === 0) return data
-      const result = Flag.SLOPCODE_MODELS_PATH === undefined ? { ...fallback, ...(data ?? {}) } : { ...data }
-      if (Flag.SLOPCODE_MODELS_PATH === undefined && data?.openai && fallback.openai) {
-        result.openai = {
-          ...fallback.openai,
-          ...data.openai,
-          models: {
-            ...fallback.openai.models,
-            ...data.openai.models,
-          },
-        }
-      }
-      for (const id of ["slopcode", "slopcode-go"]) {
-        const provider = result[id]
-        const api = fallback[id]?.api
-        if (!provider || !api) continue
-        result[id] = {
-          ...provider,
-          api,
-          models: Object.fromEntries(
-            Object.entries(provider.models).map(([id, model]) => [
-              id,
-              model.provider?.api !== undefined ? { ...model, provider: { ...model.provider, api } } : model,
-            ]),
-          ),
-        }
-      }
-      return result
+      if (Flag.SLOPCODE_MODELS_PATH !== undefined) return data
+      const catalog = data ? normalize(data) : data
+      if (Object.keys(fallback).length === 0) return catalog
+      const result = { ...fallback, ...(catalog ?? {}) }
+      return Object.fromEntries(
+        Object.entries(result).map(([id, provider]) => {
+          if (!catalog?.[id] || !fallback[id]) return [id, provider] as const
+          return [
+            id,
+            {
+              ...fallback[id],
+              ...catalog[id],
+              models: {
+                ...fallback[id].models,
+                ...catalog[id].models,
+              },
+            },
+          ] as const
+        }),
+      )
     }
 
     const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
-      const text = yield* fetchApi()
+      const data = normalize(JSON.parse(yield* fetchApi()) as Record<string, Provider>)
+      const text = JSON.stringify(data)
       const tempfile = `${filepath}.${process.pid}.${Date.now()}.tmp`
       yield* fs.writeWithDirs(tempfile, text).pipe(
         Effect.andThen(fs.rename(tempfile, filepath)),
@@ -254,7 +247,7 @@ export const layer = Layer.effect(
           }),
         ),
       )
-      return text
+      return data
     })
 
     const populate = Effect.gen(function* () {
@@ -268,13 +261,13 @@ export const layer = Layer.effect(
       }
       if (Flag.SLOPCODE_DISABLE_MODELS_FETCH) return mergeFallback() ?? {}
       // Flock is cross-process: concurrent slopcode CLIs can race on this cache file.
-      const text = yield* Effect.scoped(
+      const data = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Flock.effect(lockKey)
           return yield* fetchAndWrite()
         }),
       )
-      return mergeFallback(JSON.parse(text) as Record<string, Provider>) ?? {}
+      return mergeFallback(data) ?? {}
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
     const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)

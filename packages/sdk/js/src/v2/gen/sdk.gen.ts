@@ -38,10 +38,6 @@ import type {
   ExperimentalControlPlaneMoveSessionResponses,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
-  ExperimentalRemoteSupervisorPairingsErrors,
-  ExperimentalRemoteSupervisorPairingsResponses,
-  ExperimentalRemoteSupervisorTargetErrors,
-  ExperimentalRemoteSupervisorTargetResponses,
   ExperimentalResourceListErrors,
   ExperimentalResourceListResponses,
   ExperimentalSessionBackgroundErrors,
@@ -54,18 +50,6 @@ import type {
   ExperimentalWorkspaceCreateResponses,
   ExperimentalWorkspaceListErrors,
   ExperimentalWorkspaceListResponses,
-  ExperimentalWorkspaceRemoteHostListErrors,
-  ExperimentalWorkspaceRemoteHostListResponses,
-  ExperimentalWorkspaceRemotePairingCreateErrors,
-  ExperimentalWorkspaceRemotePairingCreateResponses,
-  ExperimentalWorkspaceRemotePairingRevokeErrors,
-  ExperimentalWorkspaceRemotePairingRevokeResponses,
-  ExperimentalWorkspaceRemoteSelectErrors,
-  ExperimentalWorkspaceRemoteSelectResponses,
-  ExperimentalWorkspaceRemoteSshValidateErrors,
-  ExperimentalWorkspaceRemoteSshValidateResponses,
-  ExperimentalWorkspaceRemoteTargetRegisterErrors,
-  ExperimentalWorkspaceRemoteTargetRegisterResponses,
   ExperimentalWorkspaceRemoveErrors,
   ExperimentalWorkspaceRemoveResponses,
   ExperimentalWorkspaceStatusErrors,
@@ -104,7 +88,7 @@ import type {
   GlobalUpgradeResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
-  LocationRef1,
+  LocationRef,
   LspStatusErrors,
   LspStatusResponses,
   McpAddErrors,
@@ -146,8 +130,6 @@ import type {
   PathGetResponses,
   PermissionListErrors,
   PermissionListResponses,
-  PermissionReplyBatchErrors,
-  PermissionReplyBatchResponses,
   PermissionReplyErrors,
   PermissionReplyResponses,
   PermissionRespondErrors,
@@ -173,8 +155,6 @@ import type {
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
   ProviderOauthCallbackResponses,
-  ProviderOpenaiUsageErrors,
-  ProviderOpenaiUsageResponses,
   PtyConnectErrors,
   PtyConnectResponses,
   PtyConnectTokenErrors,
@@ -199,23 +179,8 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
-  RemoteAgentCatalogErrors,
-  RemoteAgentCatalogResponses,
-  RemoteAgentPromptErrors,
-  RemoteAgentPromptResponses,
-  RemoteSshBrowseErrors,
-  RemoteSshBrowseResponses,
-  RemoteV1PairingCreatePayload,
-  RemoteV1WorkspaceSelectInput,
-  RemoteV1WorkspaceSsh,
-  RemoteV1WorkspaceSshInput,
-  RemoteV1WorkspaceTargetPayload,
-  SessionAbortAutocompleteErrors,
-  SessionAbortAutocompleteResponses,
   SessionAbortErrors,
   SessionAbortResponses,
-  SessionAutocompleteErrors,
-  SessionAutocompleteResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
   SessionCommandErrors,
@@ -252,7 +217,6 @@ import type {
   SessionShellResponses,
   SessionSideQuestionErrors,
   SessionSideQuestionResponses,
-  SessionSideQuestionTurn,
   SessionStatusErrors,
   SessionStatusResponses,
   SessionSummarizeErrors,
@@ -343,8 +307,6 @@ import type {
   V2ModelListResponses,
   V2PermissionRequestListErrors,
   V2PermissionRequestListResponses,
-  V2PermissionSavedClearErrors,
-  V2PermissionSavedClearResponses,
   V2PermissionSavedListErrors,
   V2PermissionSavedListResponses,
   V2PermissionSavedRemoveErrors,
@@ -359,8 +321,6 @@ import type {
   V2ProviderGetResponses,
   V2ProviderListErrors,
   V2ProviderListResponses,
-  V2ProviderOpenaiUsageErrors,
-  V2ProviderOpenaiUsageResponses,
   V2QuestionRequestListErrors,
   V2QuestionRequestListResponses,
   V2ReferenceListErrors,
@@ -381,12 +341,6 @@ import type {
   V2SessionPermissionListResponses,
   V2SessionPermissionReplyErrors,
   V2SessionPermissionReplyResponses,
-  V2SessionPermissionSavedClearErrors,
-  V2SessionPermissionSavedClearResponses,
-  V2SessionPermissionSavedListErrors,
-  V2SessionPermissionSavedListResponses,
-  V2SessionPermissionSavedRemoveErrors,
-  V2SessionPermissionSavedRemoveResponses,
   V2SessionPromptErrors,
   V2SessionPromptResponses,
   V2SessionQuestionListErrors,
@@ -670,56 +624,6 @@ export class ControlPlane extends HeyApiClient {
         ...params.headers,
       },
     })
-  }
-}
-
-export class Supervisor extends HeyApiClient {
-  /**
-   * List remote pairings for a supervisor
-   *
-   * List redacted remote pairings across instance scopes for an authenticated desktop supervisor.
-   */
-  public pairings<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).get<
-      ExperimentalRemoteSupervisorPairingsResponses,
-      ExperimentalRemoteSupervisorPairingsErrors,
-      ThrowOnError
-    >({ url: "/experimental/remote/supervisor/pairings", ...options })
-  }
-
-  /**
-   * Register a remote target for a pairing
-   *
-   * Bind a validated loopback target to an exact pairing without relying on an instance-directory selector.
-   */
-  public target<ThrowOnError extends boolean = false>(
-    parameters?: {
-      remoteV1WorkspaceTargetPayload?: RemoteV1WorkspaceTargetPayload
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "remoteV1WorkspaceTargetPayload", map: "body" }] }])
-    return (options?.client ?? this.client).post<
-      ExperimentalRemoteSupervisorTargetResponses,
-      ExperimentalRemoteSupervisorTargetErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/remote/supervisor/target",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
-export class Remote extends HeyApiClient {
-  private _supervisor?: Supervisor
-  get supervisor(): Supervisor {
-    return (this._supervisor ??= new Supervisor({ client: this.client }))
   }
 }
 
@@ -1033,270 +937,6 @@ export class Adapter extends HeyApiClient {
   }
 }
 
-export class Host extends HeyApiClient {
-  /**
-   * List paired remote hosts
-   *
-   * List paired hosts and their workspace pairings available to the current instance.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      ExperimentalWorkspaceRemoteHostListResponses,
-      ExperimentalWorkspaceRemoteHostListErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/workspace/remote/host",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Pairing extends HeyApiClient {
-  /**
-   * Create remote pairing
-   *
-   * Create or refresh a persisted device pairing and return its one-time device-bound selection binding.
-   */
-  public create<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      remoteV1PairingCreatePayload?: RemoteV1PairingCreatePayload
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "remoteV1PairingCreatePayload", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      ExperimentalWorkspaceRemotePairingCreateResponses,
-      ExperimentalWorkspaceRemotePairingCreateErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/workspace/remote/pairing",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Revoke remote pairing
-   *
-   * Revoke one persisted remote device pairing.
-   */
-  public revoke<ThrowOnError extends boolean = false>(
-    parameters: {
-      pairingID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "pairingID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).delete<
-      ExperimentalWorkspaceRemotePairingRevokeResponses,
-      ExperimentalWorkspaceRemotePairingRevokeErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/workspace/remote/pairing/{pairingID}",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Ssh extends HeyApiClient {
-  /**
-   * Validate SSH workspace
-   *
-   * Validate an SSH workspace selection against an authenticated desktop supervisor target registration.
-   */
-  public validate<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      remoteV1WorkspaceSshInput?: RemoteV1WorkspaceSshInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "remoteV1WorkspaceSshInput", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      ExperimentalWorkspaceRemoteSshValidateResponses,
-      ExperimentalWorkspaceRemoteSshValidateErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/workspace/remote/ssh/validate",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
-export class Target extends HeyApiClient {
-  /**
-   * Register remote workspace target
-   *
-   * Authenticated desktop supervisor handoff that registers the exact pairing, host, workspace, and validated target.
-   */
-  public register<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      remoteV1WorkspaceTargetPayload?: RemoteV1WorkspaceTargetPayload
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "remoteV1WorkspaceTargetPayload", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      ExperimentalWorkspaceRemoteTargetRegisterResponses,
-      ExperimentalWorkspaceRemoteTargetRegisterErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/workspace/remote/target",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
-export class Remote2 extends HeyApiClient {
-  /**
-   * Select remote workspace
-   *
-   * Activate one persisted remote workspace selection with its exact device-bound nonce and code only after a fail-closed supervisor target is available; the binding is consumed on success.
-   */
-  public select<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      remoteV1WorkspaceSelectInput?: RemoteV1WorkspaceSelectInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "remoteV1WorkspaceSelectInput", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      ExperimentalWorkspaceRemoteSelectResponses,
-      ExperimentalWorkspaceRemoteSelectErrors,
-      ThrowOnError
-    >({
-      url: "/experimental/workspace/remote/select",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  private _host?: Host
-  get host(): Host {
-    return (this._host ??= new Host({ client: this.client }))
-  }
-
-  private _pairing?: Pairing
-  get pairing(): Pairing {
-    return (this._pairing ??= new Pairing({ client: this.client }))
-  }
-
-  private _ssh?: Ssh
-  get ssh(): Ssh {
-    return (this._ssh ??= new Ssh({ client: this.client }))
-  }
-
-  private _target?: Target
-  get target(): Target {
-    return (this._target ??= new Target({ client: this.client }))
-  }
-}
-
 export class Workspace extends HeyApiClient {
   /**
    * List workspaces
@@ -1532,22 +1172,12 @@ export class Workspace extends HeyApiClient {
   get adapter(): Adapter {
     return (this._adapter ??= new Adapter({ client: this.client }))
   }
-
-  private _remote?: Remote2
-  get remote(): Remote2 {
-    return (this._remote ??= new Remote2({ client: this.client }))
-  }
 }
 
 export class Experimental extends HeyApiClient {
   private _controlPlane?: ControlPlane
   get controlPlane(): ControlPlane {
     return (this._controlPlane ??= new ControlPlane({ client: this.client }))
-  }
-
-  private _remote?: Remote
-  get remote(): Remote {
-    return (this._remote ??= new Remote({ client: this.client }))
   }
 
   private _console?: Console
@@ -2761,14 +2391,15 @@ export class Auth2 extends HeyApiClient {
   /**
    * Complete MCP OAuth
    *
-   * Complete OAuth authentication for a Model Context Protocol (MCP) server using the authorization code.
+   * Complete OAuth authentication for the exact started flow using its state and authorization code.
    */
   public callback<ThrowOnError extends boolean = false>(
     parameters: {
       name: string
       directory?: string
       workspace?: string
-      code?: string
+      state: string
+      code: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2780,6 +2411,7 @@ export class Auth2 extends HeyApiClient {
             { in: "path", key: "name" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "state" },
             { in: "body", key: "code" },
           ],
         },
@@ -3573,7 +3205,7 @@ export class Permission extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      reply?: "once" | "session" | "global" | "always" | "project" | "reject"
+      reply?: "once" | "always" | "reject"
       message?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -3605,51 +3237,6 @@ export class Permission extends HeyApiClient {
   }
 
   /**
-   * Respond to a forecast batch
-   *
-   * Approve selected forecast permissions and skip every unselected item atomically.
-   */
-  public replyBatch<ThrowOnError extends boolean = false>(
-    parameters: {
-      batchID: string
-      directory?: string
-      workspace?: string
-      requestIDs?: Array<string>
-      reply?: "once" | "session" | "global" | "always" | "project" | "reject"
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "batchID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "requestIDs" },
-            { in: "body", key: "reply" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      PermissionReplyBatchResponses,
-      PermissionReplyBatchErrors,
-      ThrowOnError
-    >({
-      url: "/permission/batch/{batchID}/reply",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
    * Respond to permission
    *
    * Approve or deny a permission request from the AI assistant.
@@ -3662,7 +3249,7 @@ export class Permission extends HeyApiClient {
       permissionID: string
       directory?: string
       workspace?: string
-      response?: "once" | "session" | "global" | "always" | "project" | "reject"
+      response?: "once" | "always" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3689,38 +3276,6 @@ export class Permission extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
-    })
-  }
-}
-
-export class Openai extends HeyApiClient {
-  /**
-   * Get OpenAI usage
-   *
-   * Get safe normalized OpenAI authentication and ChatGPT usage status.
-   */
-  public usage<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<ProviderOpenaiUsageResponses, ProviderOpenaiUsageErrors, ThrowOnError>({
-      url: "/provider/openai/usage",
-      ...options,
-      ...params,
     })
   }
 }
@@ -3878,11 +3433,6 @@ export class Provider extends HeyApiClient {
       ...options,
       ...params,
     })
-  }
-
-  private _openai?: Openai
-  get openai(): Openai {
-    return (this._openai ??= new Openai({ client: this.client }))
   }
 
   private _oauth?: Oauth
@@ -4620,92 +4170,6 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
-   * Complete prompt prefix
-   *
-   * Generate an ephemeral model-powered continuation for the current unsubmitted TUI prefix.
-   */
-  public autocomplete<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-      requestID?: string
-      model?: {
-        providerID: string
-        modelID: string
-      }
-      prefix?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "requestID" },
-            { in: "body", key: "model" },
-            { in: "body", key: "prefix" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<SessionAutocompleteResponses, SessionAutocompleteErrors, ThrowOnError>(
-      {
-        url: "/session/{sessionID}/autocomplete",
-        ...options,
-        ...params,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-          ...params.headers,
-        },
-      },
-    )
-  }
-
-  /**
-   * Abort prompt autocomplete
-   *
-   * Interrupt an ephemeral autocomplete generation request.
-   */
-  public abortAutocomplete<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      requestID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "requestID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).delete<
-      SessionAbortAutocompleteResponses,
-      SessionAbortAutocompleteErrors,
-      ThrowOnError
-    >({
-      url: "/session/{sessionID}/autocomplete/{requestID}",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
    * Send async message
    *
    * Create and send a new message to a session asynchronously, starting the session if needed and returning immediately.
@@ -4826,7 +4290,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Ask side question
    *
-   * Ask an ephemeral side question with optional completed turns, streaming generation, bounded read activity, usage, errors, and completion without writing session history.
+   * Ask an ephemeral side question against the current session context without writing history.
    */
   public sideQuestion<ThrowOnError extends boolean = false>(
     parameters: {
@@ -4834,7 +4298,6 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       question?: string
-      turns?: Array<SessionSideQuestionTurn>
       agent?: string
       model?: {
         providerID: string
@@ -4853,7 +4316,6 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "question" },
-            { in: "body", key: "turns" },
             { in: "body", key: "agent" },
             { in: "body", key: "model" },
             { in: "body", key: "variant" },
@@ -5693,143 +5155,6 @@ export class Tui extends HeyApiClient {
   }
 }
 
-export class Ssh2 extends HeyApiClient {
-  /**
-   * Browse remote folders
-   *
-   * List bounded metadata for folders within the current authenticated instance directory or a strict key-backed SSH authority; an omitted path starts at that root.
-   */
-  public browse<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      path?: string
-      sshAuthority?: string
-      sshPort?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "query", key: "path" },
-            { in: "query", key: "sshAuthority" },
-            { in: "query", key: "sshPort" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<RemoteSshBrowseResponses, RemoteSshBrowseErrors, ThrowOnError>({
-      url: "/remote/ssh/browse",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Agent extends HeyApiClient {
-  /**
-   * Run a selected agent CLI prompt
-   *
-   * Run the fixed Codex, OpenCode, or Claude Code CLI executable selected by the caller in a bounded folder within the current authenticated instance directory with bounded output and allowlisted configuration.
-   */
-  public prompt<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      path?: string
-      agent?: "codex-cli" | "opencode-cli" | "claude-code"
-      prompt?: string
-      config?:
-        | {
-            model?: string | RemoteV1WorkspaceSsh
-            profile?: string | RemoteV1WorkspaceSsh
-            sandbox?: "read-only" | "workspace-write" | "danger-full-access" | RemoteV1WorkspaceSsh
-            approval?: "untrusted" | "on-failure" | "on-request" | "never" | RemoteV1WorkspaceSsh
-            permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions" | RemoteV1WorkspaceSsh
-          }
-        | RemoteV1WorkspaceSsh
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "query", key: "path" },
-            { in: "body", key: "agent" },
-            { in: "body", key: "prompt" },
-            { in: "body", key: "config" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<RemoteAgentPromptResponses, RemoteAgentPromptErrors, ThrowOnError>({
-      url: "/remote/agent/prompt",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * List remote agent commands
-   *
-   * Run a fixed agent --version command and return bounded built-in and project-local command metadata without returning command templates.
-   */
-  public catalog<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      agent: "codex-cli" | "opencode-cli" | "claude-code"
-      path?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "query", key: "agent" },
-            { in: "query", key: "path" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<RemoteAgentCatalogResponses, RemoteAgentCatalogErrors, ThrowOnError>({
-      url: "/remote/agent/catalog",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Remote3 extends HeyApiClient {
-  private _ssh?: Ssh2
-  get ssh(): Ssh2 {
-    return (this._ssh ??= new Ssh2({ client: this.client }))
-  }
-
-  private _agent?: Agent
-  get agent(): Agent {
-    return (this._agent ??= new Agent({ client: this.client }))
-  }
-}
-
 export class Health extends HeyApiClient {
   /**
    * Check server health
@@ -5868,7 +5193,7 @@ export class Location extends HeyApiClient {
   }
 }
 
-export class Agent2 extends HeyApiClient {
+export class Agent extends HeyApiClient {
   /**
    * List agents
    *
@@ -5888,104 +5213,6 @@ export class Agent2 extends HeyApiClient {
       url: "/api/agent",
       ...options,
       ...params,
-    })
-  }
-}
-
-export class Saved extends HeyApiClient {
-  /**
-   * List session permission grants
-   *
-   * Retrieve exact grants owned by one session.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
-    return (options?.client ?? this.client).get<
-      V2SessionPermissionSavedListResponses,
-      V2SessionPermissionSavedListErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/permission/saved",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Remove session permission grant
-   *
-   * Remove an exact grant owned by one session.
-   */
-  public remove<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      id: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "path", key: "id" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).delete<
-      V2SessionPermissionSavedRemoveResponses,
-      V2SessionPermissionSavedRemoveErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/permission/saved/{id}",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Clear session permission grants
-   *
-   * Clear every exact grant owned by one explicitly confirmed session.
-   */
-  public clear<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      confirm?: true
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "body", key: "confirm" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      V2SessionPermissionSavedClearResponses,
-      V2SessionPermissionSavedClearErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/permission/saved/clear",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
     })
   }
 }
@@ -6024,7 +5251,7 @@ export class Permission2 extends HeyApiClient {
       sessionID: string
       requestID: string
       reply?: PermissionV2Reply
-      message?: string | RemoteV1WorkspaceSsh
+      message?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6055,11 +5282,6 @@ export class Permission2 extends HeyApiClient {
         ...params.headers,
       },
     })
-  }
-
-  private _saved?: Saved
-  get saved(): Saved {
-    return (this._saved ??= new Saved({ client: this.client }))
   }
 }
 
@@ -6213,16 +5435,14 @@ export class Session3 extends HeyApiClient {
    */
   public create<ThrowOnError extends boolean = false>(
     parameters?: {
-      id?: string | RemoteV1WorkspaceSsh
-      agent?: string | RemoteV1WorkspaceSsh
-      model?:
-        | {
-            id: string
-            providerID: string
-            variant?: string | RemoteV1WorkspaceSsh
-          }
-        | RemoteV1WorkspaceSsh
-      location?: LocationRef1 | RemoteV1WorkspaceSsh
+      id?: string
+      agent?: string
+      model?: {
+        id: string
+        providerID: string
+        variant?: string
+      }
+      location?: LocationRef
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6297,10 +5517,10 @@ export class Session3 extends HeyApiClient {
   public prompt<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
-      id?: string | RemoteV1WorkspaceSsh
+      id?: string
       prompt?: Prompt
-      delivery?: "steer" | "queue" | RemoteV1WorkspaceSsh
-      resume?: boolean | RemoteV1WorkspaceSsh
+      delivery?: "steer" | "queue"
+      resume?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6333,37 +5553,19 @@ export class Session3 extends HeyApiClient {
   /**
    * Compact session
    *
-   * Durably compact a session conversation with an optional text-only summary instruction.
+   * Compact a session conversation.
    */
   public compact<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
-      id?: string | RemoteV1WorkspaceSsh
-      prompt?: Prompt | RemoteV1WorkspaceSsh
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "body", key: "id" },
-            { in: "body", key: "prompt" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
     return (options?.client ?? this.client).post<V2SessionCompactResponses, V2SessionCompactErrors, ThrowOnError>({
       url: "/api/session/{sessionID}/compact",
       ...options,
       ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
     })
   }
 
@@ -6474,34 +5676,6 @@ export class Model extends HeyApiClient {
   }
 }
 
-export class Openai2 extends HeyApiClient {
-  /**
-   * Get OpenAI usage
-   *
-   * Get safe normalized OpenAI authentication and ChatGPT usage status.
-   */
-  public usage<ThrowOnError extends boolean = false>(
-    parameters?: {
-      location?: {
-        directory?: string
-        workspace?: string
-      }
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
-    return (options?.client ?? this.client).get<
-      V2ProviderOpenaiUsageResponses,
-      V2ProviderOpenaiUsageErrors,
-      ThrowOnError
-    >({
-      url: "/api/provider/openai/usage",
-      ...options,
-      ...params,
-    })
-  }
-}
-
 export class Provider2 extends HeyApiClient {
   /**
    * List providers
@@ -6557,11 +5731,6 @@ export class Provider2 extends HeyApiClient {
       ...params,
     })
   }
-
-  private _openai?: Openai2
-  get openai(): Openai2 {
-    return (this._openai ??= new Openai2({ client: this.client }))
-  }
 }
 
 export class Connect extends HeyApiClient {
@@ -6578,7 +5747,7 @@ export class Connect extends HeyApiClient {
         workspace?: string
       }
       key?: string
-      label?: string | RemoteV1WorkspaceSsh
+      label?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6627,7 +5796,7 @@ export class Connect extends HeyApiClient {
       inputs?: {
         [key: string]: string
       }
-      label?: string | RemoteV1WorkspaceSsh
+      label?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6749,7 +5918,7 @@ export class Attempt extends HeyApiClient {
         directory?: string
         workspace?: string
       }
-      code?: string | RemoteV1WorkspaceSsh
+      code?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6935,30 +6104,19 @@ export class Request extends HeyApiClient {
   }
 }
 
-export class Saved2 extends HeyApiClient {
+export class Saved extends HeyApiClient {
   /**
    * List saved permissions
    *
-   * Retrieve saved permissions for the current location or an explicit project/global scope.
+   * Retrieve saved permissions, optionally filtered by project.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
-      scope?: "project" | "global"
       projectID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "scope" },
-            { in: "query", key: "projectID" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "projectID" }] }])
     return (options?.client ?? this.client).get<
       V2PermissionSavedListResponses,
       V2PermissionSavedListErrors,
@@ -6973,28 +6131,15 @@ export class Saved2 extends HeyApiClient {
   /**
    * Remove saved permission
    *
-   * Remove a saved permission by ID from the current location or an explicit project/global scope.
+   * Remove a saved permission by ID.
    */
   public remove<ThrowOnError extends boolean = false>(
     parameters: {
       id: string
-      scope?: "project" | "global"
-      projectID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "id" },
-            { in: "query", key: "scope" },
-            { in: "query", key: "projectID" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
     return (options?.client ?? this.client).delete<
       V2PermissionSavedRemoveResponses,
       V2PermissionSavedRemoveErrors,
@@ -7005,43 +6150,6 @@ export class Saved2 extends HeyApiClient {
       ...params,
     })
   }
-
-  /**
-   * Clear saved permissions
-   *
-   * Clear one explicitly confirmed saved permission scope.
-   */
-  public clear<ThrowOnError extends boolean = false>(
-    parameters: {
-      body:
-        | {
-            scope: "global"
-            confirm: true
-          }
-        | {
-            scope: "project"
-            projectID?: string | RemoteV1WorkspaceSsh
-            confirm: true
-          }
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
-    return (options?.client ?? this.client).post<
-      V2PermissionSavedClearResponses,
-      V2PermissionSavedClearErrors,
-      ThrowOnError
-    >({
-      url: "/api/permission/saved/clear",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
 }
 
 export class Permission3 extends HeyApiClient {
@@ -7050,9 +6158,9 @@ export class Permission3 extends HeyApiClient {
     return (this._request ??= new Request({ client: this.client }))
   }
 
-  private _saved?: Saved2
-  get saved(): Saved2 {
-    return (this._saved ??= new Saved2({ client: this.client }))
+  private _saved?: Saved
+  get saved(): Saved {
+    return (this._saved ??= new Saved({ client: this.client }))
   }
 }
 
@@ -7332,7 +6440,7 @@ export class ProjectCopy2 extends HeyApiClient {
       }
       strategy?: string
       directory?: string
-      name?: string | RemoteV1WorkspaceSsh
+      name?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -7408,9 +6516,9 @@ export class V2 extends HeyApiClient {
     return (this._location ??= new Location({ client: this.client }))
   }
 
-  private _agent?: Agent2
-  get agent(): Agent2 {
-    return (this._agent ??= new Agent2({ client: this.client }))
+  private _agent?: Agent
+  get agent(): Agent {
+    return (this._agent ??= new Agent({ client: this.client }))
   }
 
   private _session?: Session3
@@ -7620,11 +6728,6 @@ export class SlopcodeClient extends HeyApiClient {
   private _tui?: Tui
   get tui(): Tui {
     return (this._tui ??= new Tui({ client: this.client }))
-  }
-
-  private _remote?: Remote3
-  get remote(): Remote3 {
-    return (this._remote ??= new Remote3({ client: this.client }))
   }
 
   private _v2?: V2

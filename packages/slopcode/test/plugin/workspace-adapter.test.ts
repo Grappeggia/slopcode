@@ -103,7 +103,7 @@ describe("plugin.workspace", () => {
           path.join(dir, "slopcode.json"),
           JSON.stringify(
             {
-              $schema: "https://slopcode.ai/config.json",
+              $schema: "https://slopcode.dev/config.json",
               plugin: [pathToFileURL(file).href],
             },
             null,

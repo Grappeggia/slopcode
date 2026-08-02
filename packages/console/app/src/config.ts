@@ -3,7 +3,7 @@
  */
 export const config = {
   // Base URL
-  baseUrl: "https://slopcode.ai",
+  baseUrl: "https://slopcode.dev",
 
   // GitHub
   github: {

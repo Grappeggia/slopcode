@@ -216,6 +216,17 @@ function HomeDesign() {
 
   command.register("home", () => [
     {
+      id: "command.palette",
+      title: language.t("command.palette"),
+      hidden: true,
+      onSelect: async () => {
+        const conn = focusedServer()
+        if (!conn) return
+        const palette = await import("@/components/dialog-select-file")
+        void dialog.show(() => <palette.DialogHomeCommandPalette server={conn} />)
+      },
+    },
+    {
       id: "home.sessions.search.focus",
       title: language.t("home.sessions.search.placeholder"),
       keybind: "mod+f",
@@ -360,7 +371,7 @@ function HomeDesign() {
           clearNotifications={clearNotifications}
           unseenCount={unseenCount}
           openSettings={openSettings}
-          openHelp={() => platform.openLink("https://slopcode.ai/desktop-feedback")}
+          openHelp={() => platform.openLink("https://slopcode.dev/desktop-feedback")}
           language={language}
         />
 
@@ -1098,6 +1109,7 @@ function LegacyHome() {
   const platform = usePlatform()
   const pickDirectory = useDirectoryPicker()
   const dialog = useDialog()
+  const command = useCommand()
   const navigate = useNavigate()
   const global = useGlobal()
   const server = useServer()
@@ -1116,6 +1128,20 @@ function LegacyHome() {
     if (healthy === false) return "bg-icon-critical-base"
     return "bg-border-weak-base"
   })
+
+  command.register("home.legacy", () => [
+    {
+      id: "command.palette",
+      title: language.t("command.palette"),
+      hidden: true,
+      onSelect: async () => {
+        const conn = server.current
+        if (!conn) return
+        const palette = await import("@/components/dialog-select-file")
+        void dialog.show(() => <palette.DialogHomeCommandPalette server={conn} />)
+      },
+    },
+  ])
 
   function openProject(server: ServerConnection.Any, directory: string) {
     const serverCtx = global.createServerCtx(server)

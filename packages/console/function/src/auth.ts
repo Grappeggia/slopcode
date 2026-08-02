@@ -36,7 +36,7 @@ export const subjects = createSubjects({
 
 const MY_THEME: Theme = {
   ...THEME_OPENAUTH,
-  logo: "https://slopcode.ai/favicon-v3.svg",
+  logo: "https://slopcode.dev/favicon-v3.svg",
 }
 
 export default {

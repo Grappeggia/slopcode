@@ -4,7 +4,7 @@ import { BoxRenderable, RGBA, type RootRenderable } from "@opentui/core"
 import { testRender, useRenderer } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
-import type { PermissionRequest, QuestionRequest } from "@slopcode-ai/sdk/v2"
+import type { QuestionRequest } from "@slopcode-ai/sdk/v2"
 import { SlopcodeKeymapProvider, registerSlopcodeKeymap } from "@slopcode-ai/tui/keymap"
 import {
   RUN_COMMAND_PANEL_ROWS,
@@ -24,8 +24,6 @@ import type {
   FooterSubagentState,
   FooterSubagentTab,
   FooterView,
-  PermissionBatchReply,
-  PermissionReply,
   RunCommand,
   RunInput,
   RunPrompt,
@@ -34,7 +32,7 @@ import type {
   StreamCommit,
 } from "@/cli/cmd/run/types"
 import { RunQuestionBody } from "@/cli/cmd/run/footer.question"
-import { RejectField, RunPermissionBody } from "@/cli/cmd/run/footer.permission"
+import { RejectField } from "@/cli/cmd/run/footer.permission"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const tuiConfig = createTuiResolvedConfig()
@@ -61,7 +59,7 @@ function model(input: {
     providerID: "slopcode",
     api: {
       id: "slopcode",
-      url: "https://slopcode.ai",
+      url: "https://slopcode.dev",
       npm: "@ai-sdk/openai-compatible",
     },
     name: input.name,
@@ -187,7 +185,6 @@ async function renderFooter(
       <SlopcodeKeymapProvider keymap={keymap}>
         <RunFooterView
           directory="/tmp"
-          permissionScope="project"
           findFiles={async () => []}
           agents={() => []}
           resources={() => []}
@@ -205,7 +202,6 @@ async function renderFooter(
           agent="slopcode"
           onSubmit={input.onSubmit ?? (() => true)}
           onPermissionReply={() => {}}
-          onPermissionBatchReply={() => {}}
           onQuestionReply={() => {}}
           onQuestionReject={() => {}}
           onCycle={input.onCycle ?? (() => {})}
@@ -461,54 +457,6 @@ test("direct skill panel renders searchable skill list", async () => {
     expect(frame).toContain("formatter")
     expect(frame).toContain("Apply formatter fixes")
     expect(frame).not.toContain("review")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("direct skill panel keeps the selected item visible when list rows shrink", async () => {
-  const [commands] = createSignal<RunCommand[] | undefined>(
-    Array.from({ length: 12 }, (_, index) =>
-      command({
-        name: `skill-${String(index + 1).padStart(2, "0")}`,
-        description: `Skill ${index + 1}`,
-        source: "skill",
-      }),
-    ),
-  )
-  const [rows, setRows] = createSignal(4)
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
-        <RunSkillSelectBody
-          theme={() => RUN_THEME_FALLBACK.footer}
-          commands={commands}
-          rows={rows}
-          onClose={() => {}}
-          onSelect={() => {}}
-        />
-      </box>
-    ),
-    {
-      width: 100,
-      height: RUN_COMMAND_PANEL_ROWS,
-      kittyKeyboard: true,
-    },
-  )
-
-  try {
-    await app.renderOnce()
-    Array.from({ length: 6 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
-    await app.renderOnce()
-
-    setRows(1)
-    await app.renderOnce()
-    const frame = app.captureCharFrame()
-
-    expect(frame).toContain("skill-07")
-    expect(frame).not.toContain("skill-06")
-    expect(frame).not.toContain("skill-08")
   } finally {
     app.renderer.destroy()
   }
@@ -984,7 +932,6 @@ test("direct footer shows editable prompts and additional queued work while runn
       <SlopcodeKeymapProvider keymap={keymap}>
         <RunFooterView
           directory="/tmp"
-          permissionScope="project"
           findFiles={async () => []}
           agents={() => []}
           resources={() => []}
@@ -1008,7 +955,6 @@ test("direct footer shows editable prompts and additional queued work while runn
           agent="slopcode"
           onSubmit={() => true}
           onPermissionReply={() => {}}
-          onPermissionBatchReply={() => {}}
           onQuestionReply={() => {}}
           onQuestionReject={() => {}}
           onCycle={() => {}}
@@ -1340,280 +1286,6 @@ test("direct permission rejection submits through keymap return binding", async 
   } finally {
     app.renderer.currentFocusedRenderable?.blur()
     app.renderer.currentFocusedEditor?.blur()
-    off?.()
-    app.renderer.destroy()
-  }
-})
-
-test("direct durable confirmation uses folder scope and exact patterns", async () => {
-  let off: (() => void) | undefined
-  const requests: PermissionRequest[] = [
-    {
-      id: "per_folder",
-      sessionID: "ses_folder",
-      permission: "bash",
-      patterns: ["git status"],
-      metadata: {},
-      always: ["git status"],
-    },
-  ]
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
-    return (
-      <SlopcodeKeymapProvider keymap={keymap}>
-        <RunPermissionBody
-          requests={requests}
-          scope="folder"
-          theme={RUN_THEME_FALLBACK.footer}
-          block={RUN_THEME_FALLBACK.block}
-          onReply={() => {}}
-          onBatchReply={() => {}}
-        />
-      </SlopcodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={18}>
-        <Harness />
-      </box>
-    ),
-    { width: 100, height: 18, kittyKeyboard: true },
-  )
-
-  try {
-    await app.renderOnce()
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-    const frame = app.captureCharFrame()
-    expect(frame).toContain("Always allow these patterns for this folder")
-    expect(frame).toContain("survives restarts")
-    expect(frame).toContain("git status")
-    expect(frame).not.toContain("Remember globally")
-  } finally {
-    off?.()
-    app.renderer.destroy()
-  }
-})
-
-test("direct unknown-scope keyboard navigation cycles through every visible option", async () => {
-  let off: (() => void) | undefined
-  const replies: PermissionReply[] = []
-  const requests: PermissionRequest[] = [
-    {
-      id: "per_unknown_scope",
-      sessionID: "ses_unknown_scope",
-      permission: "bash",
-      patterns: ["git status"],
-      metadata: {},
-      always: ["git status"],
-    },
-  ]
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
-    return (
-      <SlopcodeKeymapProvider keymap={keymap}>
-        <RunPermissionBody
-          requests={requests}
-          scope={undefined}
-          theme={RUN_THEME_FALLBACK.footer}
-          block={RUN_THEME_FALLBACK.block}
-          onReply={(reply) => {
-            replies.push(reply)
-            return Promise.reject(new Error("keep permission open"))
-          }}
-          onBatchReply={() => {}}
-        />
-      </SlopcodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={120} height={18}>
-        <Harness />
-      </box>
-    ),
-    { width: 120, height: 18, kittyKeyboard: true },
-  )
-
-  try {
-    await app.renderOnce()
-    const frame = app.captureCharFrame()
-    expect(frame).toContain("Allow once")
-    expect(frame).toContain("Allow for this session")
-    expect(frame).toContain("Reject")
-    expect(frame).not.toContain("Always allow")
-
-    app.mockInput.pressEnter()
-    await Bun.sleep(10)
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressEnter()
-    await Bun.sleep(10)
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressEnter()
-    await app.renderOnce()
-
-    expect(replies.map((reply) => reply.reply)).toEqual(["once", "always"])
-    expect(app.captureCharFrame()).toContain("Reject permission")
-    expect(app.captureCharFrame()).not.toContain("Always allow these patterns for this")
-    expect(replies.some((reply) => reply.reply === "project")).toBe(false)
-  } finally {
-    off?.()
-    app.renderer.destroy()
-  }
-})
-
-test("direct forecast review surfaces batch failure and allows retry", async () => {
-  let attempts = 0
-  let off: (() => void) | undefined
-  const requests: PermissionRequest[] = [
-    {
-      id: "per_retry",
-      sessionID: "ses_retry",
-      permission: "bash",
-      patterns: ["git status"],
-      metadata: {},
-      always: ["git status"],
-      kind: "forecast",
-      batchID: "pmb_retry",
-      batchSize: 1,
-      reason: "Inspect state",
-    },
-  ]
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
-    return (
-      <SlopcodeKeymapProvider keymap={keymap}>
-        <RunPermissionBody
-          requests={requests}
-          scope="project"
-          theme={RUN_THEME_FALLBACK.footer}
-          block={RUN_THEME_FALLBACK.block}
-          onReply={() => {}}
-          onBatchReply={async () => {
-            attempts += 1
-            if (attempts === 1) throw { data: { message: "temporary API failure" } }
-          }}
-        />
-      </SlopcodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={160} height={18}>
-        <Harness />
-      </box>
-    ),
-    { width: 160, height: 18, kittyKeyboard: true },
-  )
-
-  try {
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("Reject all")
-    expect(app.captureCharFrame()).not.toContain("Skip all")
-    app.mockInput.pressEnter()
-    await Bun.sleep(20)
-    await app.renderOnce()
-    expect(attempts).toBe(1)
-    expect(app.captureCharFrame()).toContain("temporary API failure")
-
-    app.mockInput.pressEnter()
-    await Bun.sleep(20)
-    await app.renderOnce()
-    expect(attempts).toBe(2)
-  } finally {
-    off?.()
-    app.renderer.destroy()
-  }
-})
-
-test("direct forecast actions normalize when a late row cannot be persisted", async () => {
-  let off: (() => void) | undefined
-  const initial: PermissionRequest[] = [
-    {
-      id: "per_saved",
-      sessionID: "ses_late",
-      permission: "bash",
-      patterns: ["git status"],
-      metadata: {},
-      always: ["git status"],
-      kind: "forecast",
-      batchID: "pmb_late",
-      batchSize: 2,
-    },
-  ]
-  const [requests, setRequests] = createSignal(initial)
-  const replies: PermissionBatchReply[] = []
-
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
-    return (
-      <SlopcodeKeymapProvider keymap={keymap}>
-        <RunPermissionBody
-          requests={requests()}
-          scope="project"
-          theme={RUN_THEME_FALLBACK.footer}
-          block={RUN_THEME_FALLBACK.block}
-          onReply={() => {}}
-          onBatchReply={(reply) => {
-            replies.push(reply)
-          }}
-        />
-      </SlopcodeKeymapProvider>
-    )
-  }
-
-  const app = await testRender(
-    () => (
-      <box width={160} height={18}>
-        <Harness />
-      </box>
-    ),
-    { width: 160, height: 18, kittyKeyboard: true },
-  )
-
-  try {
-    await app.renderOnce()
-    app.mockInput.pressKey("ARROW_RIGHT")
-    setRequests([
-      ...initial,
-      {
-        ...initial[0],
-        id: "per_once",
-        patterns: ["pwd"],
-        always: [],
-      },
-    ])
-    await app.renderOnce()
-    const frame = app.captureCharFrame()
-    expect(frame).not.toContain("Allow selected for this session")
-    expect(frame).not.toContain("Always allow selected patterns for this project")
-
-    app.mockInput.pressEnter()
-    expect(replies).toEqual([
-      {
-        batchID: "pmb_late",
-        requestIDs: ["per_saved", "per_once"],
-        reply: "once",
-      },
-    ])
-  } finally {
     off?.()
     app.renderer.destroy()
   }

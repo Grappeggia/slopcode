@@ -176,8 +176,8 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
     if (progress()) setProgress("Submitting prompt")
   }
 
-  function finishSubmit(clear = true) {
-    if (clear) homeDestination?.clear()
+  function finishSubmit() {
+    homeDestination?.clear()
     setProgress(undefined)
     setCreating(false)
   }

@@ -464,7 +464,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://slopcode.ai/",
+            "HTTP-Referer": "https://slopcode.dev/",
             "X-Title": "slopcode",
             "X-Source": "slopcode",
           },
@@ -475,7 +475,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://slopcode.ai/",
+            "HTTP-Referer": "https://slopcode.dev/",
             "X-Title": "slopcode",
           },
         },
@@ -485,7 +485,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: provider.source === "config",
         options: {
           headers: {
-            "HTTP-Referer": "https://slopcode.ai/",
+            "HTTP-Referer": "https://slopcode.dev/",
             "X-Title": "slopcode",
             "X-BILLING-INVOKE-ORIGIN": "SlopCode",
           },
@@ -496,7 +496,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "http-referer": "https://slopcode.ai/",
+            "http-referer": "https://slopcode.dev/",
             "x-title": "slopcode",
           },
         },
@@ -602,7 +602,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://slopcode.ai/",
+            "HTTP-Referer": "https://slopcode.dev/",
             "X-Title": "slopcode",
           },
         },
@@ -860,7 +860,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://slopcode.ai/",
+            "HTTP-Referer": "https://slopcode.dev/",
             "X-Title": "slopcode",
           },
         },
@@ -1288,7 +1288,6 @@ export interface Interface {
     query: string[],
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID) => Effect.Effect<Model | undefined>
-  readonly getSmallModelForProvider: (providerID: ProviderV2.ID) => Effect.Effect<Model | undefined>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
 }
 
@@ -1863,12 +1862,6 @@ export const layer = Layer.effect(
             ...options["headers"],
             ...model.headers,
           }
-        if (options["headers"] && typeof options["headers"] === "object")
-          options["headers"] = Object.fromEntries(
-            Object.entries(options["headers"]).filter(
-              ([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints",
-            ),
-          )
 
         const key = Hash.fast(
           JSON.stringify({
@@ -2021,18 +2014,14 @@ export const layer = Layer.effect(
       return undefined
     })
 
-    const getSmallModelForProvider = Effect.fn("Provider.getSmallModelForProvider")(function* (
-      providerID: ProviderV2.ID,
-    ) {
+    const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (providerID: ProviderV2.ID) {
       const cfg = yield* config.get()
+
       if (cfg.small_model) {
         const parsed = parseModel(cfg.small_model)
-        if (parsed.providerID === providerID) {
-          const configured = yield* getModel(parsed.providerID, parsed.modelID).pipe(
-            Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
-          )
-          if (configured) return configured
-        }
+        return yield* getModel(parsed.providerID, parsed.modelID).pipe(
+          Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
+        )
       }
 
       const s = yield* InstanceState.get(state)
@@ -2044,7 +2033,7 @@ export const layer = Layer.effect(
         { provider: toPublicInfo(provider) },
         { model: undefined },
       )
-      if (experimental.model && experimental.model.providerID === providerID) {
+      if (experimental.model) {
         return {
           ...experimental.model,
           id: ModelV2.ID.make(experimental.model.id),
@@ -2095,15 +2084,6 @@ export const layer = Layer.effect(
       return undefined
     })
 
-    const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (providerID: ProviderV2.ID) {
-      const cfg = yield* config.get()
-      if (!cfg.small_model) return yield* getSmallModelForProvider(providerID)
-      const parsed = parseModel(cfg.small_model)
-      return yield* getModel(parsed.providerID, parsed.modelID).pipe(
-        Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
-      )
-    })
-
     const defaultModel = Effect.fn("Provider.defaultModel")(function* () {
       const cfg = yield* config.get()
       if (cfg.model) return parseModel(cfg.model)
@@ -2138,16 +2118,7 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({
-      list,
-      getProvider,
-      getModel,
-      getLanguage,
-      closest,
-      getSmallModel,
-      getSmallModelForProvider,
-      defaultModel,
-    })
+    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
   }),
 )
 
@@ -2163,15 +2134,11 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
-const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro", "gpt-5.5-fast"]
+const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro", "gpt-5.5-fast", "gpt-5.6-sol-fast"]
 export function sort<T extends { id: string }>(models: T[]) {
   return sortBy(
     models,
-    [
-      (model) =>
-        model.id.includes("gpt-5.5-fast") ? priority.length : priority.findIndex((filter) => model.id.includes(filter)),
-      "desc",
-    ],
+    [(model) => priority.findLastIndex((filter) => model.id.includes(filter)), "desc"],
     [(model) => (model.id.includes("latest") ? 0 : 1), "asc"],
     [(model) => model.id, "desc"],
   )

@@ -61,7 +61,7 @@ Biçimlendiricileri slopcode yapılandırmanızdaki `formatter` bölümü aracı
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": {}
 }
 ```
@@ -85,7 +85,7 @@ Bazı örneklere bakalım.
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": false
 }
 ```
@@ -94,7 +94,7 @@ Bazı örneklere bakalım.
 
 ```json title="slopcode.json" {5}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -111,7 +111,7 @@ Komutu, ortam değişkenlerini ve dosya uzantılarını belirterek yerleşik bi�
 
 ```json title="slopcode.json" {4-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": {
     "prettier": {
       "command": ["npx", "prettier", "--write", "$FILE"],

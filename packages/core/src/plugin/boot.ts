@@ -27,8 +27,6 @@ import { ModelsDevPlugin } from "./models-dev"
 import { ProviderPlugins } from "./provider"
 import { SkillV2 } from "../skill"
 import { Reference } from "../reference"
-import { PluginTool } from "./tool"
-import { PluginPackage } from "./package"
 
 type Plugin = {
   id: PluginV2.ID
@@ -57,11 +55,6 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/PluginBoot") {}
 
-const phases = new WeakMap<Interface, Deferred.Deferred<void>>()
-
-/** Waits for configured plugins without waiting for custom tools that overlay built-ins. */
-export const beforeTools = (service: Interface) => phases.get(service)?.pipe(Deferred.await) ?? service.wait()
-
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -81,34 +74,28 @@ export const layer = Layer.effect(
     const skill = yield* SkillV2.Service
     const references = yield* Reference.Service
     const done = yield* Deferred.make<void>()
-    const configured = yield* Deferred.make<void>()
 
     const add = Effect.fn("PluginBoot.add")(function* (input: Plugin) {
-      yield* plugin
-        .add({
-          id: input.id,
-          effect: input.effect.pipe(
-            Effect.provideService(Catalog.Service, catalog),
-            Effect.provideService(CommandV2.Service, commands),
-            Effect.provideService(Credential.Service, credentials),
-            Effect.provideService(Integration.Service, integrations),
-            Effect.provideService(AgentV2.Service, agents),
-            Effect.provideService(Config.Service, config),
-            Effect.provideService(Location.Service, location),
-            Effect.provideService(ModelsDev.Service, modelsDev),
-            Effect.provideService(Npm.Service, npm),
-            Effect.provideService(EventV2.Service, events),
-            Effect.provideService(FSUtil.Service, fs),
-            Effect.provideService(Global.Service, global),
-            Effect.provideService(SkillV2.Service, skill),
-            Effect.provideService(Reference.Service, references),
-            Effect.provideService(PluginV2.Service, plugin),
-          ),
-        })
-        .pipe(
-          Effect.tapError((error) => Effect.logError("failed to load plugin", { id: input.id, error })),
-          Effect.ignore,
-        )
+      yield* plugin.add({
+        id: input.id,
+        effect: input.effect.pipe(
+          Effect.provideService(Catalog.Service, catalog),
+          Effect.provideService(CommandV2.Service, commands),
+          Effect.provideService(Credential.Service, credentials),
+          Effect.provideService(Integration.Service, integrations),
+          Effect.provideService(AgentV2.Service, agents),
+          Effect.provideService(Config.Service, config),
+          Effect.provideService(Location.Service, location),
+          Effect.provideService(ModelsDev.Service, modelsDev),
+          Effect.provideService(Npm.Service, npm),
+          Effect.provideService(EventV2.Service, events),
+          Effect.provideService(FSUtil.Service, fs),
+          Effect.provideService(Global.Service, global),
+          Effect.provideService(SkillV2.Service, skill),
+          Effect.provideService(Reference.Service, references),
+          Effect.provideService(PluginV2.Service, plugin),
+        ),
+      })
     })
 
     const boot = Effect.gen(function* () {
@@ -125,13 +112,7 @@ export const layer = Layer.effect(
       yield* add(ConfigCommandPlugin.Plugin)
       yield* add(ConfigSkillPlugin.Plugin)
       yield* add(ConfigReferencePlugin.Plugin)
-      yield* Deferred.succeed(configured, undefined)
-      yield* PluginPackage.load
-      yield* PluginTool.discover
-    }).pipe(
-      Effect.withSpan("PluginBoot.boot"),
-      Effect.onExit((exit) => Deferred.done(configured, exit).pipe(Effect.ignore)),
-    )
+    }).pipe(Effect.withSpan("PluginBoot.boot"))
 
     yield* boot.pipe(
       Effect.exit,
@@ -139,11 +120,9 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     )
 
-    const service = Service.of({
+    return Service.of({
       wait: () => Deferred.await(done),
     })
-    phases.set(service, configured)
-    return service
   }),
 )
 

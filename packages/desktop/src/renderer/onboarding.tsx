@@ -18,12 +18,7 @@ export function DesktopFirstLaunchOnboarding() {
       if (!active) return
       const pending = await window.api.isFirstLaunchOnboardingPending()
       if (!active) return
-      const shouldCreateDefaultProject = shouldCreateDefaultProjectFor(
-        server,
-        tabs.store.length,
-        pending,
-        existingInstall,
-      )
+      const shouldCreateDefaultProject = shouldCreateDefaultProjectFor(server, tabs.store.length, pending, existingInstall)
 
       const directory = await window.api.finishFirstLaunchOnboarding(shouldCreateDefaultProject)
       if (!active) return

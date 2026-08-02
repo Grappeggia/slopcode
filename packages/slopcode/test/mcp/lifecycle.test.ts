@@ -1055,15 +1055,18 @@ it.instance(
 // Bug #5: McpOAuthCallback.cancelPending uses wrong key
 // ========================================================================
 
-it.live("McpOAuthCallback.cancelPending uses a reverse key while state remains primary", () =>
+it.live("McpOAuthCallback.cancelByKey uses a reverse key while state remains primary", () =>
   Effect.acquireUseRelease(
-    Effect.sync(() => McpOAuthCallback.waitForCallback("abc123hexstate", "my-mcp-server")),
-    (callback) =>
+    Effect.promise(async () => {
+      const endpoint = await McpOAuthCallback.ensureRunning("http://127.0.0.1:18002/callback")
+      return { callback: McpOAuthCallback.waitForCallback("abc123hexstate", "my-mcp-server", endpoint) }
+    }),
+    (pending) =>
       Effect.gen(function* () {
-        McpOAuthCallback.cancelPending("my-mcp-server")
+        McpOAuthCallback.cancelByKey("my-mcp-server")
 
         const exit = yield* Effect.tryPromise({
-          try: () => callback,
+          try: () => pending.callback,
           catch: (error) => (error instanceof Error ? error : new Error(String(error))),
         }).pipe(
           Effect.timeoutOrElse({

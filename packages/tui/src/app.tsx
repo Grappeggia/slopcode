@@ -20,7 +20,6 @@ import {
   onMount,
   onCleanup,
   batch,
-  For,
   Show,
   on,
 } from "solid-js"
@@ -30,12 +29,11 @@ import { DialogProvider as DialogProviderList } from "./component/dialog-provide
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
-import { EditorContextProvider, type EditorIntegration } from "./context/editor"
+import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
 import { SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
 import { SyncProvider, useSync } from "./context/sync"
-import { SessionTabsProvider, useSessionTabs } from "./context/session-tabs"
 import { DataProvider } from "./context/data"
 import { LocalProvider, useLocal } from "./context/local"
 import { LocationProvider } from "./context/location"
@@ -49,7 +47,6 @@ import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogWorkspaceList } from "./component/dialog-workspace-list"
-import { DialogPermissions } from "./component/dialog-permissions"
 import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
@@ -87,14 +84,10 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
-import { SessionStrip } from "./component/session-strip"
 
 const appGlobalBindingCommands = [
   "session.list",
   "session.new",
-  "session.tabs.previous",
-  "session.tabs.next",
-  "session.tabs.close",
   "session.quick_switch.1",
   "session.quick_switch.2",
   "session.quick_switch.3",
@@ -149,7 +142,6 @@ export type TuiInput = {
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
   events?: EventSource
-  editor?: EditorIntegration
   pluginHost: TuiPluginHost
 }
 
@@ -305,32 +297,30 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                           <PermissionProvider>
                                             <ProjectProvider>
                                               <SyncProvider>
-                                                <SessionTabsProvider>
-                                                  <DataProvider>
-                                                    <ThemeProvider mode={mode}>
-                                                      <LocalProvider>
-                                                        <PromptStashProvider>
-                                                          <DialogProvider>
-                                                            <FrecencyProvider>
-                                                              <PromptHistoryProvider>
-                                                                <PromptRefProvider>
-                                                                  <EditorContextProvider integration={input.editor}>
-                                                                    <LocationProvider>
-                                                                      <App
-                                                                        onSnapshot={input.onSnapshot}
-                                                                        pluginHost={input.pluginHost}
-                                                                      />
-                                                                    </LocationProvider>
-                                                                  </EditorContextProvider>
-                                                                </PromptRefProvider>
-                                                              </PromptHistoryProvider>
-                                                            </FrecencyProvider>
-                                                          </DialogProvider>
-                                                        </PromptStashProvider>
-                                                      </LocalProvider>
-                                                    </ThemeProvider>
-                                                  </DataProvider>
-                                                </SessionTabsProvider>
+                                                <DataProvider>
+                                                  <ThemeProvider mode={mode}>
+                                                    <LocalProvider>
+                                                      <PromptStashProvider>
+                                                        <DialogProvider>
+                                                          <FrecencyProvider>
+                                                            <PromptHistoryProvider>
+                                                              <PromptRefProvider>
+                                                                <EditorContextProvider>
+                                                                  <LocationProvider>
+                                                                    <App
+                                                                      onSnapshot={input.onSnapshot}
+                                                                      pluginHost={input.pluginHost}
+                                                                    />
+                                                                  </LocationProvider>
+                                                                </EditorContextProvider>
+                                                              </PromptRefProvider>
+                                                            </PromptHistoryProvider>
+                                                          </FrecencyProvider>
+                                                        </DialogProvider>
+                                                      </PromptStashProvider>
+                                                    </LocalProvider>
+                                                  </ThemeProvider>
+                                                </DataProvider>
                                               </SyncProvider>
                                             </ProjectProvider>
                                           </PermissionProvider>
@@ -380,7 +370,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
-  const tabs = useSessionTabs()
   const project = useProject()
   const exit = useExit()
   const promptRef = usePromptRef()
@@ -479,31 +468,26 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   const args = useArgs()
-  let applied = false
-  createEffect(() => {
-    if (applied || sync.status === "loading") return
-    applied = true
+  onMount(() => {
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
-      if (!args.model) return
-      const { providerID, modelID } = Model.parse(args.model)
-      if (!providerID || !modelID)
-        return toast.show({
-          variant: "warning",
-          message: `Invalid model format: ${args.model}`,
-          duration: 3000,
+      if (args.model) {
+        const { providerID, modelID } = Model.parse(args.model)
+        if (!providerID || !modelID)
+          return toast.show({
+            variant: "warning",
+            message: `Invalid model format: ${args.model}`,
+            duration: 3000,
+          })
+        local.model.set({ providerID, modelID }, { recent: true })
+      }
+      if (args.sessionID && !args.fork) {
+        route.navigate({
+          type: "session",
+          sessionID: args.sessionID,
         })
-      local.model.set({ providerID, modelID }, { recent: true })
+      }
     })
-  })
-
-  onMount(() => {
-    if (args.sessionID && !args.fork) {
-      route.navigate({
-        type: "session",
-        sessionID: args.sessionID,
-      })
-    }
   })
 
   let continued = false
@@ -594,35 +578,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "new",
         slashAliases: ["clear"],
         run: () => {
-          tabs.openDraft()
+          route.navigate({
+            type: "home",
+          })
           dialog.clear()
-        },
-      },
-      {
-        name: "session.tabs.previous",
-        title: "Previous session tab",
-        category: "Session",
-        hidden: true,
-        enabled: tabs.switchable(),
-        run: () => tabs.previous(),
-      },
-      {
-        name: "session.tabs.next",
-        title: "Next session tab",
-        category: "Session",
-        hidden: true,
-        enabled: tabs.switchable(),
-        run: () => tabs.next(),
-      },
-      {
-        name: "session.tabs.close",
-        title: "Close session tab",
-        category: "Session",
-        hidden: true,
-        enabled: tabs.active() !== undefined,
-        run: () => {
-          const id = tabs.active()
-          if (id) tabs.close(id)
         },
       },
       {
@@ -844,7 +803,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "docs.open",
         title: "Open docs",
         run: () => {
-          open("https://slopcode.ai/docs").catch(() => {})
+          open("https://slopcode.dev/docs").catch(() => {})
           dialog.clear()
         },
         category: "System",
@@ -969,15 +928,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
-        name: "permission.list",
-        title: "Manage permissions",
-        category: "System",
-        slashName: "permissions",
-        run: () => {
-          dialog.replace(() => <DialogPermissions />)
-        },
-      },
-      {
         name: "permission.mode",
         title:
           local.permission.mode === "auto" ? "Disable auto-approve permissions" : "Enable auto-approve permissions",
@@ -1040,12 +990,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   event.on("session.deleted", (evt) => {
-    const current = route.data.type === "session" && route.data.sessionID === evt.properties.info.id
-    const active = tabs.active() === evt.properties.info.id
-    const open = tabs.ids().includes(evt.properties.info.id)
-    tabs.close(evt.properties.info.id)
-    if (current && !open) route.navigate({ type: "home" })
-    if (active || current) {
+    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+      route.navigate({ type: "home" })
       toast.show({
         variant: "info",
         message: "The current session was deleted",
@@ -1147,10 +1093,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       </Show>
       <Show when={ready()}>
         <box flexGrow={1} minHeight={0} flexDirection="column">
-          <SessionStrip />
           <Switch>
             <Match when={route.data.type === "home"}>
-              <For each={[tabs.draft()]}>{() => <Home />}</For>
+              <Home />
             </Match>
             <Match when={route.data.type === "session"}>
               <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>

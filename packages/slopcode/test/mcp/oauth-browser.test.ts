@@ -42,15 +42,29 @@ const transportCalls: Array<{
   options: { authProvider?: unknown; requestInit?: RequestInit }
 }> = []
 const finished: Array<{ url: string; code: string }> = []
+let finishShouldFail = false
 
 // Mock the transport constructors
 void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: class MockStreamableHTTP {
     url: string
-    authProvider: { redirectToAuthorization?: (url: URL) => Promise<void> } | undefined
+    authProvider:
+      | {
+          state?: () => Promise<string>
+          saveCodeVerifier?: (value: string) => Promise<void>
+          redirectToAuthorization?: (url: URL) => Promise<void>
+        }
+      | undefined
     constructor(
       url: URL,
-      options?: { authProvider?: { redirectToAuthorization?: (url: URL) => Promise<void> }; requestInit?: RequestInit },
+      options?: {
+        authProvider?: {
+          state?: () => Promise<string>
+          saveCodeVerifier?: (value: string) => Promise<void>
+          redirectToAuthorization?: (url: URL) => Promise<void>
+        }
+        requestInit?: RequestInit
+      },
     ) {
       this.url = url.toString()
       this.authProvider = options?.authProvider
@@ -62,12 +76,15 @@ void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
     }
     async start() {
       // Simulate OAuth redirect by calling the authProvider's redirectToAuthorization
+      const state = await this.authProvider?.state?.()
+      if (state) await this.authProvider?.saveCodeVerifier?.(`verifier-${state}`)
       if (this.authProvider?.redirectToAuthorization) {
         await this.authProvider.redirectToAuthorization(new URL("https://auth.example.com/authorize?client_id=test"))
       }
       throw new MockUnauthorizedError()
     }
     async finishAuth(code: string) {
+      if (finishShouldFail) throw new Error("OAuth token exchange failed")
       finished.push({ url: this.url, code })
     }
   },
@@ -112,6 +129,7 @@ beforeEach(() => {
   openDeferred = undefined
   transportCalls.length = 0
   finished.length = 0
+  finishShouldFail = false
 })
 
 // Import modules after mocking
@@ -124,7 +142,7 @@ const { FSUtil } = await import("@slopcode-ai/core/fs-util")
 const { CrossSpawnSpawner } = await import("@slopcode-ai/core/cross-spawn-spawner")
 const mcpTest = testEffect(
   MCP.layer.pipe(
-    Layer.provide(McpAuth.defaultLayer),
+    Layer.provideMerge(McpAuth.defaultLayer),
     Layer.provideMerge(EventV2Bridge.defaultLayer),
     Layer.provide(Config.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
@@ -264,8 +282,8 @@ mcpTest.instance(
 
       yield* Effect.all(
         [
-          mcp.finishAuth("shared-oauth", "code-a").pipe(provideInstance(first)),
-          mcp.finishAuth("shared-oauth", "code-b").pipe(provideInstance(second)),
+          mcp.finishAuth("shared-oauth", started[0].oauthState, "code-a").pipe(provideInstance(first)),
+          mcp.finishAuth("shared-oauth", started[1].oauthState, "code-b").pipe(provideInstance(second)),
         ],
         { concurrency: "unbounded" },
       )
@@ -278,4 +296,78 @@ mcpTest.instance(
       )
     }),
   { config: config("shared-oauth", undefined, "https://a.example.com/mcp") },
+)
+
+mcpTest.instance(
+  "completes concurrent same-target flows by state and rejects replay",
+  () =>
+    Effect.gen(function* () {
+      yield* withCallbackStop
+      const mcp = yield* service
+      const first = yield* mcp.startAuth("same-target")
+      const second = yield* mcp.startAuth("same-target")
+
+      yield* mcp.finishAuth("same-target", second.oauthState, "code-second")
+      yield* mcp.finishAuth("same-target", first.oauthState, "code-first")
+
+      expect(finished).toEqual(
+        expect.arrayContaining([
+          { url: "https://same.example.com/mcp", code: "code-first" },
+          { url: "https://same.example.com/mcp", code: "code-second" },
+        ]),
+      )
+      expect(yield* Effect.exit(mcp.finishAuth("same-target", first.oauthState, "replay"))).toMatchObject({
+        _tag: "Failure",
+      })
+    }),
+  { config: config("same-target", undefined, "https://same.example.com/mcp") },
+)
+
+mcpTest.instance(
+  "rejects a state submitted for a different MCP name and invalidates the flow",
+  () =>
+    Effect.gen(function* () {
+      yield* withCallbackStop
+      const mcp = yield* service
+      const auth = yield* McpAuth.Service
+      const instance = (yield* TestInstance).directory
+      const started = yield* mcp.startAuth("matched")
+
+      expect(yield* Effect.exit(mcp.finishAuth("mismatched", started.oauthState, "code"))).toMatchObject({
+        _tag: "Failure",
+      })
+      expect(yield* Effect.exit(mcp.finishAuth("matched", started.oauthState, "replay"))).toMatchObject({
+        _tag: "Failure",
+      })
+      expect((yield* auth.get({ instance, name: "matched" }, "https://matched.example.com/mcp"))?.flows).toBeUndefined()
+      expect(finished).toEqual([])
+    }),
+  { config: config("matched", undefined, "https://matched.example.com/mcp") },
+)
+
+mcpTest.instance(
+  "clears state and PKCE after completion failure and cancellation",
+  () =>
+    Effect.gen(function* () {
+      yield* withCallbackStop
+      const mcp = yield* service
+      const auth = yield* McpAuth.Service
+      const instance = (yield* TestInstance).directory
+      const identity = { instance, name: "cleanup" }
+      const url = "https://cleanup.example.com/mcp"
+
+      const failed = yield* mcp.startAuth("cleanup")
+      expect((yield* auth.get(identity, url))?.flows?.[failed.oauthState]?.codeVerifier).toBe(
+        `verifier-${failed.oauthState}`,
+      )
+      finishShouldFail = true
+      expect((yield* mcp.finishAuth("cleanup", failed.oauthState, "bad-code")).status).toBe("failed")
+      expect((yield* auth.get(identity, url))?.flows?.[failed.oauthState]).toBeUndefined()
+
+      finishShouldFail = false
+      const cancelled = yield* mcp.startAuth("cleanup")
+      yield* mcp.removeAuth("cleanup")
+      expect((yield* auth.get(identity, url))?.flows?.[cancelled.oauthState]).toBeUndefined()
+    }),
+  { config: config("cleanup", undefined, "https://cleanup.example.com/mcp") },
 )

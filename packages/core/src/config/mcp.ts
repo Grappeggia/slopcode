@@ -2,7 +2,6 @@ export * as ConfigMCP from "./mcp"
 
 import { Schema } from "effect"
 import { PositiveInt } from "../schema"
-import { MCPOAuthStore } from "../mcp/oauth-store"
 
 export class Local extends Schema.Class<Local>("ConfigV2.MCP.Local")({
   type: Schema.Literal("local"),
@@ -15,56 +14,17 @@ export class Local extends Schema.Class<Local>("ConfigV2.MCP.Local")({
   timeout: PositiveInt.pipe(Schema.optional),
 }) {}
 
-const redirect = Schema.String.check(
-  Schema.makeFilter((value) => {
-    try {
-      const url = new URL(value)
-      return (url.protocol === "http:" || url.protocol === "https:") &&
-        !!url.hostname &&
-        !url.username &&
-        !url.password &&
-        !url.hash
-        ? undefined
-        : "MCP OAuth redirect URI is invalid"
-    } catch {
-      return "MCP OAuth redirect URI is invalid"
-    }
-  }),
-)
-
-export const OAuth = Schema.Struct({
-  client_id: Schema.NonEmptyString.pipe(Schema.optional),
+export class OAuth extends Schema.Class<OAuth>("ConfigV2.MCP.OAuth")({
+  client_id: Schema.String.pipe(Schema.optional),
   client_secret: Schema.String.pipe(Schema.optional),
   scope: Schema.String.pipe(Schema.optional),
   callback_port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })).pipe(Schema.optional),
-  redirect_uri: redirect.pipe(Schema.optional),
-}).check(
-  Schema.makeFilter((value) => {
-    if (value.client_secret !== undefined && value.client_id === undefined)
-      return "MCP OAuth client ID is required when a client secret is configured"
-    if (value.callback_port === undefined || value.redirect_uri === undefined) return undefined
-    const url = new URL(value.redirect_uri)
-    return url.protocol === "http:" &&
-      (url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
-      !!url.port &&
-      Number(url.port) === value.callback_port
-      ? undefined
-      : "MCP OAuth callback configuration is invalid"
-  }),
-)
+  redirect_uri: Schema.String.pipe(Schema.optional),
+}) {}
 
 export class Remote extends Schema.Class<Remote>("ConfigV2.MCP.Remote")({
   type: Schema.Literal("remote"),
-  url: Schema.String.check(
-    Schema.makeFilter((value) => {
-      try {
-        MCPOAuthStore.normalizeEndpoint(value)
-        return undefined
-      } catch {
-        return "MCP remote endpoint is invalid"
-      }
-    }),
-  ),
+  url: Schema.String,
   headers: Schema.Record(Schema.String, Schema.String).pipe(Schema.optional),
   oauth: Schema.Union([OAuth, Schema.Literal(false)]).pipe(Schema.optional),
   disabled: Schema.Boolean.pipe(Schema.optional),

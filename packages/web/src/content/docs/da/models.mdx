@@ -53,7 +53,7 @@ SlopCode konfig.
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -70,7 +70,7 @@ Du kan konfigurere en models muligheder globalt gennem konfigurationen.
 
 ```jsonc title="slopcode.jsonc" {7-12,19-24}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "openai": {
       "models": {
@@ -109,7 +109,7 @@ Du kan også definere brugerdefinerede varianter, der udvider de indbyggede. Var
 
 ```jsonc title="slopcode.jsonc" {6-21}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "slopcode": {
       "models": {
@@ -174,7 +174,7 @@ Du kan tilsidesætte eksisterende varianter eller tilføje dine egne:
 
 ```jsonc title="slopcode.jsonc" {7-18}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "openai": {
       "models": {
@@ -211,7 +211,7 @@ Når SlopCode starter op, søger den efter modeller i følgende prioriterede ræ
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

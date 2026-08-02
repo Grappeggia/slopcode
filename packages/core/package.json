@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "0.2.209",
+  "version": "0.2.192",
   "name": "@slopcode-ai/core",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "db": "bun drizzle-kit",
     "migration": "bun run script/migration.ts",
     "fix-node-pty": "bun run script/fix-node-pty.ts",
-    "test": "bun test --timeout 30000 --only-failures",
+    "test": "bun test --only-failures",
     "typecheck": "tsgo --noEmit"
   },
   "bin": {
@@ -17,7 +17,6 @@
   },
   "exports": {
     "./public": "./src/public/index.ts",
-    "./internal/structured-tool": null,
     "./session/runner": "./src/session/runner/index.ts",
     "./system-context": "./src/system-context/index.ts",
     "./*": "./src/*.ts"
@@ -37,8 +36,7 @@
       "bun": "./src/filesystem/fff.bun.ts",
       "node": "./src/filesystem/fff.node.ts",
       "default": "./src/filesystem/fff.bun.ts"
-    },
-    "#structured-tool": "./src/internal/structured-tool.ts"
+    }
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
@@ -59,7 +57,7 @@
     "@parcel/watcher-win32-arm64": "2.5.1",
     "@parcel/watcher-win32-x64": "2.5.1",
     "@slopcode-ai/http-recorder": "workspace:*",
-    "@opencode-ai/schema": "workspace:*",
+    "@slopcode-ai/schema": "workspace:*",
     "drizzle-kit": "catalog:"
   },
   "dependencies": {
@@ -88,15 +86,12 @@
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@lydell/node-pty": "catalog:",
-    "@modelcontextprotocol/sdk": "1.29.0",
     "@ff-labs/fff-bun": "0.9.4",
     "@npmcli/arborist": "9.4.0",
     "@npmcli/config": "10.8.1",
-    "@slopcode-ai/codemode": "workspace:*",
     "@slopcode-ai/effect-drizzle-sqlite": "workspace:*",
     "@slopcode-ai/effect-sqlite-node": "workspace:*",
     "@slopcode-ai/llm": "workspace:*",
-    "@slopcode-ai/sdk": "workspace:*",
     "@opentelemetry/api": "1.9.0",
     "@opentelemetry/context-async-hooks": "2.6.1",
     "@opentelemetry/exporter-trace-otlp-http": "0.214.0",
@@ -105,7 +100,6 @@
     "@silvia-odwyer/photon-node": "0.3.4",
     "@openrouter/ai-sdk-provider": "2.9.0",
     "ai-gateway-provider": "3.1.2",
-    "ajv": "8.20.0",
     "bun-pty": "0.4.8",
     "cross-spawn": "catalog:",
     "drizzle-orm": "catalog:",

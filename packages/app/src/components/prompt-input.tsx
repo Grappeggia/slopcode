@@ -80,13 +80,21 @@ import { useQueries } from "@tanstack/solid-query"
 import { useQueryOptions } from "@/context/server-sync"
 import { pathKey } from "@/utils/path-key"
 import { base64Encode } from "@slopcode-ai/core/util/encode"
+import { getFilename } from "@slopcode-ai/core/util/path"
 import { displayName } from "@/pages/layout/helpers"
+import {
+  CREATE_NEW_SESSION_WORKTREE,
+  MAIN_NEW_SESSION_WORKTREE,
+  newSessionWorkspaceOptions,
+  shouldResetNewSessionWorktree,
+} from "@/pages/new-session/new-session-workspace-controller"
 
 interface PromptInputProps {
   class?: string
   variant?: "dock" | "new-session"
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
+  onNewSessionWorktreeChange?: (value: string) => void
   onNewSessionWorktreeReset?: () => void
   edit?: { id: string; prompt: Prompt; context: FollowupDraft["context"] }
   onEditLoaded?: () => void
@@ -152,6 +160,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let scrollRef!: HTMLDivElement
   let slashPopoverRef!: HTMLDivElement
   let projectSearchRef: HTMLInputElement | undefined
+  let workspaceSearchRef: HTMLInputElement | undefined
 
   const mirror = { input: false }
   const inset = 56
@@ -290,21 +299,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     savedPrompt: null as PromptHistoryEntry | null,
     placeholder: Math.floor(Math.random() * EXAMPLES.length),
     draggingType: null,
-    mode: prompt.mode(),
+    mode: "normal",
     applyingHistory: false,
     variantOpen: false,
   })
   const [picker, setPicker] = createStore({
     projectOpen: false,
     projectSearch: "",
-  })
-  const writeMode = (mode: "normal" | "shell") => {
-    setStore("mode", mode)
-    prompt.setMode(mode)
-  }
-  createEffect(() => {
-    const mode = prompt.mode()
-    if (mode !== store.mode) setStore("mode", mode)
+    workspaceOpen: false,
+    workspaceSearch: "",
   })
 
   const buttonsSpring = useSpring(() => (store.mode === "normal" ? 1 : 0), { visualDuration: 0.2, bounce: 0 })
@@ -495,7 +498,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const setMode = (mode: "normal" | "shell") => {
-    writeMode(mode)
+    setStore("mode", mode)
     setStore("popover", null)
     requestAnimationFrame(() => editorRef?.focus())
   }
@@ -1071,7 +1074,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           })
         }
 
-        writeMode("normal")
+        setStore("mode", "normal")
         setStore("popover", null)
         setStore("historyIndex", -1)
         setStore("savedPrompt", null)
@@ -1139,18 +1142,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return permission.isAutoAccepting(id, sdk.directory)
   })
 
-  const [agentsQuery, globalProvidersQuery, providersQuery] = useQueries(() => ({
-    queries: [
-      queryOptions.agents(pathKey(sdk.directory)),
-      queryOptions.providers(null),
-      queryOptions.providers(pathKey(sdk.directory)),
-    ],
-  }))
-
-  const agentsLoading = () => agentsQuery.isLoading
-  const agentsShouldFadeIn = createMemo((prev) => prev ?? agentsLoading())
-  const providersLoading = () => agentsLoading() || providersQuery.isLoading || globalProvidersQuery.isLoading
-  const providersShouldFadeIn = createMemo((prev) => prev ?? providersLoading())
   const { abort, handleSubmit } = createPromptSubmit({
     info,
     imageAttachments,
@@ -1165,7 +1156,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     resetHistoryNavigation: () => {
       resetHistoryNavigation(true)
     },
-    setMode,
+    setMode: (mode) => setStore("mode", mode),
     setPopover: (popover) => setStore("popover", popover),
     newSessionWorktree: () => props.newSessionWorktree,
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
@@ -1173,35 +1164,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
-    draftReady: () => prompt.ready()() && comments.ready(),
-  })
-
-  const [queued, setQueued] = createSignal(false)
-  let disposed = false
-  const customCommand = () => {
-    const text = prompt
-      .current()
-      .map((part) => ("content" in part ? part.content : ""))
-      .join("")
-    if (!text.startsWith("/")) return false
-    return sync.data.command.some((item) => item.name === text.split(" ")[0]?.slice(1))
-  }
-  const submitPrompt = (event: Event) => {
-    if (!params.id && store.mode === "normal" && !customCommand() && providersLoading()) {
-      event.preventDefault()
-      setQueued(true)
-      return
-    }
-    void handleSubmit(event)
-  }
-  createEffect(() => {
-    if (!queued() || providersLoading() || disposed) return
-    setQueued(false)
-    void handleSubmit(new Event("submit", { cancelable: true }))
-  })
-  onCleanup(() => {
-    disposed = true
-    setQueued(false)
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1233,7 +1195,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (event.key === "!" && store.mode === "normal") {
       const cursorPosition = getCursorPosition(editorRef)
       if (cursorPosition === 0) {
-        writeMode("shell")
+        setStore("mode", "shell")
         setStore("popover", null)
         event.preventDefault()
         return
@@ -1249,7 +1211,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       }
 
       if (store.mode === "shell") {
-        writeMode("normal")
+        setStore("mode", "normal")
         event.preventDefault()
         event.stopPropagation()
         return
@@ -1273,7 +1235,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (store.mode === "shell") {
       const { collapsed, cursorPosition, textLength } = getCaretState()
       if (event.key === "Backspace" && collapsed && cursorPosition === 0 && textLength === 0) {
-        writeMode("normal")
+        setStore("mode", "normal")
         event.preventDefault()
         return
       }
@@ -1362,9 +1324,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       ) {
         return
       }
-      submitPrompt(event)
+      void handleSubmit(event)
     }
   }
+
+  const [agentsQuery, globalProvidersQuery, providersQuery] = useQueries(() => ({
+    queries: [
+      queryOptions.agents(pathKey(sdk.directory)),
+      queryOptions.providers(null),
+      queryOptions.providers(pathKey(sdk.directory)),
+    ],
+  }))
+
+  const agentsLoading = () => agentsQuery.isLoading
+  const agentsShouldFadeIn = createMemo((prev) => prev ?? agentsLoading())
+  const providersLoading = () => agentsLoading() || providersQuery.isLoading || globalProvidersQuery.isLoading
+  const providersShouldFadeIn = createMemo((prev) => prev ?? providersLoading())
 
   const [promptReady] = createResource(
     () => prompt.ready().promise,
@@ -1408,16 +1383,35 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (!search) return projects()
     return projects().filter((project) => displayName(project).toLowerCase().includes(search))
   })
+  const selectedWorkspace = createMemo(() => {
+    const project = selectedProject()
+    const worktree = props.newSessionWorktree ?? MAIN_NEW_SESSION_WORKTREE
+    if (worktree === CREATE_NEW_SESSION_WORKTREE) return worktree
+    if (!project || worktree === MAIN_NEW_SESSION_WORKTREE || pathKey(worktree) === pathKey(project.worktree)) {
+      return MAIN_NEW_SESSION_WORKTREE
+    }
+    return worktree
+  })
+  const workspaceOptions = createMemo(() => newSessionWorkspaceOptions(selectedProject()))
+  const workspaceResults = createMemo(() => {
+    const search = picker.workspaceSearch.trim().toLowerCase()
+    return workspaceOptions().items.filter((sandbox) => {
+      if (sandbox === MAIN_NEW_SESSION_WORKTREE) return false
+      return !search || getFilename(sandbox).toLowerCase().includes(search) || sandbox.toLowerCase().includes(search)
+    })
+  })
   const showAgentControl = createMemo(() => settings.visibility.customAgents() && agentNames().length > 0)
   const selectProject = (worktree: string) => {
     setPicker({
       projectOpen: false,
       projectSearch: "",
     })
-    if (pathKey(worktree) === pathKey(selectedProject()?.worktree ?? "")) {
+    const project = selectedProject()
+    if (!shouldResetNewSessionWorktree(project && pathKey(project.worktree), pathKey(worktree))) {
       restoreFocus()
       return
     }
+    props.onNewSessionWorktreeReset?.()
     layout.projects.open(worktree)
     server.projects.touch(worktree)
 
@@ -1482,6 +1476,67 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onSearchClear: () => setPicker("projectSearch", ""),
     searchRef: (el) => (projectSearchRef = el),
   }))
+  const workspacePickerState = createMemo<ComposerPickerState>(() => ({
+    open: picker.workspaceOpen,
+    trigger: {
+      action: "prompt-workspace",
+      icon: selectedWorkspace() === "main" ? "branch" : "folder",
+      label:
+        selectedWorkspace() === MAIN_NEW_SESSION_WORKTREE
+          ? language.t("session.new.worktree.main")
+          : selectedWorkspace() === CREATE_NEW_SESSION_WORKTREE
+            ? language.t("session.new.worktree.create")
+            : getFilename(selectedWorkspace()),
+      class: "max-w-[203px]",
+      style: control(),
+      onPress: () => setPicker("workspaceOpen", true),
+    },
+    search: picker.workspaceSearch,
+    searchPlaceholder: language.t("session.new.project.search"),
+    clearLabel: language.t("common.clear"),
+    items: [
+      {
+        icon: "branch" as const,
+        label: language.t("session.new.worktree.main"),
+        selected: selectedWorkspace() === MAIN_NEW_SESSION_WORKTREE,
+        onSelect: () => {
+          setPicker({ workspaceOpen: false, workspaceSearch: "" })
+          props.onNewSessionWorktreeChange?.(MAIN_NEW_SESSION_WORKTREE)
+          restoreFocus()
+        },
+      },
+      ...workspaceResults().map((sandbox) => ({
+        icon: "folder" as const,
+        label: `${language.t("workspace.type.sandbox")}: ${getFilename(sandbox)}`,
+        selected: selectedWorkspace() === sandbox,
+        onSelect: () => {
+          setPicker({ workspaceOpen: false, workspaceSearch: "" })
+          props.onNewSessionWorktreeChange?.(sandbox)
+          restoreFocus()
+        },
+      })),
+    ],
+    action:
+      workspaceOptions().action === CREATE_NEW_SESSION_WORKTREE
+        ? {
+            icon: "plus",
+            label: language.t("session.new.worktree.create"),
+            selected: selectedWorkspace() === CREATE_NEW_SESSION_WORKTREE,
+            onSelect: () => {
+              setPicker({ workspaceOpen: false, workspaceSearch: "" })
+              props.onNewSessionWorktreeChange?.(CREATE_NEW_SESSION_WORKTREE)
+              restoreFocus()
+            },
+          }
+        : undefined,
+    onOpenChange: (open) => {
+      setPicker("workspaceOpen", open)
+      if (open) requestAnimationFrame(() => workspaceSearchRef?.focus())
+    },
+    onSearchInput: (value) => setPicker("workspaceSearch", value),
+    onSearchClear: () => setPicker("workspaceSearch", ""),
+    searchRef: (el) => (workspaceSearchRef = el),
+  }))
   const agentControlState = createMemo<ComposerAgentControlState>(() => ({
     title: language.t("command.agent.cycle"),
     keybind: command.keybind("agent.cycle"),
@@ -1525,7 +1580,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <div class="flex flex-col gap-3">
             <DockShellForm
               data-component={newSession() ? "session-new-composer" : "session-composer"}
-              onSubmit={submitPrompt}
+              onSubmit={handleSubmit}
               classList={{
                 "group/prompt-input min-h-[96px] w-full rounded-xl bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]": true,
                 "border-icon-info-active border-dashed": store.draggingType !== null,
@@ -1689,15 +1744,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               </div>
             </DockShellForm>
             <Show when={newSession() && selectedProject()}>
-              <div class="flex h-7 min-w-0 items-center gap-0 px-2">
-                <ComposerPicker state={projectPickerState()} />
-              </div>
+              <NewSessionWorkspaceControls project={projectPickerState()} workspace={workspacePickerState()} />
             </Show>
           </div>
         </Match>
         <Match when>
           <DockShellForm
-            onSubmit={submitPrompt}
+            onSubmit={handleSubmit}
             classList={{
               "group/prompt-input": true,
               "focus-within:shadow-xs-border": true,
@@ -1859,6 +1912,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               </div>
             </div>
           </DockShellForm>
+          <Show when={newSession() && selectedProject()}>
+            <NewSessionWorkspaceControls project={projectPickerState()} workspace={workspacePickerState()} />
+          </Show>
           <Show when={store.mode === "normal" || store.mode === "shell"}>
             <DockTray attach="top">
               <div class="px-1.75 pt-5.5 pb-2 flex items-center gap-2 min-w-0">
@@ -1877,7 +1933,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       variant="ghost"
                       class="text-text-base"
                       onClick={() => {
-                        writeMode("normal")
+                        setStore("mode", "normal")
                       }}
                     >
                       {language.t("common.cancel")}
@@ -2053,12 +2109,24 @@ type ComposerPickerState = {
   searchPlaceholder: string
   clearLabel: string
   items: ComposerPickerItemState[]
-  action: ComposerPickerItemState
+  action?: ComposerPickerItemState
   listClass?: string
   searchRef: (el: HTMLInputElement) => void
   onOpenChange: (open: boolean) => void
   onSearchInput: (value: string) => void
   onSearchClear: () => void
+}
+
+function NewSessionWorkspaceControls(props: { project: ComposerPickerState; workspace: ComposerPickerState }) {
+  return (
+    <div class="flex h-7 min-w-0 items-center gap-0 px-2">
+      <ComposerPicker state={props.project} />
+      <span class="select-none px-1 text-v2-text-text-faint" aria-hidden>
+        /
+      </span>
+      <ComposerPicker state={props.workspace} />
+    </div>
+  )
 }
 
 type ComposerAgentControlState = {
@@ -2090,6 +2158,7 @@ function ComposerPickerTrigger(props: ComponentProps<"button"> & { state: Compos
       {...rest}
       data-action={local.state.action}
       type="button"
+      aria-label={local.state.label}
       class={`flex h-7 min-w-0 items-center gap-1.5 rounded px-2 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-faint transition-colors hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none ${local.state.class ?? ""}`}
       style={local.state.style}
       onClick={() => local.state.onPress()}
@@ -2140,6 +2209,7 @@ function ComposerPicker(props: { state: ComposerPickerState }) {
               <input
                 ref={props.state.searchRef}
                 value={props.state.search}
+                aria-label={props.state.searchPlaceholder}
                 placeholder={props.state.searchPlaceholder}
                 class="h-7 min-w-0 flex-1 border-0 bg-transparent text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
                 onInput={(event) => props.state.onSearchInput(event.currentTarget.value)}
@@ -2157,10 +2227,16 @@ function ComposerPicker(props: { state: ComposerPickerState }) {
             </div>
             <For each={props.state.items}>{(item) => <ComposerPickerMenuItem state={item} />}</For>
           </div>
-          <div class="h-px bg-v2-border-border-muted" />
-          <div class="flex flex-col p-0.5">
-            <ComposerPickerMenuItem state={props.state.action} />
-          </div>
+          <Show when={props.state.action}>
+            {(action) => (
+              <>
+                <div class="h-px bg-v2-border-border-muted" />
+                <div class="flex flex-col p-0.5">
+                  <ComposerPickerMenuItem state={action()} />
+                </div>
+              </>
+            )}
+          </Show>
         </KobaltePopover.Content>
       </KobaltePopover.Portal>
     </KobaltePopover>

@@ -1,9 +1,9 @@
 import logoLight from "../asset/logo-ornate-light.svg"
 import logoDark from "../asset/logo-ornate-dark.svg"
-import copyLogoLight from "../asset/lander/logo-light.svg"
-import copyLogoDark from "../asset/lander/logo-dark.svg"
-import copyWordmarkLight from "../asset/lander/wordmark-light.svg"
-import copyWordmarkDark from "../asset/lander/wordmark-dark.svg"
+import copyLogoLight from "../asset/lander/slopcode-logo-light.svg"
+import copyLogoDark from "../asset/lander/slopcode-logo-dark.svg"
+import copyWordmarkLight from "../asset/lander/slopcode-wordmark-light.svg"
+import copyWordmarkDark from "../asset/lander/slopcode-wordmark-dark.svg"
 import copyBrandAssetsLight from "../asset/lander/brand-assets-light.svg"
 import copyBrandAssetsDark from "../asset/lander/brand-assets-dark.svg"
 

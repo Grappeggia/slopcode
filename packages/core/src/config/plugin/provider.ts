@@ -151,12 +151,6 @@ export const Plugin = PluginV2.define({
               Object.assign(provider.request.body, item.request.body)
             }
           })
-          const url = item.api?.url
-          if (url !== undefined) {
-            for (const modelID of draft.provider.get(providerID)?.models.keys() ?? []) {
-              draft.model.update(providerID, modelID, (model) => (model.api.url = url))
-            }
-          }
           const providerApi = draft.provider.get(providerID)?.provider.api
           const found = discovered.get(providerID)
           const providerPackage = providerApi?.type === "aisdk" ? providerApi.package : found?.npm

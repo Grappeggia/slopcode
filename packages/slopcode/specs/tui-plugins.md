@@ -18,7 +18,7 @@ Example:
 
 ```json
 {
-  "$schema": "https://slopcode.ai/tui.json",
+  "$schema": "https://slopcode.dev/tui.json",
   "theme": "smoke-theme",
   "leader_timeout": 2000,
   "keybinds": {

@@ -61,7 +61,7 @@ export const layer = Layer.effectDiscard(
     const boot = yield* PluginBoot.Service
     const skills = yield* SkillV2.Service
     const permission = yield* PermissionV2.Service
-    yield* PluginBoot.beforeTools(boot)
+    yield* boot.wait()
     yield* tools
       .register({
         [name]: Tool.make({

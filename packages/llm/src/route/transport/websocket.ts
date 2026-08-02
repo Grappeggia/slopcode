@@ -1,6 +1,6 @@
 import { Cause, Context, Effect, Layer, Queue, Stream } from "effect"
 import { Headers } from "effect/unstable/http"
-import { LLMError, TransportReason, type LLMRequest } from "../../schema"
+import { LLMError, TransportReason } from "../../schema"
 import * as HttpTransport from "./http"
 import type { Transport } from "./index"
 
@@ -213,7 +213,7 @@ export interface JsonPrepared {
 }
 
 export interface JsonInput<Body, Message> {
-  readonly toMessage: (body: Body | Record<string, unknown>, request: LLMRequest) => Effect.Effect<Message, LLMError>
+  readonly toMessage: (body: Body | Record<string, unknown>) => Effect.Effect<Message, LLMError>
   readonly encodeMessage: (message: Message) => string
 }
 
@@ -234,7 +234,7 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
       return {
         url: yield* webSocketUrl(parts.url),
         headers: parts.headers,
-        message: input.encodeMessage(yield* input.toMessage(parts.jsonBody, prepareInput.request)),
+        message: input.encodeMessage(yield* input.toMessage(parts.jsonBody)),
       }
     }),
   frames: (prepared, _request, runtime) => {

@@ -20,7 +20,7 @@ export type RevertInput = Schema.Schema.Type<typeof RevertInput>
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Session.BusyError>
   readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Session.BusyError>
-  readonly cleanup: (session: Session.Info, preserve?: MessageID) => Effect.Effect<void>
+  readonly cleanup: (session: Session.Info) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/SessionRevert") {}
@@ -97,7 +97,7 @@ export const layer = Layer.effect(
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
-    const cleanup = Effect.fn("SessionRevert.cleanup")(function* (session: Session.Info, preserve?: MessageID) {
+    const cleanup = Effect.fn("SessionRevert.cleanup")(function* (session: Session.Info) {
       if (!session.revert) return
       const sessionID = session.id
       const msgs = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
@@ -105,7 +105,6 @@ export const layer = Layer.effect(
       const remove = [] as SessionV1.WithParts[]
       let target: SessionV1.WithParts | undefined
       for (const msg of msgs) {
-        if (msg.info.id === preserve) continue
         if (msg.info.id < messageID) continue
         if (msg.info.id > messageID) {
           remove.push(msg)

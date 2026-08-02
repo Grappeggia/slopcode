@@ -19,6 +19,7 @@ export const AuthStartResponse = Schema.Struct({
   oauthState: Schema.String,
 })
 export const AuthCallbackPayload = Schema.Struct({
+  state: Schema.String,
   code: Schema.String,
 })
 export const AuthRemoveResponse = Schema.Struct({
@@ -81,20 +82,20 @@ export const McpApi = HttpApi.make("mcp")
           query: WorkspaceRoutingQuery,
           payload: AuthCallbackPayload,
           success: described(MCP.Status, "OAuth authentication completed"),
-          error: [HttpApiError.BadRequest, McpServerNotFoundError],
+          error: HttpApiError.BadRequest,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "mcp.auth.callback",
             summary: "Complete MCP OAuth",
             description:
-              "Complete OAuth authentication for a Model Context Protocol (MCP) server using the authorization code.",
+              "Complete OAuth authentication for the exact started flow using its state and authorization code.",
           }),
         ),
         HttpApiEndpoint.post("authAuthenticate", McpPaths.authAuthenticate, {
           params: { name: Schema.String },
           query: WorkspaceRoutingQuery,
           success: described(MCP.Status, "OAuth authentication completed"),
-          error: [UnsupportedOAuthError, McpServerNotFoundError],
+          error: [HttpApiError.BadRequest, UnsupportedOAuthError, McpServerNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "mcp.auth.authenticate",

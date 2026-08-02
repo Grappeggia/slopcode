@@ -1,7 +1,6 @@
 import { Effect, Schema } from "effect"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { type WorkspaceAdapter, type WorkspaceAdapterContext, WorkspaceInfo } from "../types"
-import type { AppServices } from "@/effect/app-runtime"
 
 const WorktreeConfig = Schema.Struct({
   name: WorkspaceInfo.fields.name,
@@ -13,15 +12,6 @@ const decodeWorktreeConfig = Schema.decodeUnknownSync(WorktreeConfig)
 async function loadWorktree() {
   const [{ AppRuntime }, { Worktree }] = await Promise.all([import("@/effect/app-runtime"), import("@/worktree")])
   return { AppRuntime, Worktree }
-}
-
-async function run<A, E, R extends AppServices>(
-  effect: Effect.Effect<A, E, R>,
-  context: WorkspaceAdapterContext | undefined,
-) {
-  if (context?.bridge) return context.bridge.promise(effect)
-  const { AppRuntime } = await loadWorktree()
-  return AppRuntime.runPromise(effect)
 }
 
 function requireInstance(context: WorkspaceAdapterContext | undefined) {
@@ -39,13 +29,12 @@ export const WorktreeAdapter: WorkspaceAdapter = {
   name: "Worktree",
   description: "Create a git worktree",
   async configure(info, context) {
-    const { Worktree } = await loadWorktree()
-    const next = await run(
+    const { AppRuntime, Worktree } = await loadWorktree()
+    const next = await AppRuntime.runPromise(
       provideContext(
         Worktree.Service.use((svc) => svc.makeWorktreeInfo({ detached: true })),
         context,
       ),
-      context,
     )
     return {
       ...info,
@@ -54,9 +43,9 @@ export const WorktreeAdapter: WorkspaceAdapter = {
     }
   },
   async create(info, _env, _from, context) {
-    const { Worktree } = await loadWorktree()
+    const { AppRuntime, Worktree } = await loadWorktree()
     const config = decodeWorktreeConfig(info)
-    await run(
+    await AppRuntime.runPromise(
       provideContext(
         Worktree.Service.use((svc) =>
           svc.createFromInfo({
@@ -67,19 +56,17 @@ export const WorktreeAdapter: WorkspaceAdapter = {
         ),
         context,
       ),
-      context,
     )
   },
   async list(context) {
-    const { Worktree } = await loadWorktree()
+    const { AppRuntime, Worktree } = await loadWorktree()
     const ctx = requireInstance(context)
     return (
-      await run(
+      await AppRuntime.runPromise(
         provideContext(
           Worktree.Service.use((svc) => svc.list()),
           context,
         ),
-        context,
       )
     ).map((info) => ({
       type: "worktree",
@@ -90,14 +77,13 @@ export const WorktreeAdapter: WorkspaceAdapter = {
     }))
   },
   async remove(info, context) {
-    const { Worktree } = await loadWorktree()
+    const { AppRuntime, Worktree } = await loadWorktree()
     const config = decodeWorktreeConfig(info)
-    await run(
+    await AppRuntime.runPromise(
       provideContext(
         Worktree.Service.use((svc) => svc.remove({ directory: config.directory })),
         context,
       ),
-      context,
     )
   },
   target(info) {

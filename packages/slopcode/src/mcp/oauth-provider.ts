@@ -5,12 +5,13 @@ import type {
   OAuthClientInformation,
   OAuthClientInformationFull,
 } from "@modelcontextprotocol/sdk/shared/auth.js"
+import { isLoopbackUrl } from "@slopcode-ai/core/util/url"
 import { Effect } from "effect"
 import { McpAuth } from "./auth"
 
 const OAUTH_CALLBACK_PORT = 19876
 const OAUTH_CALLBACK_PATH = "/mcp/oauth/callback"
-const REDIRECT_ERROR = "MCP OAuth redirect URI must be an HTTP(S) URL without a fragment"
+const REDIRECT_ERROR = "MCP OAuth redirect URI must be a loopback HTTP URL without credentials or a fragment"
 
 function parseRedirectUrl(value: string) {
   const url = (() => {
@@ -20,7 +21,15 @@ function parseRedirectUrl(value: string) {
       throw new TypeError(REDIRECT_ERROR)
     }
   })()
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname || url.hash) {
+  if (
+    url.protocol !== "http:" ||
+    !isLoopbackUrl(url.toString()) ||
+    url.hostname === "0.0.0.0" ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    url.port === "0"
+  ) {
     throw new TypeError(REDIRECT_ERROR)
   }
   return url
@@ -40,6 +49,7 @@ export interface McpOAuthCallbacks {
 
 export class McpOAuthProvider implements OAuthClientProvider {
   private serverUrl: string
+  private initialized = false
 
   constructor(
     private identity: McpAuth.Identity,
@@ -47,6 +57,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     private config: McpOAuthConfig,
     private callbacks: McpOAuthCallbacks,
     private auth: McpAuth.Interface,
+    private flow?: string,
   ) {
     this.serverUrl = McpAuth.normalizeServerUrl(serverUrl)
   }
@@ -64,7 +75,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     return {
       redirect_uris: [this.redirectUrl],
       client_name: "SlopCode",
-      client_uri: "https://slopcode.ai",
+      client_uri: "https://slopcode.dev",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: this.config.clientSecret ? "client_secret_post" : "none",
@@ -126,13 +137,12 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    const existing = (await Effect.runPromise(this.auth.get(this.identity, this.serverUrl)))?.tokens
     await Effect.runPromise(
       this.auth.updateTokens(this.identity, this.serverUrl, {
         accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token ?? existing?.refreshToken,
+        refreshToken: tokens.refresh_token,
         expiresAt: tokens.expires_in !== undefined ? Date.now() / 1000 + tokens.expires_in : undefined,
-        scope: tokens.scope ?? existing?.scope,
+        scope: tokens.scope,
       }),
     )
   }
@@ -142,39 +152,38 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    await Effect.runPromise(this.auth.updateCodeVerifier(this.identity, this.serverUrl, codeVerifier))
+    const state = await this.state()
+    await Effect.runPromise(this.auth.updateCodeVerifier(this.identity, this.serverUrl, state, codeVerifier))
   }
 
   async codeVerifier(): Promise<string> {
-    const entry = await Effect.runPromise(this.auth.get(this.identity, this.serverUrl))
-    if (!entry?.codeVerifier) {
-      throw new Error(`No code verifier saved for MCP server: ${this.identity.name}`)
-    }
-    return entry.codeVerifier
+    if (!this.flow) throw new Error("No code verifier is available")
+    const verifier = await Effect.runPromise(this.auth.getCodeVerifier(this.identity, this.serverUrl, this.flow))
+    if (!verifier) throw new Error("No PKCE code verifier is available")
+    return verifier
   }
 
   async saveState(state: string): Promise<void> {
-    await Effect.runPromise(this.auth.updateOAuthState(this.identity, this.serverUrl, state))
+    if (this.flow !== state) this.initialized = false
+    this.flow = state
+    await this.state()
   }
 
   async state(): Promise<string> {
-    const entry = await Effect.runPromise(this.auth.get(this.identity, this.serverUrl))
-    if (entry?.oauthState) {
-      return entry.oauthState
-    }
-
-    // Generate a new state if none exists — the SDK calls state() as a
-    // generator, not just a reader, so we need to produce a value even when
-    // startAuth() hasn't pre-saved one (e.g. during automatic auth on first
-    // connect).
-    const newState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    this.flow ??= Array.from(crypto.getRandomValues(new Uint8Array(32)))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("")
-    await Effect.runPromise(this.auth.updateOAuthState(this.identity, this.serverUrl, newState))
-    return newState
+    if (this.initialized) return this.flow
+    await Effect.runPromise(this.auth.startFlow(this.identity, this.serverUrl, this.flow))
+    this.initialized = true
+    return this.flow
   }
 
-  async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
+  currentState() {
+    return this.flow
+  }
+
+  async invalidateCredentials(type: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
     switch (type) {
       case "all":
         await Effect.runPromise(this.auth.remove(this.identity, this.serverUrl))
@@ -185,6 +194,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
       case "tokens":
         await Effect.runPromise(this.auth.clearTokens(this.identity, this.serverUrl))
         break
+      case "verifier":
+        if (this.flow) await Effect.runPromise(this.auth.clearFlow(this.identity, this.serverUrl, this.flow))
+        break
+      case "discovery":
+        break
     }
   }
 }
@@ -194,13 +208,17 @@ export { OAUTH_CALLBACK_PORT, OAUTH_CALLBACK_PATH }
 /**
  * Parse a redirect URI to extract port and path for the callback server.
  */
-export function parseRedirectUri(value?: string): { port: number; path: string } {
+export function parseRedirectUri(value?: string): { host: string; port: number; path: string } {
   if (!value) {
-    return { port: OAUTH_CALLBACK_PORT, path: OAUTH_CALLBACK_PATH }
+    return { host: "127.0.0.1", port: OAUTH_CALLBACK_PORT, path: OAUTH_CALLBACK_PATH }
   }
 
   const url = parseRedirectUrl(value)
-  const port = url.port ? parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80
+  const host = url.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "")
+  const port = url.port ? parseInt(url.port, 10) : 80
   const path = url.pathname || OAUTH_CALLBACK_PATH
-  return { port, path }
+  return { host, port, path }
 }

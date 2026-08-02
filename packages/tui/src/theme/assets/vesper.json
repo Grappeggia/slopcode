@@ -1,5 +1,5 @@
 {
-  "$schema": "https://slopcode.ai/theme.json",
+  "$schema": "https://slopcode.dev/theme.json",
   "defs": {
     "vesperBg": "#101010",
     "vesperFg": "#FFF",

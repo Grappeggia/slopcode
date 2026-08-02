@@ -1,5 +1,5 @@
 import { castDraft, produce, type WritableDraft } from "immer"
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -100,7 +100,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
-      "session.next.created": () => Effect.void,
       "session.next.agent.switched": (event) => {
         return adapter.appendMessage(
           new SessionMessage.AgentSwitched({
@@ -133,7 +132,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             text: event.data.prompt.text,
             files: event.data.prompt.files,
             agents: event.data.prompt.agents,
-            format: event.data.prompt.format,
             time: { created: event.data.timestamp },
           }),
         )
@@ -161,33 +159,18 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         )
       },
-      "session.next.shell.requested": (event) =>
-        adapter.appendMessage(
+      "session.next.shell.started": (event) => {
+        return adapter.appendMessage(
           new SessionMessage.Shell({
             id: event.data.messageID,
             type: "shell",
             metadata: event.metadata,
-            callID: event.data.messageID,
+            callID: event.data.callID,
             command: event.data.command,
             output: "",
             time: { created: event.data.timestamp },
           }),
-        ),
-      "session.next.shell.started": (event) => {
-        return Effect.gen(function* () {
-          if (yield* adapter.getCurrentShell(event.data.callID)) return
-          yield* adapter.appendMessage(
-            new SessionMessage.Shell({
-              id: event.data.messageID,
-              type: "shell",
-              metadata: event.metadata,
-              callID: event.data.callID,
-              command: event.data.command,
-              output: "",
-              time: { created: event.data.timestamp },
-            }),
-          )
-        })
+        )
       },
       "session.next.shell.ended": (event) => {
         return Effect.gen(function* () {
@@ -197,21 +180,11 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               produce(currentShell, (draft) => {
                 draft.output = event.data.output
                 draft.time.completed = event.data.timestamp
-                if (Schema.is(SessionEvent.Shell.Ended)(event) && event.version === 2) {
-                  draft.status = event.data.status
-                  draft.exitCode = event.data.exitCode
-                  draft.truncated = event.data.truncated
-                  draft.stdoutTruncated = event.data.stdoutTruncated
-                  draft.stderrTruncated = event.data.stderrTruncated
-                }
               }),
             )
           }
         })
       },
-      "session.next.shell.continued": () => Effect.void,
-      "session.next.shell.continuation.started": () => Effect.void,
-      "session.next.shell.continuation.unknown": () => Effect.void,
       "session.next.step.started": (event) => {
         return Effect.gen(function* () {
           const currentAssistant = yield* adapter.getCurrentAssistant()
@@ -226,7 +199,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             new SessionMessage.Assistant({
               id: event.data.assistantMessageID,
               type: "assistant",
-              rootUserID: event.data.rootUserID,
               agent: event.data.agent,
               model: event.data.model,
               time: { created: event.data.timestamp },
@@ -238,7 +210,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.step.ended": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          if (draft.structured !== undefined || draft.structuredError !== undefined) return
           draft.time.completed = event.data.timestamp
           draft.finish = event.data.finish
           draft.cost = event.data.cost
@@ -248,46 +219,11 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.step.failed": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          if (draft.structured !== undefined || draft.structuredError !== undefined) return
           draft.time.completed = event.data.timestamp
           draft.finish = "error"
           draft.error = event.data.error
         })
       },
-      "session.next.structured.dispatched": () => Effect.void,
-      "session.next.structured.retry": (event) =>
-        updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          draft.time.completed = event.data.timestamp
-          draft.finish = "structured-retry"
-          draft.structuredRetry = {
-            attempt: event.data.attempt,
-            remaining: event.data.remaining,
-            reason: event.data.reason,
-            message: event.data.message,
-          }
-        }),
-      "session.next.structured.result": (event) =>
-        updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          draft.time.completed = event.data.timestamp
-          draft.finish = "stop"
-          draft.structured = event.data.value
-          draft.structuredError = undefined
-          draft.structuredRetry = undefined
-        }),
-      "session.next.structured.failed": (event) =>
-        updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          draft.time.completed = event.data.timestamp
-          draft.finish = "error"
-          draft.structured = undefined
-          draft.structuredRetry = undefined
-          draft.structuredError = {
-            reason: event.data.reason,
-            attempts: event.data.attempts,
-            retryCount: event.data.retryCount,
-            exhausted: event.data.exhausted,
-            message: event.data.message,
-          }
-        }),
       "session.next.text.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
@@ -333,7 +269,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match) {
-            match.toolType = "toolType" in event.data && event.data.toolType === "custom" ? "custom" : undefined
             match.provider = event.data.provider
             match.time.ran = event.data.timestamp
             match.state = castDraft(
@@ -393,12 +328,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               new SessionMessage.ToolStateError({
                 status: "error",
                 error: event.data.error,
-                input:
-                  match.toolType === "custom"
-                    ? match.state.input
-                    : typeof match.state.input === "string"
-                      ? {}
-                      : match.state.input,
+                input: typeof match.state.input === "string" ? {} : match.state.input,
                 structured: match.state.status === "running" ? match.state.structured : {},
                 content: match.state.status === "running" ? match.state.content : [],
                 result: event.data.result,
@@ -407,9 +337,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }
         })
       },
-      "session.next.task.prepared": () => Effect.void,
-      "session.next.task.requested": () => Effect.void,
-      "session.next.task.interrupted": () => Effect.void,
       "session.next.reasoning.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
@@ -440,9 +367,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.retried": () => Effect.void,
-      "session.next.compaction.requested": () => Effect.void,
-      "session.next.compaction.skipped": () => Effect.void,
-      "session.next.compaction.failed": () => Effect.void,
       "session.next.compaction.started": () => Effect.void,
       "session.next.compaction.delta": () => Effect.void,
       "session.next.compaction.ended": (event) => {
@@ -458,14 +382,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         )
       },
-      "session.next.execution.started": () => Effect.void,
-      "session.next.execution.provider.dispatched": () => Effect.void,
-      "session.next.execution.provider.completed": () => Effect.void,
-      "session.next.execution.continuation.ready": () => Effect.void,
-      "session.next.execution.retry.scheduled": () => Effect.void,
-      "session.next.execution.succeeded": () => Effect.void,
-      "session.next.execution.interrupted": () => Effect.void,
-      "session.next.execution.failed": () => Effect.void,
     })
   })
 }

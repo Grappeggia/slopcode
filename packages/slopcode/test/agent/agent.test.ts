@@ -75,6 +75,34 @@ it.instance("build agent has correct default properties", () =>
   }),
 )
 
+it.instance(
+  "uses GPT-5.6 Sol Fast for SlopCode modes when available",
+  () =>
+    Effect.gen(function* () {
+      for (const name of ["build", "plan", "goal"]) {
+        const model = (yield* load((svc) => svc.get(name))).model
+        expect(String(model?.providerID)).toBe("slopcode")
+        expect(String(model?.modelID)).toBe("gpt-5.6-sol-fast")
+      }
+    }),
+  {
+    config: {
+      provider: {
+        slopcode: {
+          models: {
+            "gpt-5.6-sol-fast": {
+              name: "GPT-5.6 Sol Fast",
+              tool_call: true,
+              limit: { context: 1_050_000, output: 128_000 },
+            },
+          },
+          options: { apiKey: "test" },
+        },
+      },
+    },
+  },
+)
+
 it.instance("plan agent denies edits except .slopcode/plans/*", () =>
   Effect.gen(function* () {
     const plan = yield* load((svc) => svc.get("plan"))
@@ -83,18 +111,6 @@ it.instance("plan agent denies edits except .slopcode/plans/*", () =>
     expect(evalPerm(plan, "edit")).toBe("deny")
     // But specific path is allowed
     expect(Permission.evaluate("edit", ".slopcode/plans/foo.md", plan!.permission).action).toBe("allow")
-  }),
-)
-
-it.instance("only the plan agent allows plan permission forecasts", () =>
-  Effect.gen(function* () {
-    const plan = yield* load((svc) => svc.get("plan"))
-    const build = yield* load((svc) => svc.get("build"))
-    const general = yield* load((svc) => svc.get("general"))
-
-    expect(evalPerm(plan, "plan_permissions")).toBe("allow")
-    expect(evalPerm(build, "plan_permissions")).toBe("deny")
-    expect(evalPerm(general, "plan_permissions")).toBe("deny")
   }),
 )
 

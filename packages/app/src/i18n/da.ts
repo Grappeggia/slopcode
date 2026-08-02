@@ -137,7 +137,7 @@ export const dict = {
   "provider.connect.slopcodeZen.line2":
     "Med en enkelt API-nøgle får du adgang til modeller som Claude, GPT, Gemini, GLM og flere.",
   "provider.connect.slopcodeZen.visit.prefix": "Besøg ",
-  "provider.connect.slopcodeZen.visit.link": "slopcode.ai/zen",
+  "provider.connect.slopcodeZen.visit.link": "slopcode.dev/zen",
   "provider.connect.slopcodeZen.visit.suffix": " for at hente din API-nøgle.",
   "provider.connect.oauth.code.visit.prefix": "Besøg ",
   "provider.connect.oauth.code.visit.link": "dette link",

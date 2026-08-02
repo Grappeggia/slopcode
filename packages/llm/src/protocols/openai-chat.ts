@@ -119,7 +119,6 @@ const OpenAIChatUsage = Schema.Struct({
   prompt_tokens_details: optionalNull(
     Schema.Struct({
       cached_tokens: Schema.optional(Schema.Number),
-      cache_write_tokens: Schema.optional(Schema.Number),
     }),
   ),
   completion_tokens_details: optionalNull(
@@ -344,11 +343,10 @@ const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMR
   // `fromRequest` returns the provider body only. Endpoint, auth, framing,
   // validation, and HTTP execution are composed by `Route.make`.
   const generation = request.generation
-  const tools = yield* ProviderShared.functionToolDefinitions("OpenAI Chat", request)
   return {
     model: request.model.id,
     messages: yield* lowerMessages(request),
-    tools: tools.length === 0 ? undefined : tools.map(lowerTool),
+    tools: request.tools.length === 0 ? undefined : request.tools.map(lowerTool),
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
     stream: true as const,
     stream_options: { include_usage: true },
@@ -384,17 +382,16 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // satisfied on both sides.
 const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
   if (!usage) return undefined
-  const input = ProviderShared.normalizeInputTokens(
-    usage.prompt_tokens,
-    usage.prompt_tokens_details?.cached_tokens,
-    usage.prompt_tokens_details?.cache_write_tokens,
-  )
+  const cached = usage.prompt_tokens_details?.cached_tokens
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
+  const nonCached = ProviderShared.subtractTokens(usage.prompt_tokens, cached)
   return new Usage({
-    ...input,
+    inputTokens: usage.prompt_tokens,
     outputTokens: usage.completion_tokens,
+    nonCachedInputTokens: nonCached,
+    cacheReadInputTokens: cached,
     reasoningTokens: reasoning,
-    totalTokens: ProviderShared.totalTokens(input.inputTokens, usage.completion_tokens, usage.total_tokens),
+    totalTokens: ProviderShared.totalTokens(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens),
     providerMetadata: { openai: usage },
   })
 }

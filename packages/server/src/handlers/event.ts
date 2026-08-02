@@ -37,7 +37,6 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
               events.all().pipe(
                 Stream.filter(
                   (event) =>
-                    EventV2.isPublic(event) &&
                     event.location?.directory === location.directory &&
                     event.location.workspaceID === location.workspaceID,
                 ),

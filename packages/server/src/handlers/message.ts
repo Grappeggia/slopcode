@@ -1,9 +1,9 @@
 import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { SessionV2 } from "@slopcode-ai/core/session"
 import { Effect, Schema } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { InvalidCursorError, SessionNotFoundError, UnknownError } from "../errors"
-import { SessionGraph } from "../session-graph"
 
 const DefaultMessagesLimit = 50
 
@@ -26,7 +26,7 @@ const cursor = {
 
 export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handlers) =>
   Effect.gen(function* () {
-    const session = (yield* SessionGraph.Service).session
+    const session = yield* SessionV2.Service
 
     return handlers.handle(
       "session.messages",

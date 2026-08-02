@@ -14,7 +14,6 @@ import { ModelV2 } from "@slopcode-ai/core/model"
 import { ModelsDev } from "@slopcode-ai/core/models-dev"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { ModelsDevPlugin } from "@slopcode-ai/core/plugin/models-dev"
-import { fallback } from "@slopcode-ai/core/models-dev-fallback"
 import { Policy } from "@slopcode-ai/core/policy"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ProjectV2 } from "@slopcode-ai/core/project"
@@ -69,50 +68,6 @@ const provider = (id: string, model: string, version = id) =>
   })
 
 describe("ModelsDevPlugin", () => {
-  it.effect("routes real managed GPT-5.6 fallback shapes through Responses endpoints", () =>
-    Effect.gen(function* () {
-      const data = Object.fromEntries(
-        ["slopcode", "slopcode-go"].map((id) => [id, Schema.decodeUnknownSync(ModelsDev.Provider)(fallback[id])]),
-      )
-      yield* ModelsDevPlugin.effect.pipe(
-        Effect.provideService(
-          ModelsDev.Service,
-          ModelsDev.Service.of({ get: () => Effect.succeed(data), refresh: () => Effect.void }),
-        ),
-      )
-      const catalog = yield* Catalog.Service
-
-      for (const providerID of [ProviderV2.ID.slopcode, ProviderV2.ID.slopcodeGo]) {
-        const model = yield* catalog.model.get(providerID, ModelV2.ID.make("gpt-5.6"))
-        const resolved = yield* SessionRunnerModel.resolve(
-          SessionV2.Info.make({
-            id: SessionV2.ID.make(`ses_${providerID}`),
-            projectID: ProjectV2.ID.global,
-            title: "test",
-            model: { id: model.id, providerID },
-            cost: 0,
-            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            time: { created: model.time.released, updated: model.time.released },
-            location: { directory: AbsolutePath.make("/project") },
-          }),
-          model,
-        )
-
-        expect(model.api).toMatchObject({
-          package: "@ai-sdk/openai",
-          url: `https://www.slopcode.dev/zen${providerID === ProviderV2.ID.slopcodeGo ? "/go" : ""}/v1`,
-        })
-        expect(resolved.model.route).toMatchObject({
-          protocol: "openai-responses",
-          endpoint: {
-            baseURL: `https://www.slopcode.dev/zen${providerID === ProviderV2.ID.slopcodeGo ? "/go" : ""}/v1`,
-            path: "/responses",
-          },
-        })
-      }
-    }),
-  )
-
   it.effect("registers key methods for providers with environment variables", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
@@ -252,7 +207,7 @@ describe("ModelsDevPlugin", () => {
             location: { directory: AbsolutePath.make("/project") },
           })
           const resolved = yield* SessionRunnerModel.resolve(session, fast)
-          const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
+          const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
 
           expect(prepared.body).toMatchObject({
             model: "gpt-5.6",

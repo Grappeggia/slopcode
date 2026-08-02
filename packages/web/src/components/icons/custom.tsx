@@ -36,22 +36,16 @@ export function IconGemini(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
   )
 }
 
-export function IconOpencode(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
+export function IconSlopcode(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
   return (
-    <svg {...props} viewBox="0 0 70 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg {...props} viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path
-        fill-rule="evenodd"
-        clip-rule="evenodd"
-        d="M0 13H35V58H0V13ZM26.25 22.1957H8.75V48.701H26.25V22.1957Z"
+        d="M384 96H128V160H384V96ZM192 160H128V224H192V160ZM384 224H128V288H384V224ZM384 288H320V352H384V288ZM384 352H128V416H384V352Z"
         fill="currentColor"
       />
-      <path d="M43.75 13H70V22.1957H52.5V48.701H70V57.8967H43.75V13Z" fill="currentColor" />
+      <path d="M320 288H192V352H320V288Z" fill="currentColor" opacity="0.35" />
     </svg>
   )
-}
-
-export function IconSlopcode(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
-  return <IconOpencode {...props} />
 }
 
 // https://icones.js.org/collection/ri?s=meta&icon=ri:meta-fill

@@ -140,7 +140,7 @@ export const dict = {
   "provider.connect.slopcodeZen.line2":
     "With a single API key you'll get access to models such as Claude, GPT, Gemini, GLM and more.",
   "provider.connect.slopcodeZen.visit.prefix": "Visit ",
-  "provider.connect.slopcodeZen.visit.link": "slopcode.ai/zen",
+  "provider.connect.slopcodeZen.visit.link": "slopcode.dev/zen",
   "provider.connect.slopcodeZen.visit.suffix": " to collect your API key.",
   "provider.connect.oauth.code.visit.prefix": "Visit ",
   "provider.connect.oauth.code.visit.link": "this link",

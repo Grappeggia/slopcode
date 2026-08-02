@@ -25,17 +25,16 @@ import {
 } from "./prompt.shared"
 import { SLOPCODE_BASE_MODE, useBindings } from "@slopcode-ai/tui/keymap"
 import { realignEditorPromptParts, resolveEditorSlashValue } from "./prompt.editor"
-import { createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
+import { FOOTER_MENU_ROWS, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
 import type { FooterState, RunAgent, RunCommand, RunPrompt, RunPromptPart, RunResource, RunTuiConfig } from "./types"
 
-const AUTOCOMPLETE_PREFERRED_ROWS = 8
+const AUTOCOMPLETE_ROWS = FOOTER_MENU_ROWS
 const AUTOCOMPLETE_BOTTOM_ROWS = 1
-const PROMPT_VERTICAL_PADDING_ROWS = 2
 
 export const TEXTAREA_MIN_ROWS = 1
 export const TEXTAREA_MAX_ROWS = 6
-export const PROMPT_MAX_ROWS = TEXTAREA_MAX_ROWS + AUTOCOMPLETE_PREFERRED_ROWS - 1 + AUTOCOMPLETE_BOTTOM_ROWS
+export const PROMPT_MAX_ROWS = TEXTAREA_MAX_ROWS + AUTOCOMPLETE_ROWS - 1 + AUTOCOMPLETE_BOTTOM_ROWS
 
 type Mention = Extract<RunPromptPart, { type: "file" | "agent" }>
 
@@ -67,7 +66,6 @@ type PromptInput = {
   view: Accessor<string>
   prompt: Accessor<boolean>
   width: Accessor<number>
-  height: Accessor<number>
   theme: Accessor<RunFooterTheme>
   history?: RunPrompt[]
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
@@ -90,7 +88,6 @@ export type PromptState = {
   selected: Accessor<number>
   offset: Accessor<number>
   rows: Accessor<number>
-  limit: Accessor<number>
   requestExit: () => boolean
   onSubmit: () => void
   submitText: (text: string) => void
@@ -475,14 +472,9 @@ export function createPromptState(input: PromptInput): PromptState {
       })
       .map((item) => item.obj)
   })
-  const [textRows, setTextRows] = createSignal(TEXTAREA_MIN_ROWS)
-  const limit = createMemo(() =>
-    Math.max(1, Math.min(AUTOCOMPLETE_PREFERRED_ROWS, input.height() - textRows() - PROMPT_VERTICAL_PADDING_ROWS)),
-  )
-  const preferred = createMemo(() => Math.max(1, Math.min(AUTOCOMPLETE_PREFERRED_ROWS, options().length)))
-  const menu = createFooterMenuState({ count: () => options().length, limit })
-  const preferredPopup = createMemo(() => {
-    return visible() ? preferred() - 1 + AUTOCOMPLETE_BOTTOM_ROWS : 0
+  const menu = createFooterMenuState({ count: () => options().length, limit: AUTOCOMPLETE_ROWS })
+  const popup = createMemo(() => {
+    return visible() ? menu.rows() - 1 + AUTOCOMPLETE_BOTTOM_ROWS : 0
   })
 
   const hide = () => {
@@ -496,9 +488,7 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
 
-    const rows = clamp(Math.max(area.lineCount, area.virtualLineCount))
-    setTextRows(rows)
-    input.onRows(rows + preferredPopup())
+    input.onRows(clamp(Math.max(area.lineCount, area.virtualLineCount)) + popup())
   }
 
   const scheduleRows = () => {
@@ -1243,7 +1233,7 @@ export function createPromptState(input: PromptInput): PromptState {
 
   createEffect(() => {
     input.width()
-    preferredPopup()
+    popup()
     if (input.prompt()) {
       scheduleRows()
     }
@@ -1298,7 +1288,6 @@ export function createPromptState(input: PromptInput): PromptState {
     selected: menu.selected,
     offset: menu.offset,
     rows: menu.rows,
-    limit,
     requestExit,
     onSubmit,
     submitText,

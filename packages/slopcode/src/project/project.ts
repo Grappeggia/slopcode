@@ -1,5 +1,5 @@
 import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@slopcode-ai/core/project/sql"
 import { ProjectDirectories } from "@slopcode-ai/core/project/directories"
@@ -21,7 +21,6 @@ import { serviceUse } from "@slopcode-ai/core/effect/service-use"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
-import { PermissionTable } from "@slopcode-ai/core/permission/sql"
 
 const ProjectVcs = Schema.Literal("git")
 
@@ -204,43 +203,11 @@ export const layer = Layer.effect(
               // accuracy
               yield* d.delete(ProjectDirectoryTable).where(eq(ProjectDirectoryTable.project_id, oldID)).run()
 
-              const [source, target] = yield* Effect.all([
-                d.select().from(PermissionTable).where(eq(PermissionTable.project_id, oldID)).all(),
-                d.select().from(PermissionTable).where(eq(PermissionTable.project_id, newID)).all(),
-              ])
-              const existing = new Set(
-                target.map((item) =>
-                  JSON.stringify([item.scope, item.match, item.session_id, item.action, item.resource]),
-                ),
-              )
-              const duplicates = source
-                .filter((item) =>
-                  existing.has(JSON.stringify([item.scope, item.match, item.session_id, item.action, item.resource])),
-                )
-                .map((item) => item.id)
-              const duplicateIDs = new Set(duplicates)
-              // Session grants reference both columns, so move them out while ownership changes.
-              const scoped = source.filter(
-                (item) => item.scope === "session" && item.session_id && !duplicateIDs.has(item.id),
-              )
-              const removed = [...duplicates, ...scoped.map((item) => item.id)]
-              if (removed.length) yield* d.delete(PermissionTable).where(inArray(PermissionTable.id, removed)).run()
-              yield* d
-                .update(PermissionTable)
-                .set({ project_id: newID })
-                .where(eq(PermissionTable.project_id, oldID))
-                .run()
-
               yield* d
                 .update(SessionTable)
                 .set({ project_id: newID, time_updated: sql`${SessionTable.time_updated}` })
                 .where(eq(SessionTable.project_id, oldID))
                 .run()
-              if (scoped.length)
-                yield* d
-                  .insert(PermissionTable)
-                  .values(scoped.map((item) => ({ ...item, project_id: newID })))
-                  .run()
               yield* d
                 .update(WorkspaceTable)
                 .set({ project_id: newID })

@@ -68,37 +68,15 @@ const fixture2: Record<string, ModelsDev.Provider> = {
   },
 }
 
-const managedModel = (api: string): ModelsDev.Model => ({
-  id: "gpt-5.6",
-  name: "GPT-5.6",
-  release_date: "2026-05-01",
-  attachment: true,
-  reasoning: true,
-  temperature: true,
-  tool_call: true,
-  limit: { context: 1_050_000, input: 922_000, output: 128_000 },
-  modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-  provider: { npm: "@ai-sdk/openai", api },
-})
-
-const managed = (domain = "slopcode.ai"): Record<string, ModelsDev.Provider> => ({
-  slopcode: {
-    id: "slopcode",
-    name: "SlopCode Zen",
-    env: ["SLOPCODE_API_KEY"],
-    npm: "@ai-sdk/openai-compatible",
-    api: `https://${domain}/zen/v1`,
-    models: { "gpt-5.6": managedModel(`https://${domain}/zen/v1`) },
+const legacy: Record<string, ModelsDev.Provider> = {
+  opencode: {
+    id: "opencode",
+    name: "OpenCode Zen",
+    env: ["OPENCODE_API_KEY"],
+    api: "https://opencode.ai/zen/v1",
+    models: fixture.acme.models,
   },
-  "slopcode-go": {
-    id: "slopcode-go",
-    name: "SlopCode Go",
-    env: ["SLOPCODE_API_KEY"],
-    npm: "@ai-sdk/openai-compatible",
-    api: `https://${domain}/zen/go/v1`,
-    models: { "gpt-5.6": managedModel(`https://${domain}/zen/go/v1`) },
-  },
-})
+}
 
 interface MockState {
   body: string
@@ -177,6 +155,28 @@ describe("ModelsDev Service", () => {
     }),
   )
 
+  it.live("normalizes cached legacy providers and merges bundled models", () =>
+    Effect.gen(function* () {
+      yield* writeCache(legacy)
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(
+        state,
+        ModelsDev.Service.use((s) => s.get()),
+      )
+
+      expect(result.opencode).toBeUndefined()
+      expect(result.slopcode).toMatchObject({
+        id: "slopcode",
+        name: "SlopCode Zen",
+        env: ["SLOPCODE_API_KEY"],
+        api: "https://slopcode.dev/zen/v1",
+      })
+      expect(result.slopcode.models["acme-1"]).toEqual(fixture.acme.models["acme-1"])
+      expect(result.slopcode.models["big-pickle"]).toBeDefined()
+      expect((yield* Ref.get(state)).calls).toEqual([])
+    }),
+  )
+
   it.live("get() returns bundled fallback when disk empty and fetch disabled", () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(initialState)
@@ -185,11 +185,10 @@ describe("ModelsDev Service", () => {
         ModelsDev.Service.use((s) => s.get()),
       )
       expect(result.slopcode?.models["big-pickle"]).toBeDefined()
+      expect(result.slopcode?.models["gpt-5.6-sol"]?.experimental?.modes?.fast?.provider).toEqual({
+        body: { service_tier: "priority" },
+      })
       expect(result["slopcode-go"]?.models).toBeDefined()
-      expect(result.slopcode?.models["gpt-5.6"]?.provider).toEqual({ npm: "@ai-sdk/openai" })
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider).toEqual({ npm: "@ai-sdk/openai" })
-      expect(result.slopcode?.api).toBe("https://www.slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.api).toBe("https://www.slopcode.dev/zen/go/v1")
       expect(Object.keys(result.openai?.models ?? {}).sort()).toEqual([
         "gpt-5.6",
         "gpt-5.6-luna",
@@ -243,76 +242,6 @@ describe("ModelsDev Service", () => {
       expect(result.openai?.models["gpt-5.5"]).toBeDefined()
       expect(result.openai?.models["gpt-5.6"]).toBeDefined()
       expect((yield* Ref.get(state)).calls).toEqual([])
-    }),
-  )
-
-  it.live("uses canonical request endpoints for stale cached managed records", () =>
-    Effect.gen(function* () {
-      yield* writeCache(managed(), Date.now() - 10 * 60 * 1000)
-      const state = yield* Ref.make(initialState)
-      const result = yield* provided(
-        state,
-        ModelsDev.Service.use((service) => service.get()),
-      )
-
-      expect(result.slopcode?.api).toBe("https://www.slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.api).toBe("https://www.slopcode.dev/zen/go/v1")
-      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/go/v1")
-      expect((yield* Ref.get(state)).calls).toEqual([])
-    }),
-  )
-
-  it.live("uses canonical request endpoints for fetched managed records", () =>
-    Effect.gen(function* () {
-      yield* writeCacheText("{")
-      const state = yield* Ref.make({ ...initialState, body: JSON.stringify(managed()) })
-      const result = yield* Effect.acquireUseRelease(
-        Effect.sync(() => {
-          Flag.SLOPCODE_DISABLE_MODELS_FETCH = false
-        }),
-        () =>
-          provided(
-            state,
-            ModelsDev.Service.use((service) => service.get()),
-          ),
-        () => Effect.sync(() => (Flag.SLOPCODE_DISABLE_MODELS_FETCH = true)),
-      )
-
-      expect(result.slopcode?.api).toBe("https://www.slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.api).toBe("https://www.slopcode.dev/zen/go/v1")
-      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/go/v1")
-      expect((yield* Ref.get(state)).calls).toHaveLength(1)
-    }),
-  )
-
-  it.live("canonicalizes managed endpoints from an explicit models path without merging fallback providers", () =>
-    Effect.gen(function* () {
-      const file = path.join(Global.Path.cache, "models-explicit.json")
-      yield* Effect.promise(() => writeFile(file, JSON.stringify(managed())))
-      const state = yield* Ref.make(initialState)
-      const result = yield* Effect.acquireUseRelease(
-        Effect.sync(() => {
-          const previous = Flag.SLOPCODE_MODELS_PATH
-          Flag.SLOPCODE_MODELS_PATH = file
-          return previous
-        }),
-        () =>
-          provided(
-            state,
-            ModelsDev.Service.use((service) => service.get()),
-          ),
-        (previous) =>
-          Effect.sync(() => {
-            Flag.SLOPCODE_MODELS_PATH = previous
-          }),
-      )
-      yield* Effect.promise(() => rm(file, { force: true }))
-
-      expect(Object.keys(result).sort()).toEqual(["slopcode", "slopcode-go"])
-      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/go/v1")
     }),
   )
 
@@ -381,7 +310,7 @@ describe("ModelsDev Service", () => {
   it.live("refresh(true) fetches via HttpClient and updates the cache", () =>
     Effect.gen(function* () {
       yield* writeCache(fixture)
-      const state = yield* Ref.make({ ...initialState, body: JSON.stringify(fixture2) })
+      const state = yield* Ref.make({ ...initialState, body: JSON.stringify(legacy) })
       const result = yield* provided(
         state,
         Effect.gen(function* () {
@@ -393,7 +322,19 @@ describe("ModelsDev Service", () => {
         }),
       )
       expectCatalog(result.before, fixture)
-      expectCatalog(result.after, fixture2)
+      expect(result.after.opencode).toBeUndefined()
+      expect(result.after.slopcode.models["acme-1"]).toEqual(fixture.acme.models["acme-1"])
+      const cached = JSON.parse(yield* Effect.promise(() => readFile(cacheFile, "utf8"))) as Record<
+        string,
+        ModelsDev.Provider
+      >
+      expect(cached.opencode).toBeUndefined()
+      expect(cached.slopcode).toMatchObject({
+        id: "slopcode",
+        name: "SlopCode Zen",
+        env: ["SLOPCODE_API_KEY"],
+        api: "https://slopcode.dev/zen/v1",
+      })
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
       expect(final.calls[0].url).toContain("/api.json")

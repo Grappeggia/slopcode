@@ -8,13 +8,12 @@ import { ChildProcessSpawner } from "effect/unstable/process"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Flag } from "@slopcode-ai/core/flag/flag"
-import { createSlopcodeClient, type SessionSideQuestionEvent } from "@slopcode-ai/sdk/v2"
+import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
 import { validateSession } from "../../src/cli/tui/validate-session"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
-import { GlobalBus } from "../../src/bus/global"
 
 import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
@@ -40,7 +39,6 @@ const it = testEffect(
     httpApiLayer,
   ),
 )
-const supported = process.platform === "linux" || process.platform === "darwin"
 
 const original = {
   SLOPCODE_SERVER_PASSWORD: Flag.SLOPCODE_SERVER_PASSWORD,
@@ -182,17 +180,6 @@ function firstPartText(value: unknown) {
   return record(array(record(value).parts)[0]).text
 }
 
-function sideEvent(event: SessionSideQuestionEvent) {
-  if (event.type === "status") return `${event.status}:${event.round}`
-  if (event.type === "read") return `${event.path}:${event.files}`
-  if (event.type === "usage") return `${event.rounds}:${event.calls}:${event.files}`
-  if (event.type === "text") return event.text
-  if (event.type === "error") return event.message
-  if (event.type === "done") return event.type
-  const exhaustive: never = event
-  return exhaustive
-}
-
 function sessionTitles(value: unknown) {
   return array(value)
     .map((item) => record(item).title)
@@ -209,11 +196,6 @@ function resetState() {
 
 function httpapi<A, E>(name: string, effect: Effect.Effect<A, E, TestScope>) {
   it.live(name, effect)
-}
-
-function secureHttpapi<A, E>(name: string, effect: Effect.Effect<A, E, TestScope>) {
-  const register = supported ? it.live : it.live.skip
-  register(name, effect)
 }
 
 function httpapiInstance<A, E>(
@@ -354,50 +336,6 @@ afterEach(async () => {
 })
 
 describe("HttpApi SDK", () => {
-  httpapi(
-    "streams legacy function call object input through the generated SDK",
-    Effect.acquireRelease(
-      Effect.sync(() => new AbortController()),
-      (controller) => Effect.sync(() => controller.abort()),
-    ).pipe(
-      Effect.flatMap((controller) =>
-        Effect.gen(function* () {
-          const sdk = yield* client("raw")
-          const events = yield* call(() => sdk.global.event({ signal: controller.signal }))
-          yield* call(() => events.stream.next())
-          const pending = (async () => {
-            for (;;) {
-              const event = await events.stream.next()
-              if (record(record(event.value).payload).type === "session.next.tool.called") return event
-            }
-          })()
-          yield* Effect.sleep("10 millis")
-          GlobalBus.emit("event", {
-            directory: "project",
-            payload: {
-              id: "evt_function_shape",
-              type: "session.next.tool.called",
-              properties: {
-                timestamp: Date.now(),
-                sessionID: "ses_function_shape",
-                assistantMessageID: "msg_function_shape",
-                callID: "call-function-shape",
-                tool: "read",
-                input: { path: "README.md" },
-                provider: { executed: false },
-              },
-            },
-          })
-          const event = yield* call(() => pending).pipe(Effect.timeout("1 second"))
-          expect(event.value).toMatchObject({
-            payload: { type: "session.next.tool.called", properties: { input: { path: "README.md" } } },
-          })
-          yield* call(async () => void (await events.stream.return?.(undefined)))
-        }),
-      ),
-    ),
-  )
-
   httpapi(
     "uses the generated SDK for global and control routes",
     Effect.gen(function* () {
@@ -860,57 +798,6 @@ describe("HttpApi SDK", () => {
           userText: JSON.stringify(messages.data).includes("hello llm"),
         }
       }),
-    ),
-  )
-
-  secureHttpapi(
-    "streams typed side-question reads and ordered follow-ups without persistence",
-    withFakeLlmProject(
-      "raw",
-      {
-        setup: (dir) => FSUtil.Service.use((fs) => fs.writeWithDirs(path.join(dir, "notes.txt"), "private notes\n")),
-      },
-      ({ sdk, llm }) =>
-        Effect.gen(function* () {
-          yield* llm.tool("read", { path: "notes.txt", offset: 1, limit: 10 })
-          yield* llm.text("answer from notes", { usage: { input: 9, output: 4 } })
-          const session = yield* call(() =>
-            sdk.session.create({
-              title: "side SDK",
-              permission: [{ permission: "*", pattern: "*", action: "allow" }],
-            }),
-          )
-          const sessionID = session.data!.id
-          const result = yield* call(() =>
-            sdk.session.sideQuestion({
-              sessionID,
-              question: "Current question",
-              turns: [{ question: "Earlier question", answer: "Earlier answer" }],
-              agent: "build",
-              model: { providerID: "test", modelID: "test-model" },
-              variant: "fast",
-            }),
-          )
-          const events = yield* call(async () => {
-            const values: SessionSideQuestionEvent[] = []
-            for await (const event of result.stream) values.push(event)
-            return values
-          })
-          const inputs = yield* llm.inputs
-          const messages = array(inputs[0]?.messages).map(record)
-          const persisted = yield* call(() => sdk.session.messages({ sessionID }))
-
-          expect(messages.slice(-3)).toEqual([
-            { role: "user", content: "Earlier question" },
-            { role: "assistant", content: "Earlier answer" },
-            { role: "user", content: "Current question" },
-          ])
-          expect(events.map(sideEvent)).toContain("notes.txt:1")
-          expect(events).toContainEqual(expect.objectContaining({ type: "usage", calls: 1, files: 1 }))
-          expect(events).toContainEqual({ type: "text", text: "answer from notes" })
-          expect(events.at(-1)).toEqual({ type: "done" })
-          expect(persisted.data).toEqual([])
-        }),
     ),
   )
 

@@ -32,7 +32,6 @@ const responsesRoute = OpenAIResponses.route.with({
   endpoint: {
     query: { "api-version": "v1" },
   },
-  capabilities: [],
 })
 
 const chatRoute = OpenAIChat.route.with({

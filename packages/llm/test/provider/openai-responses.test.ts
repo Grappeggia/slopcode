@@ -1,25 +1,10 @@
 import { describe, expect } from "bun:test"
-import { ConfigProvider, Effect, Layer, Schema, Stream } from "effect"
+import { ConfigProvider, Effect, Layer, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
-import {
-  CustomToolDefinition,
-  CacheHint,
-  LLM,
-  LLMError,
-  LLMEvent,
-  Message,
-  Model,
-  Tool,
-  ToolCallPart,
-  ToolResultPart,
-  ToolRuntime,
-  Usage,
-} from "../../src"
+import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
-import * as GitHubCopilot from "../../src/providers/github-copilot"
 import * as OpenAI from "../../src/providers/openai"
-import * as XAI from "../../src/providers/xai"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
 import * as ProviderShared from "../../src/protocols/shared"
 import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
@@ -30,13 +15,6 @@ import { sseEvents } from "../lib/sse"
 const model = OpenAIResponses.route
   .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
   .model({ id: "gpt-4.1-mini" })
-
-const codexModel = Model.update(model, {
-  route: model.route.with({
-    id: "openai-responses-codex",
-    capabilities: [...model.route.capabilities, "sequential-cutoff"],
-  }),
-})
 
 const request = LLM.request({
   id: "req_1",
@@ -152,38 +130,6 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("lowers function and custom tool definitions without changing function wire shape", () =>
-    Effect.gen(function* () {
-      const custom = new CustomToolDefinition({
-        name: "patch",
-        description: "Apply a patch.",
-        format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-      })
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.updateRequest(request, {
-          tools: [{ name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } }, custom],
-          toolChoice: custom,
-        }),
-      )
-
-      expect(prepared.body.tools).toEqual([
-        {
-          type: "function",
-          name: "lookup",
-          description: "Lookup data.",
-          parameters: { type: "object" },
-        },
-        {
-          type: "custom",
-          name: "patch",
-          description: "Apply a patch.",
-          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-        },
-      ])
-      expect(prepared.body.tool_choice).toEqual({ type: "custom", name: "patch" })
-    }),
-  )
-
   it.effect("lowers chronological system updates to escaped user wrappers in order", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -278,69 +224,7 @@ describe("OpenAI Responses route", () => {
         model: "gpt-4.1-mini",
         input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         store: false,
-        include: ["reasoning.encrypted_content"],
       })
-    }),
-  )
-
-  it.effect("applies sequential cutoff parsing over WebSocket", () =>
-    Effect.gen(function* () {
-      const sent: string[] = []
-      const deps = Layer.mergeAll(
-        Layer.succeed(
-          RequestExecutor.Service,
-          RequestExecutor.Service.of({ execute: () => Effect.die("unexpected HTTP request") }),
-        ),
-        Layer.succeed(
-          WebSocketExecutor.Service,
-          WebSocketExecutor.Service.of({
-            open: () =>
-              Effect.succeed({
-                sendText: (message) => Effect.sync(() => sent.push(message)),
-                messages: Stream.fromArray([
-                  ProviderShared.encodeJson({
-                    type: "response.output_item.added",
-                    item: { type: "reasoning", id: "rs_ws" },
-                  }),
-                  ProviderShared.encodeJson({
-                    type: "response.reasoning_summary_text.delta",
-                    item_id: "rs_ws",
-                    summary_index: 0,
-                    delta: "partial",
-                  }),
-                  ProviderShared.encodeJson({
-                    type: "response.reasoning_summary_text.done",
-                    item_id: "rs_ws",
-                    summary_index: 0,
-                    text: "Complete",
-                  }),
-                  ProviderShared.encodeJson({
-                    type: "response.output_item.done",
-                    item: { type: "reasoning", id: "rs_ws", encrypted_content: "encrypted-ws" },
-                  }),
-                  ProviderShared.encodeJson({ type: "response.completed", response: {} }),
-                ]),
-                close: Effect.void,
-              }),
-          }),
-        ),
-      )
-      const route = OpenAIResponses.webSocketRoute.with({
-        id: "openai-responses-codex-websocket",
-        endpoint: { baseURL: "https://api.openai.test/v1/" },
-        auth: Auth.bearer("test"),
-        capabilities: [...OpenAIResponses.webSocketRoute.capabilities, "sequential-cutoff"],
-      })
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model: route.model({ id: "gpt-5.6" }),
-          prompt: "Think.",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
-
-      expect(response.reasoning).toBe("Complete")
-      expect(JSON.parse(sent[0]).stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" })
     }),
   )
 
@@ -476,171 +360,6 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("preserves valid ordinary function call item ids and omits malformed ids", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model,
-          messages: [
-            Message.assistant([
-              ToolCallPart.make({
-                id: "call_valid",
-                name: "lookup",
-                input: { query: "valid" },
-                providerMetadata: { openai: { itemId: "future_valid" } },
-              }),
-              ToolCallPart.make({
-                id: "call_invalid",
-                name: "lookup",
-                input: { query: "invalid" },
-                providerMetadata: { openai: { itemId: "malformed" } },
-              }),
-            ]),
-          ],
-        }),
-      )
-
-      expect(prepared.body.input).toEqual([
-        {
-          type: "function_call",
-          id: "future_valid",
-          call_id: "call_valid",
-          name: "lookup",
-          arguments: '{"query":"valid"}',
-        },
-        {
-          type: "function_call",
-          call_id: "call_invalid",
-          name: "lookup",
-          arguments: '{"query":"invalid"}',
-        },
-      ])
-    }),
-  )
-
-  it.effect("replays custom calls and results with retained item ids and raw input", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model,
-          messages: [
-            Message.assistant([
-              ToolCallPart.make({
-                id: "call_1",
-                name: "patch",
-                input: "*** Begin Patch\n*** End Patch",
-                toolType: "custom",
-                providerMetadata: { openai: { itemId: "ctc_1" } },
-              }),
-            ]),
-            Message.tool(
-              ToolResultPart.make({
-                id: "call_1",
-                name: "patch",
-                result: "applied",
-                resultType: "text",
-                toolType: "custom",
-              }),
-            ),
-          ],
-        }),
-      )
-
-      expect(prepared.body.input).toEqual([
-        {
-          type: "custom_tool_call",
-          id: "ctc_1",
-          call_id: "call_1",
-          name: "patch",
-          input: "*** Begin Patch\n*** End Patch",
-        },
-        { type: "custom_tool_call_output", call_id: "call_1", output: "applied" },
-      ])
-    }),
-  )
-
-  it.effect("filters malformed replay item ids and omits stateless reasoning ids", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model,
-          messages: [
-            Message.assistant([
-              {
-                type: "reasoning",
-                text: "valid future state",
-                providerMetadata: {
-                  openai: { itemId: "future_123", reasoningEncryptedContent: "encrypted-future" },
-                },
-              },
-              ...["", "missing", "_suffix", "prefix_"].map((itemId) => ({
-                type: "reasoning" as const,
-                text: `invalid ${itemId}`,
-                providerMetadata: { openai: { itemId, reasoningEncryptedContent: "encrypted-invalid" } },
-              })),
-              {
-                type: "reasoning",
-                text: "empty encryption",
-                providerMetadata: { openai: { itemId: "rs_empty", reasoningEncryptedContent: "" } },
-              },
-              ToolCallPart.make({
-                id: "call_1",
-                name: "patch",
-                input: "patch",
-                toolType: "custom",
-                providerMetadata: { openai: { itemId: "invalid" } },
-              }),
-              ToolCallPart.make({
-                id: "call_2",
-                name: "patch",
-                input: "future patch",
-                toolType: "custom",
-                providerMetadata: { openai: { itemId: "future_tool" } },
-              }),
-              ToolResultPart.make({
-                id: "hosted_1",
-                name: "web_search",
-                result: { type: "json", value: {} },
-                providerExecuted: true,
-                providerMetadata: { openai: { itemId: "invalid" } },
-              }),
-            ]),
-          ],
-          providerOptions: { openai: { store: false } },
-        }),
-      )
-
-      expect(prepared.body.input).toEqual([
-        {
-          type: "reasoning",
-          encrypted_content: "encrypted-future",
-          summary: [{ type: "summary_text", text: "valid future state" }],
-        },
-        { type: "custom_tool_call", id: undefined, call_id: "call_1", name: "patch", input: "patch" },
-        {
-          type: "custom_tool_call",
-          id: "future_tool",
-          call_id: "call_2",
-          name: "patch",
-          input: "future patch",
-        },
-      ])
-    }),
-  )
-
-  it.effect("rejects non-string custom call history instead of coercing it", () =>
-    Effect.sync(() => {
-      expect(() =>
-        ToolCallPart.make({
-          id: "call_1",
-          name: "patch",
-          input: { patch: "invalid" },
-          toolType: "custom",
-        } as unknown as Parameters<typeof ToolCallPart.make>[0]),
-      ).toThrow("Custom tool call input must be a string")
-    }),
-  )
-
   // Regression: screenshot/read tool results must stay structured so base64
   // image data is not JSON-stringified into `function_call_output.output`.
   it.effect("lowers image tool-result content as structured input_image items", () =>
@@ -757,6 +476,7 @@ describe("OpenAI Responses route", () => {
         include: ["reasoning.encrypted_content"],
         store: false,
       })
+      expect(prepared.body.input[2]).not.toHaveProperty("id")
       expect(prepared.body.tools).toEqual([expect.objectContaining({ type: "function", name: "get_weather" })])
     }),
   )
@@ -786,111 +506,6 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("emits GPT-5.6 safety identity and only explicit 30m cache breakpoints", () =>
-    Effect.gen(function* () {
-      const eligible = Model.update(model, {
-        id: "gpt-5.6",
-        provider: "openai",
-        route: model.route.with({ endpoint: { baseURL: "https://api.openai.com/v1" } }),
-      })
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model: eligible,
-          system: [{ type: "text", text: "stable", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
-          messages: [
-            Message.user([
-              { type: "text", text: "first" },
-              { type: "text", text: "second", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
-            ]),
-          ],
-          providerOptions: {
-            openai: { safetyIdentifier: "sc_safe", promptCacheOptions: { mode: "explicit", ttl: "30m" } },
-          },
-        }),
-      )
-
-      expect(prepared.body.safety_identifier).toBe("sc_safe")
-      expect(prepared.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
-      expect(JSON.stringify(prepared.body.input).match(/prompt_cache_breakpoint/g)?.length).toBe(2)
-    }),
-  )
-
-  it.effect("preserves explicit caching on canonical managed endpoints", () =>
-    Effect.gen(function* () {
-      for (const item of [
-        { provider: "slopcode", baseURL: "https://www.slopcode.dev/zen/v1" },
-        { provider: "slopcode-go", baseURL: "https://www.slopcode.dev/zen/go/v1" },
-      ]) {
-        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-          LLM.request({
-            model: Model.update(model, {
-              id: "gpt-5.6",
-              provider: item.provider,
-              route: model.route.with({ endpoint: { baseURL: item.baseURL } }),
-            }),
-            prompt: [{ type: "text", text: "managed", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
-            providerOptions: {
-              openai: { safetyIdentifier: "sc_safe", promptCacheOptions: { mode: "explicit", ttl: "30m" } },
-            },
-          }),
-        )
-        expect(prepared.body.safety_identifier).toBe("sc_safe")
-        expect(prepared.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
-        expect(JSON.stringify(prepared.body.input)).toContain("prompt_cache_breakpoint")
-      }
-    }),
-  )
-
-  it.effect("omits safety and cache options for defaults, bad TTLs, and excluded routes", () =>
-    Effect.gen(function* () {
-      const options = {
-        openai: { safetyIdentifier: "hostile", promptCacheOptions: { mode: "explicit" as const, ttl: "30m" as const } },
-      }
-      const cases = [
-        Model.update(model, { id: "gpt-5.5", provider: "openai" }),
-        Model.update(codexModel, { id: "gpt-5.6", provider: "openai" }),
-        Model.update(model, { id: "gpt-5.6", provider: "azure" }),
-        Model.update(model, { id: "gpt-5.6", provider: "github-copilot" }),
-        Model.update(model, { id: "gpt-5.6", provider: "openrouter" }),
-        Model.update(model, { id: "gpt-5.6", provider: "compatible" }),
-        Model.update(model, { id: "gpt-5.6", provider: "openai" }),
-        Model.update(model, {
-          id: "gpt-5.6",
-          provider: "slopcode",
-          route: model.route.with({ endpoint: { baseURL: "https://proxy.example/zen/v1" } }),
-        }),
-      ]
-      for (const excluded of cases) {
-        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-          LLM.request({
-            model: excluded,
-            prompt: [{ type: "text", text: "no leak", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
-            providerOptions: options,
-          }),
-        )
-        expect(prepared.body.safety_identifier).toBeUndefined()
-        expect(prepared.body.prompt_cache_options).toBeUndefined()
-        expect(JSON.stringify(prepared.body.input)).not.toContain("prompt_cache_breakpoint")
-      }
-
-      const implicit = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model: Model.update(model, { id: "gpt-5.6", provider: "openai" }), prompt: "plain" }),
-      )
-      expect(implicit.body.prompt_cache_options).toBeUndefined()
-      expect(JSON.stringify(implicit.body.input)).not.toContain("prompt_cache_breakpoint")
-
-      const bad = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model: Model.update(model, { id: "gpt-5.6", provider: "openai" }),
-          prompt: [{ type: "text", text: "old", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }) }],
-          providerOptions: options,
-        }),
-      )
-      expect(bad.body.prompt_cache_options).toBeUndefined()
-      expect(JSON.stringify(bad.body.input)).not.toContain("prompt_cache_breakpoint")
-    }),
-  )
-
   it.effect("maps max reasoning effort for GPT-5.6", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -902,376 +517,6 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.reasoning).toEqual({ effort: "max" })
-    }),
-  )
-
-  it.effect("lowers parallel calls, public truncation values, and ultra reasoning", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.updateRequest(request, {
-          providerOptions: {
-            openai: { parallelToolCalls: false, truncation: "auto", reasoningEffort: "ultra" },
-          },
-        }),
-      )
-
-      expect(prepared.body).toMatchObject({
-        parallel_tool_calls: false,
-        truncation: "auto",
-        reasoning: { effort: "max" },
-      })
-    }),
-  )
-
-  it.effect("uses none to replace an inherited reasoning summary without changing continuation defaults", () =>
-    Effect.gen(function* () {
-      const configured = Model.update(model, {
-        route: model.route.with({
-          providerOptions: {
-            openai: {
-              store: false,
-              include: ["reasoning.encrypted_content"],
-              reasoningSummary: "auto",
-            },
-          },
-        }),
-      })
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model: configured,
-          prompt: "think",
-          providerOptions: { openai: { reasoningEffort: "low", reasoningSummary: "none" } },
-        }),
-      )
-
-      expect(prepared.body.reasoning).toEqual({ effort: "low" })
-      expect(prepared.body.store).toBe(false)
-      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
-    }),
-  )
-
-  it.effect("omits unknown truncation values instead of passing raw provider input", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.updateRequest(request, { providerOptions: { openai: { truncation: { mode: "tokens", limit: 10_000 } } } }),
-      )
-
-      expect(prepared.body).not.toHaveProperty("truncation")
-    }),
-  )
-
-  it.effect("prepares identical Responses fields for HTTP and WebSocket", () =>
-    Effect.gen(function* () {
-      const custom = new CustomToolDefinition({ name: "shell", description: "Run shell text." })
-      const input = LLM.request({
-        model,
-        prompt: "Run it.",
-        tools: [custom],
-        providerOptions: { openai: { parallelToolCalls: true, truncation: "disabled", reasoningEffort: "ultra" } },
-      })
-      const http = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(input)
-      const websocket = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.updateRequest(input, {
-          model: Model.update(model, {
-            route: OpenAIResponses.webSocketRoute.with({
-              endpoint: { baseURL: "https://api.openai.test/v1/" },
-              auth: Auth.bearer("test"),
-            }),
-          }),
-        }),
-      )
-
-      expect(websocket.body).toEqual(http.body)
-      expect(websocket.body).toMatchObject({
-        tools: [{ type: "custom", name: "shell", description: "Run shell text." }],
-        parallel_tool_calls: true,
-        truncation: "disabled",
-        reasoning: { effort: "max" },
-      })
-    }),
-  )
-
-  it.effect("lowers exact Responses Lite HTTP body and header", () =>
-    Effect.gen(function* () {
-      const input = LLM.request({
-        model,
-        system: "Conversation policy.",
-        prompt: "Apply the change.",
-        tools: [
-          { name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } },
-          new CustomToolDefinition({ name: "patch", description: "Apply a patch." }),
-        ],
-        providerOptions: {
-          openai: {
-            instructions: "Base instructions.",
-            responsesMode: "lite",
-            parallelToolCalls: true,
-            reasoningEffort: "high",
-          },
-        },
-      })
-
-      yield* LLMClient.generate(input).pipe(
-        Effect.provide(
-          dynamicResponse((request) =>
-            Effect.gen(function* () {
-              const web = yield* HttpClientRequest.toWeb(request.request).pipe(Effect.orDie)
-              expect(web.headers.get("x-openai-internal-codex-responses-lite")).toBe("true")
-              expect(yield* Effect.promise(() => web.json())).toEqual({
-                model: "gpt-4.1-mini",
-                input: [
-                  {
-                    type: "additional_tools",
-                    role: "developer",
-                    tools: [
-                      {
-                        type: "function",
-                        name: "lookup",
-                        description: "Lookup data.",
-                        parameters: { type: "object" },
-                      },
-                      { type: "custom", name: "patch", description: "Apply a patch." },
-                    ],
-                  },
-                  {
-                    type: "message",
-                    role: "developer",
-                    content: [
-                      { type: "input_text", text: "Base instructions." },
-                      { type: "input_text", text: "Conversation policy." },
-                    ],
-                  },
-                  { role: "user", content: [{ type: "input_text", text: "Apply the change." }] },
-                ],
-                instructions: "",
-                parallel_tool_calls: false,
-                reasoning: { effort: "high", context: "all_turns" },
-                stream: true,
-              })
-              return request.respond(sseEvents({ type: "response.completed", response: {} }), {
-                headers: { "content-type": "text/event-stream" },
-              })
-            }),
-          ),
-        ),
-      )
-    }),
-  )
-
-  it.effect("keeps empty Lite instructions deterministic", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model,
-          prompt: "Hello.",
-          providerOptions: { openai: { responsesMode: "lite", instructions: "" } },
-        }),
-      )
-
-      expect(prepared.body).toEqual({
-        model: "gpt-4.1-mini",
-        input: [
-          { type: "additional_tools", role: "developer", tools: [] },
-          { role: "user", content: [{ type: "input_text", text: "Hello." }] },
-        ],
-        instructions: "",
-        parallel_tool_calls: false,
-        reasoning: { context: "all_turns" },
-        stream: true,
-      })
-    }),
-  )
-
-  it.effect("declares internal Responses capabilities only on explicit OpenAI deployments", () =>
-    Effect.sync(() => {
-      expect(OpenAIResponses.protocol.capabilities).toBeUndefined()
-      expect(OpenAIResponses.route.capabilities).toEqual(["code-mode", "responses-lite", "custom-tools"])
-      expect(OpenAIResponses.webSocketRoute.capabilities).toEqual(["code-mode", "responses-lite", "custom-tools"])
-      expect(OpenAI.routes[0]?.capabilities).toEqual(["code-mode", "responses-lite", "custom-tools"])
-      expect(Azure.routes[0]?.capabilities).toEqual([])
-      expect(XAI.routes[0]?.capabilities).toEqual([])
-      expect(GitHubCopilot.routes[0]?.capabilities).toEqual([])
-    }),
-  )
-
-  it.effect("rejects Lite and custom requests on shared non-OpenAI Responses deployments", () =>
-    Effect.gen(function* () {
-      const routes = [
-        Azure.configure({ baseURL: "https://azure.test/openai/v1", apiKey: "test" }).responses("gpt-5"),
-        XAI.configure({ baseURL: "https://xai.test/v1", apiKey: "test" }).responses("grok"),
-        GitHubCopilot.configure({ baseURL: "https://copilot.test", apiKey: "test" }).responses("gpt-5"),
-      ]
-      for (const deployed of routes) {
-        const lite = yield* LLMClient.prepare(
-          LLM.request({ model: deployed, prompt: "test", providerOptions: { openai: { responsesMode: "lite" } } }),
-        ).pipe(Effect.flip)
-        const custom = yield* LLMClient.prepare(
-          LLM.request({
-            model: deployed,
-            prompt: "test",
-            tools: [{ type: "custom", name: "shell", description: "Run shell text." }],
-          }),
-        ).pipe(Effect.flip)
-        expect(lite).toMatchObject({ _tag: "LLM.Error", message: expect.stringContaining("Responses Lite") })
-        expect(custom).toMatchObject({ _tag: "LLM.Error", message: expect.stringContaining("custom tools") })
-      }
-    }),
-  )
-
-  it.effect("sends the Lite marker in WebSocket metadata and handshake headers", () =>
-    Effect.gen(function* () {
-      const sent: string[] = []
-      const headers: Array<string | undefined> = []
-      const deps = Layer.mergeAll(
-        Layer.succeed(
-          RequestExecutor.Service,
-          RequestExecutor.Service.of({ execute: () => Effect.die("unexpected HTTP request") }),
-        ),
-        Layer.succeed(
-          WebSocketExecutor.Service,
-          WebSocketExecutor.Service.of({
-            open: (input) =>
-              Effect.succeed({
-                sendText: (message) =>
-                  Effect.sync(() => {
-                    headers.push(input.headers["x-openai-internal-codex-responses-lite"])
-                    sent.push(message)
-                  }),
-                messages: Stream.fromArray([
-                  ProviderShared.encodeJson({ type: "response.completed", response: { id: "resp_ws" } }),
-                ]),
-                close: Effect.void,
-              }),
-          }),
-        ),
-      )
-      const route = OpenAIResponses.webSocketRoute.with({
-        endpoint: { baseURL: "https://api.openai.test/v1/" },
-        auth: Auth.bearer("test"),
-      })
-
-      yield* LLMClient.generate(
-        LLM.request({
-          model: route.model({ id: "gpt-4.1-mini" }),
-          prompt: "Hello.",
-          providerOptions: { openai: { responsesMode: "lite", instructions: "Base instructions." } },
-        }),
-      ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
-
-      expect(headers).toEqual(["true"])
-      expect(sent.map((message) => JSON.parse(message))).toEqual([
-        {
-          type: "response.create",
-          model: "gpt-4.1-mini",
-          input: [
-            { type: "additional_tools", role: "developer", tools: [] },
-            {
-              type: "message",
-              role: "developer",
-              content: [{ type: "input_text", text: "Base instructions." }],
-            },
-            { role: "user", content: [{ type: "input_text", text: "Hello." }] },
-          ],
-          instructions: "",
-          parallel_tool_calls: false,
-          reasoning: { context: "all_turns" },
-          client_metadata: { ws_request_header_x_openai_internal_codex_responses_lite: "true" },
-        },
-      ])
-    }),
-  )
-
-  it.effect("preserves exact full Responses body and omits Lite markers", () =>
-    Effect.gen(function* () {
-      const input = LLM.request({
-        model,
-        prompt: "Look it up.",
-        tools: [{ name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } }],
-        providerOptions: {
-          openai: {
-            responsesMode: "full",
-            instructions: "Base instructions.",
-            parallelToolCalls: true,
-            reasoningEffort: "high",
-          },
-        },
-      })
-
-      yield* LLMClient.generate(input).pipe(
-        Effect.provide(
-          dynamicResponse((request) =>
-            Effect.gen(function* () {
-              const web = yield* HttpClientRequest.toWeb(request.request).pipe(Effect.orDie)
-              expect(web.headers.get("x-openai-internal-codex-responses-lite")).toBeNull()
-              expect(yield* Effect.promise(() => web.json())).toEqual({
-                model: "gpt-4.1-mini",
-                input: [{ role: "user", content: [{ type: "input_text", text: "Look it up." }] }],
-                instructions: "Base instructions.",
-                tools: [
-                  {
-                    type: "function",
-                    name: "lookup",
-                    description: "Lookup data.",
-                    parameters: { type: "object" },
-                  },
-                ],
-                parallel_tool_calls: true,
-                reasoning: { effort: "high" },
-                stream: true,
-              })
-              return request.respond(sseEvents({ type: "response.completed", response: {} }), {
-                headers: { "content-type": "text/event-stream" },
-              })
-            }),
-          ),
-        ),
-      )
-    }),
-  )
-
-  it.effect("allows full Responses reasoning context independently", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.updateRequest(request, { providerOptions: { openai: { reasoningContext: "current_turn" } } }),
-      )
-
-      expect(prepared.body.reasoning).toEqual({ context: "current_turn" })
-    }),
-  )
-
-  it.effect("continues dispatched custom results as custom tool outputs", () =>
-    Effect.gen(function* () {
-      const call = ToolCallPart.make({
-        id: "call_1",
-        name: "patch",
-        input: "*** Begin Patch\n*** End Patch",
-        toolType: "custom",
-      })
-      const patch = Tool.make({
-        description: "Apply a patch.",
-        parameters: Schema.String,
-        success: Schema.String,
-        execute: () => Effect.succeed("applied"),
-      })
-      const dispatched = yield* ToolRuntime.dispatch({ patch }, call)
-      const result = dispatched.events.find((event) => event.type === "tool-result")
-      if (!result || result.type !== "tool-result") throw new Error("Expected custom tool result")
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model,
-          messages: [Message.assistant(call), Message.tool(result)],
-        }),
-      )
-
-      expect(prepared.body.input).toEqual([
-        {
-          type: "custom_tool_call",
-          call_id: "call_1",
-          name: "patch",
-          input: "*** Begin Patch\n*** End Patch",
-        },
-        { type: "custom_tool_call_output", call_id: "call_1", output: "applied" },
-      ])
     }),
   )
 
@@ -1314,33 +559,33 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("adds encrypted reasoning to an explicit empty include for stateless requests", () =>
+  it.effect("treats an explicit empty include as no include at all", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: false, include: [] } } }),
+        LLM.request({ model, prompt: "hi", providerOptions: { openai: { include: [] } } }),
       )
 
-      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
+      expect(prepared.body.include).toBeUndefined()
     }),
   )
 
-  it.effect("adds encrypted reasoning when all caller include values are invalid", () =>
+  it.effect("treats an all-invalid include as no include at all", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: false, include: ["bogus.thing"] } } }),
+        LLM.request({ model, prompt: "hi", providerOptions: { openai: { include: ["bogus.thing"] } } }),
       )
 
-      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
+      expect(prepared.body.include).toBeUndefined()
     }),
   )
 
-  it.effect("requests encrypted reasoning when stateless include is omitted", () =>
+  it.effect("omits include when no include is set", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: false } } }),
       )
 
-      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
+      expect(prepared.body.include).toBeUndefined()
     }),
   )
 
@@ -1363,7 +608,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("does not let stateless callers opt out of encrypted reasoning", () =>
+  it.effect("lets callers opt out of the GPT-5 default include", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
@@ -1373,70 +618,7 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
-    }),
-  )
-
-  it.effect("merges and deduplicates stateless include fields", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model,
-          prompt: "hi",
-          providerOptions: {
-            openai: {
-              store: false,
-              include: ["web_search_call.results", "reasoning.encrypted_content", "reasoning.encrypted_content"],
-            },
-          },
-        }),
-      )
-
-      expect(prepared.body.include).toEqual(["web_search_call.results", "reasoning.encrypted_content"])
-    }),
-  )
-
-  it.effect("does not force encrypted reasoning for stored requests", () =>
-    Effect.gen(function* () {
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: true } } }),
-      )
-
       expect(prepared.body.include).toBeUndefined()
-    }),
-  )
-
-  it.effect("preserves stored include order and duplicates exactly", () =>
-    Effect.gen(function* () {
-      const include = ["web_search_call.results", "reasoning.encrypted_content", "web_search_call.results"] as const
-      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: true, include } } }),
-      )
-
-      expect(prepared.body.include).toEqual(include)
-    }),
-  )
-
-  it.effect("emits sequential cutoff only on capable Codex routes", () =>
-    Effect.gen(function* () {
-      const options = { openai: { reasoningSummaryDelivery: "sequential_cutoff" as const } }
-      const publicRequest = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: options }),
-      )
-      const codexRequest = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model: codexModel, prompt: "hi", providerOptions: options }),
-      )
-      const azureRequest = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({
-          model: Azure.configure({ baseURL: "https://azure.test/openai/v1", apiKey: "test" }).responses("gpt-5"),
-          prompt: "hi",
-          providerOptions: options,
-        }),
-      )
-
-      expect(publicRequest.body).not.toHaveProperty("stream_options")
-      expect(azureRequest.body).not.toHaveProperty("stream_options")
-      expect(codexRequest.body.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" })
     }),
   )
 
@@ -1469,10 +651,10 @@ describe("OpenAI Responses route", () => {
             id: "resp_1",
             service_tier: "default",
             usage: {
-              input_tokens: 10,
+              input_tokens: 5,
               output_tokens: 2,
-              total_tokens: 12,
-              input_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
+              total_tokens: 7,
+              input_tokens_details: { cached_tokens: 1 },
               output_tokens_details: { reasoning_tokens: 0 },
             },
           },
@@ -1480,19 +662,18 @@ describe("OpenAI Responses route", () => {
       )
       const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
       const usage = new Usage({
-        inputTokens: 10,
+        inputTokens: 5,
         outputTokens: 2,
-        nonCachedInputTokens: 3,
-        cacheReadInputTokens: 3,
-        cacheWriteInputTokens: 4,
+        nonCachedInputTokens: 4,
+        cacheReadInputTokens: 1,
         reasoningTokens: 0,
-        totalTokens: 12,
+        totalTokens: 7,
         providerMetadata: {
           openai: {
-            input_tokens: 10,
+            input_tokens: 5,
             output_tokens: 2,
-            total_tokens: 12,
-            input_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
+            total_tokens: 7,
+            input_tokens_details: { cached_tokens: 1 },
             output_tokens_details: { reasoning_tokens: 0 },
           },
         },
@@ -1519,34 +700,6 @@ describe("OpenAI Responses route", () => {
           usage,
         },
       ])
-    }),
-  )
-
-  it.effect("clamps malformed Responses cache usage into one input partition", () =>
-    Effect.gen(function* () {
-      const body = sseEvents({
-        type: "response.completed",
-        response: {
-          usage: {
-            input_tokens: 10,
-            output_tokens: 1,
-            input_tokens_details: { cached_tokens: 12, cache_write_tokens: 9 },
-          },
-        },
-      })
-      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
-      expect(response.usage).toMatchObject({
-        inputTokens: 10,
-        nonCachedInputTokens: 0,
-        cacheReadInputTokens: 10,
-        cacheWriteInputTokens: 0,
-      })
-      expect(ProviderShared.normalizeInputTokens(-4, Number.NaN, Number.POSITIVE_INFINITY)).toEqual({
-        inputTokens: 0,
-        nonCachedInputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheWriteInputTokens: 0,
-      })
     }),
   )
 
@@ -1606,268 +759,6 @@ describe("OpenAI Responses route", () => {
           providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
         }),
       )
-    }),
-  )
-
-  it.effect("parses only completed sequential cutoff summaries in order", () =>
-    Effect.gen(function* () {
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model: codexModel,
-          prompt: "think",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents(
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_1" } },
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_1" } },
-              { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: "partial" },
-              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 0, text: "First" },
-              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 0, text: "duplicate" },
-              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 1, text: "Second" },
-              {
-                type: "response.output_item.done",
-                item: { type: "reasoning", id: "rs_1", encrypted_content: "encrypted-state" },
-              },
-              {
-                type: "response.output_item.done",
-                item: { type: "reasoning", id: "rs_1", encrypted_content: "duplicate-state" },
-              },
-              { type: "response.output_text.delta", item_id: "msg_1", delta: "Visible" },
-              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 2, text: "stale" },
-              { type: "response.completed", response: { id: "resp_1" } },
-            ),
-          ),
-        ),
-      )
-
-      expect(response.reasoning).toBe("FirstSecond")
-      expect(response.text).toBe("Visible")
-      expect(response.events.filter(LLMEvent.is.reasoningDelta)).toEqual([
-        { type: "reasoning-delta", id: "rs_1:0", text: "First" },
-        { type: "reasoning-delta", id: "rs_1:1", text: "Second" },
-      ])
-      expect(response.events.filter(LLMEvent.is.reasoningEnd).at(-1)).toMatchObject({
-        providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
-      })
-    }),
-  )
-
-  it.effect("closes consecutive sequential reasoning items at replacement", () =>
-    Effect.gen(function* () {
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model: codexModel,
-          prompt: "think",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents(
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_first" } },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_first",
-                summary_index: 0,
-                text: "First",
-              },
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_second" } },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_second",
-                summary_index: 0,
-                text: "Second",
-              },
-              {
-                type: "response.output_item.done",
-                item: { type: "reasoning", id: "rs_second", encrypted_content: "encrypted-second" },
-              },
-              { type: "response.completed", response: {} },
-            ),
-          ),
-        ),
-      )
-
-      expect(response.reasoning).toBe("FirstSecond")
-      expect(response.events.filter((event) => event.type.startsWith("reasoning-"))).toMatchObject([
-        { type: "reasoning-start", id: "rs_first:0" },
-        { type: "reasoning-delta", id: "rs_first:0", text: "First" },
-        { type: "reasoning-end", id: "rs_first:0" },
-        { type: "reasoning-start", id: "rs_second:0" },
-        { type: "reasoning-delta", id: "rs_second:0", text: "Second" },
-        { type: "reasoning-end", id: "rs_second:0" },
-      ])
-    }),
-  )
-
-  it.effect("does not reopen an old reasoning id after replacement", () =>
-    Effect.gen(function* () {
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model: codexModel,
-          prompt: "think",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents(
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_old" } },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_old",
-                summary_index: 0,
-                text: "Old",
-              },
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_new" } },
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_old" } },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_old",
-                summary_index: 1,
-                text: "Stale",
-              },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_new",
-                summary_index: 0,
-                text: "New",
-              },
-              {
-                type: "response.output_item.done",
-                item: { type: "reasoning", id: "rs_new", encrypted_content: "encrypted-new" },
-              },
-              { type: "response.completed", response: {} },
-            ),
-          ),
-        ),
-      )
-
-      expect(response.reasoning).toBe("OldNew")
-      expect(response.events.filter(LLMEvent.is.reasoningStart)).toHaveLength(2)
-      expect(response.events.filter(LLMEvent.is.reasoningEnd)).toHaveLength(2)
-    }),
-  )
-
-  it.effect("returns balanced reasoning lifecycle events on non-reasoning interruption", () =>
-    Effect.gen(function* () {
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model: codexModel,
-          prompt: "think",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents(
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_interrupted" } },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_interrupted",
-                summary_index: 0,
-                text: "Retained",
-              },
-              { type: "response.output_item.added", item: { type: "message", id: "msg_1" } },
-              { type: "response.output_text.delta", item_id: "msg_1", delta: "Visible" },
-              { type: "response.completed", response: {} },
-            ),
-          ),
-        ),
-      )
-
-      const start = response.events.findIndex(LLMEvent.is.reasoningStart)
-      const end = response.events.findIndex(LLMEvent.is.reasoningEnd)
-      const text = response.events.findIndex(LLMEvent.is.textStart)
-      expect(response.reasoning).toBe("Retained")
-      expect(response.text).toBe("Visible")
-      expect(start).toBeGreaterThanOrEqual(0)
-      expect(end).toBeGreaterThan(start)
-      expect(text).toBeGreaterThan(end)
-      expect(response.events.filter(LLMEvent.is.reasoningStart)).toHaveLength(1)
-      expect(response.events.filter(LLMEvent.is.reasoningEnd)).toHaveLength(1)
-    }),
-  )
-
-  it.effect("does not interpret sequential cutoff events on public routes", () =>
-    Effect.gen(function* () {
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model,
-          prompt: "think",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents(
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_public" } },
-              {
-                type: "response.reasoning_summary_text.delta",
-                item_id: "rs_public",
-                summary_index: 0,
-                delta: "Legacy",
-              },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_public",
-                summary_index: 0,
-                text: "Atomic",
-              },
-              { type: "response.output_item.done", item: { type: "reasoning", id: "rs_public" } },
-              { type: "response.completed", response: {} },
-            ),
-          ),
-        ),
-      )
-
-      expect(response.reasoning).toBe("Legacy")
-    }),
-  )
-
-  it.effect("drops interrupted and done-only sequential cutoff items", () =>
-    Effect.gen(function* () {
-      const response = yield* LLMClient.generate(
-        LLM.request({
-          model: codexModel,
-          prompt: "think",
-          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-        }),
-      ).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents(
-              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_interrupted" } },
-              {
-                type: "response.reasoning_summary_text.delta",
-                item_id: "rs_interrupted",
-                summary_index: 0,
-                delta: "partial",
-              },
-              { type: "response.output_item.added", item: { type: "message", id: "msg_1" } },
-              {
-                type: "response.reasoning_summary_text.done",
-                item_id: "rs_interrupted",
-                summary_index: 0,
-                text: "late",
-              },
-              {
-                type: "response.output_item.done",
-                item: { type: "reasoning", id: "rs_done_only", encrypted_content: "stale" },
-              },
-              { type: "response.output_text.delta", item_id: "msg_1", delta: "Visible" },
-              { type: "response.completed", response: {} },
-            ),
-          ),
-        ),
-      )
-
-      expect(response.reasoning).toBe("")
-      expect(response.text).toBe("Visible")
-      expect(response.events.some(LLMEvent.is.reasoningDelta)).toBe(false)
     }),
   )
 
@@ -2266,102 +1157,6 @@ describe("OpenAI Responses route", () => {
           usage,
         },
       ])
-    }),
-  )
-
-  it.effect("preserves malformed recorded function arguments without failing the stream", () =>
-    Effect.gen(function* () {
-      const body = sseEvents(
-        {
-          type: "response.output_item.added",
-          item: { type: "function_call", id: "item_bad", call_id: "call_bad", name: "final_output", arguments: "" },
-        },
-        { type: "response.function_call_arguments.delta", item_id: "item_bad", delta: "{" },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "item_bad",
-            call_id: "call_bad",
-            name: "final_output",
-            arguments: "{",
-          },
-        },
-        { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
-      )
-      const response = yield* LLMClient.generate(
-        LLM.updateRequest(request, {
-          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
-          toolChoice: { type: "required" },
-        }),
-      ).pipe(Effect.provide(fixedResponse(body)))
-
-      expect(response.events).toContainEqual({
-        type: "tool-input-error",
-        id: "call_bad",
-        name: "final_output",
-        reason: "invalid-json",
-        providerMetadata: { openai: { itemId: "item_bad" } },
-      })
-      expect(JSON.stringify(response.events)).not.toContain('arguments":"{"')
-    }),
-  )
-
-  it.effect("assembles streamed custom tool input as raw text", () =>
-    Effect.gen(function* () {
-      const body = sseEvents(
-        {
-          type: "response.output_item.added",
-          item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "patch", input: "" },
-        },
-        { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", delta: "*** Begin" },
-        { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", delta: " Patch" },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "custom_tool_call",
-            id: "ctc_1",
-            call_id: "call_1",
-            name: "patch",
-            input: "*** Begin Patch",
-          },
-        },
-        { type: "response.completed", response: {} },
-      )
-      const response = yield* LLMClient.generate(
-        LLM.updateRequest(request, {
-          tools: [new CustomToolDefinition({ name: "patch", description: "Apply a patch." })],
-        }),
-      ).pipe(Effect.provide(fixedResponse(body)))
-
-      expect(response.events.filter((event) => event.type.startsWith("tool-"))).toEqual([
-        {
-          type: "tool-input-start",
-          id: "call_1",
-          name: "patch",
-          toolType: "custom",
-          providerMetadata: { openai: { itemId: "ctc_1" } },
-        },
-        { type: "tool-input-delta", id: "call_1", name: "patch", text: "*** Begin", toolType: "custom" },
-        { type: "tool-input-delta", id: "call_1", name: "patch", text: " Patch", toolType: "custom" },
-        {
-          type: "tool-input-end",
-          id: "call_1",
-          name: "patch",
-          toolType: "custom",
-          providerMetadata: { openai: { itemId: "ctc_1" } },
-        },
-        {
-          type: "tool-call",
-          id: "call_1",
-          name: "patch",
-          input: "*** Begin Patch",
-          toolType: "custom",
-          providerExecuted: undefined,
-          providerMetadata: { openai: { itemId: "ctc_1" } },
-        },
-      ])
-      expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "tool-calls" })
     }),
   )
 

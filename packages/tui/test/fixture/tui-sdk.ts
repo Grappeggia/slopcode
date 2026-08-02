@@ -33,15 +33,14 @@ export function createEventSource() {
   }
 }
 
-export type FetchHandler = (url: URL, request?: Request) => Response | Promise<Response | undefined> | undefined
+export type FetchHandler = (url: URL) => Response | Promise<Response> | undefined
 
 export function createFetch(override?: FetchHandler) {
   const session = [] as URL[]
-  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = input instanceof Request ? input : new Request(input, init)
-    const url = new URL(request.url)
+  const fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
     if (url.pathname === "/session") session.push(url)
-    const overridden = await override?.(url, request)
+    const overridden = await override?.(url)
     if (overridden) return overridden
 
     if (

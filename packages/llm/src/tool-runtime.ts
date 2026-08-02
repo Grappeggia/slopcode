@@ -68,29 +68,10 @@ const result = (call: ToolCallPart, value: ToolResultValueType | ToolSettlement,
     events:
       settlement.result.type === "error"
         ? [
-            LLMEvent.toolError({
-              id: call.id,
-              name: call.name,
-              message: String(settlement.result.value),
-              toolType: call.toolType,
-              error,
-            }),
-            LLMEvent.toolResult({
-              id: call.id,
-              name: call.name,
-              result: settlement.result,
-              toolType: call.toolType,
-            }),
+            LLMEvent.toolError({ id: call.id, name: call.name, message: String(settlement.result.value), error }),
+            LLMEvent.toolResult({ id: call.id, name: call.name, result: settlement.result }),
           ]
-        : [
-            LLMEvent.toolResult({
-              id: call.id,
-              name: call.name,
-              result: settlement.result,
-              toolType: call.toolType,
-              output: settlement.output,
-            }),
-          ],
+        : [LLMEvent.toolResult({ id: call.id, name: call.name, result: settlement.result, output: settlement.output })],
   }
 }
 

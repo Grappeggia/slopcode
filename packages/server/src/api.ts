@@ -18,6 +18,8 @@ import { LocationGroup } from "./groups/location"
 import { IntegrationGroup } from "./groups/integration"
 import { CredentialGroup } from "./groups/credential"
 import { ProjectCopyGroup } from "./groups/project-copy"
+import { PtyGroup } from "./groups/pty"
+import { RouteLocationMiddleware } from "./middleware/route-location"
 
 export const Api = HttpApi.make("server")
   .add(HealthGroup)
@@ -37,6 +39,7 @@ export const Api = HttpApi.make("server")
   .add(QuestionGroup)
   .add(ReferenceGroup)
   .add(ProjectCopyGroup)
+  .add(PtyGroup)
   .annotateMerge(
     OpenApi.annotations({
       title: "slopcode HttpApi",
@@ -44,5 +47,6 @@ export const Api = HttpApi.make("server")
       description: "Experimental HttpApi surface for selected instance routes.",
     }),
   )
+  .middleware(RouteLocationMiddleware)
   .middleware(Authorization)
   .middleware(SchemaErrorMiddleware)

@@ -12,7 +12,7 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@opencode-ai/schema": "workspace:*",
+    "@slopcode-ai/schema": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -198,7 +198,7 @@ describe("HttpApi UI fallback", () => {
       expect(response.status).toBe(200)
       expect(response.headers.get("content-type")).toContain("text/html")
       expect(yield* responseText(response)).toBe("<html>slopcode</html>")
-      expect(proxiedUrl).toBe("https://app.slopcode.ai/")
+      expect(proxiedUrl).toBe("https://app.slopcode.dev/")
     }),
   )
 
@@ -243,7 +243,7 @@ describe("HttpApi UI fallback", () => {
       )
 
       expect(response.status).toBe(200)
-      expect(proxiedUrl).toBe("https://app.slopcode.ai/assets/app.js")
+      expect(proxiedUrl).toBe("https://app.slopcode.dev/assets/app.js")
       expect(response.headers.get("content-encoding")).toBeNull()
       expect(response.headers.get("content-length")).not.toBe("999")
       expect(response.headers.get("content-type")).toContain("text/javascript")

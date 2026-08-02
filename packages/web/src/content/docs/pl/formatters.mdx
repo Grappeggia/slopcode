@@ -61,7 +61,7 @@ Możesz dostosować formatery za pomocą sekcji `formatter` w konfiguracji SlopC
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": {}
 }
 ```
@@ -85,7 +85,7 @@ Aby globalnie wyłączyć **wszystkie** formatery, ustaw `formatter` na `false`:
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": false
 }
 ```
@@ -94,7 +94,7 @@ Aby wyłączyć **określony** formater, ustaw `disabled` na `true`:
 
 ```json title="slopcode.json" {5}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -111,7 +111,7 @@ Możesz dodać niestandardowe formatery, podając polecenie, zmienne środowisko
 
 ```json title="slopcode.json" {4-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "formatter": {
     "prettier": {
       "command": ["npx", "prettier", "--write", "$FILE"],

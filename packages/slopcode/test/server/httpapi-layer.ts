@@ -4,19 +4,19 @@ import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/un
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 
-export const makeHttpApiLayer = (routes: typeof HttpApiApp.routes) => {
-  const served: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(routes, {
+const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
+  HttpApiApp.routes,
+  {
     disableListenLog: true,
     disableLogger: true,
-  })
-  return served.pipe(
-    Layer.provide(layerWebSocketConstructorGlobal),
-    Layer.provideMerge(NodeHttpServer.layerTest),
-    Layer.provideMerge(NodeServices.layer),
-  )
-}
+  },
+)
 
-export const httpApiLayer = makeHttpApiLayer(HttpApiApp.routes)
+export const httpApiLayer = servedRoutes.pipe(
+  Layer.provide(layerWebSocketConstructorGlobal),
+  Layer.provideMerge(NodeHttpServer.layerTest),
+  Layer.provideMerge(NodeServices.layer),
+)
 
 export function request(path: string, init?: RequestInit) {
   const url = new URL(path, "http://localhost")

@@ -85,17 +85,3 @@ export class Info extends Schema.Class<Info>("ProviderV2.Info")({
     })
   }
 }
-
-export const publicInfo = (provider: Info) =>
-  new Info({
-    id: provider.id,
-    name: provider.name,
-    enabled:
-      provider.enabled === false || provider.enabled.via === "env" ? provider.enabled : { via: "custom", data: {} },
-    env: provider.env,
-    api:
-      provider.api.type === "aisdk"
-        ? { type: provider.api.type, package: provider.api.package }
-        : { type: "native", settings: {} },
-    request: { headers: {}, body: {} },
-  })

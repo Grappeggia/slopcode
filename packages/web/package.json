@@ -2,13 +2,12 @@
   "name": "@slopcode-ai/web",
   "type": "module",
   "license": "MIT",
-  "version": "0.2.209",
+  "version": "0.2.192",
   "scripts": {
     "dev": "astro dev",
-    "dev:remote": "VITE_API_URL=https://api.slopcode.ai astro dev",
+    "dev:remote": "VITE_API_URL=https://api.slopcode.dev astro dev",
     "start": "astro dev",
     "build": "astro build",
-    "test": "bun test --timeout 30000 --only-failures",
     "preview": "astro preview",
     "astro": "astro"
   },

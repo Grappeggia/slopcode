@@ -5,9 +5,6 @@ import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { OpenAIWebSocketPool } from "./ws-pool"
-import { extractAccountId, refreshAuth, type TokenResponse } from "./oauth"
-export { extractAccountId, extractAccountIdFromClaims, parseJwtClaims } from "./oauth"
-export type { IdTokenClaims } from "./oauth"
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"
@@ -36,6 +33,46 @@ function base64UrlEncode(buffer: ArrayBuffer): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
+export interface IdTokenClaims {
+  chatgpt_account_id?: string
+  organizations?: Array<{ id: string }>
+  email?: string
+  "https://api.openai.com/auth"?: {
+    chatgpt_account_id?: string
+  }
+}
+
+export function parseJwtClaims(token: string): IdTokenClaims | undefined {
+  const parts = token.split(".")
+  if (parts.length !== 3) return undefined
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString())
+  } catch {
+    return undefined
+  }
+}
+
+export function extractAccountIdFromClaims(claims: IdTokenClaims): string | undefined {
+  return (
+    claims.chatgpt_account_id ||
+    claims["https://api.openai.com/auth"]?.chatgpt_account_id ||
+    claims.organizations?.[0]?.id
+  )
+}
+
+export function extractAccountId(tokens: TokenResponse): string | undefined {
+  if (tokens.id_token) {
+    const claims = parseJwtClaims(tokens.id_token)
+    const accountId = claims && extractAccountIdFromClaims(claims)
+    if (accountId) return accountId
+  }
+  if (tokens.access_token) {
+    const claims = parseJwtClaims(tokens.access_token)
+    return claims ? extractAccountIdFromClaims(claims) : undefined
+  }
+  return undefined
+}
+
 function buildAuthorizeUrl(redirectUri: string, pkce: PkceCodes, state: string): string {
   const params = new URLSearchParams({
     response_type: "code",
@@ -50,6 +87,13 @@ function buildAuthorizeUrl(redirectUri: string, pkce: PkceCodes, state: string):
     originator: "slopcode",
   })
   return `${ISSUER}/oauth/authorize?${params.toString()}`
+}
+
+interface TokenResponse {
+  id_token: string
+  access_token: string
+  refresh_token: string
+  expires_in?: number
 }
 
 interface CodexAuthPluginOptions {
@@ -72,6 +116,22 @@ async function exchangeCodeForTokens(code: string, redirectUri: string, pkce: Pk
   })
   if (!response.ok) {
     throw new Error(`Token exchange failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+async function refreshAccessToken(refreshToken: string, issuer = ISSUER): Promise<TokenResponse> {
+  const response = await fetch(`${issuer}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CLIENT_ID,
+    }).toString(),
+  })
+  if (!response.ok) {
+    throw new Error(`Token refresh failed: ${response.status}`)
   }
   return response.json()
 }
@@ -376,15 +436,23 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
 
             if (!currentAuth.access || currentAuth.expires < Date.now()) {
               if (!refreshPromise) {
-                refreshPromise = refreshAuth(
-                  currentAuth,
-                  async (auth) => {
-                    await input.client.auth.set({ path: { id: "openai" }, body: auth })
-                  },
-                  { issuer },
-                )
-                  .then((result) => {
-                    return { access: result.auth.access, accountId: result.auth.accountId }
+                refreshPromise = refreshAccessToken(currentAuth.refresh, issuer)
+                  .then(async (tokens) => {
+                    const accountId = extractAccountId(tokens) || authWithAccount.accountId
+                    await input.client.auth.set({
+                      path: { id: "openai" },
+                      body: {
+                        type: "oauth",
+                        refresh: tokens.refresh_token,
+                        access: tokens.access_token,
+                        expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                        ...(accountId && { accountId }),
+                      },
+                    })
+                    return {
+                      access: tokens.access_token,
+                      accountId,
+                    }
                   })
                   .finally(() => {
                     refreshPromise = undefined
@@ -452,7 +520,6 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               callback: async () => {
                 const tokens = await callbackPromise
                 stopOAuthServer()
-                if (!tokens.refresh_token) throw new Error("Token exchange missing refresh token")
                 const accountId = extractAccountId(tokens)
                 return {
                   type: "success" as const,
@@ -528,7 +595,6 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                     }
 
                     const tokens: TokenResponse = await tokenResponse.json()
-                    if (!tokens.refresh_token) throw new Error("Token exchange missing refresh token")
 
                     return {
                       type: "success" as const,

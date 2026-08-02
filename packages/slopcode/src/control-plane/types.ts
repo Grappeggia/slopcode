@@ -3,7 +3,6 @@ import { ProjectV2 } from "@slopcode-ai/core/project"
 import type { InstanceContext } from "@/project/instance-context"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import type { DeepMutable } from "@slopcode-ai/core/schema"
-import type { EffectBridge } from "@/effect/bridge"
 
 export const WorkspaceInfo = Schema.Struct({
   id: WorkspaceV2.ID,
@@ -42,7 +41,6 @@ export type Target =
 export type WorkspaceAdapterContext = {
   readonly instance?: InstanceContext
   readonly workspaceID?: WorkspaceV2.ID
-  readonly bridge?: EffectBridge.Shape
 }
 
 export type WorkspaceAdapter = {

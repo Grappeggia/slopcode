@@ -31,7 +31,7 @@ describe("ZenmuxPlugin", () => {
         })
       })
       const result = yield* catalog.provider.get(ProviderV2.ID.make("zenmux"))
-      expect(result.request.headers).toEqual({ "HTTP-Referer": "https://slopcode.ai/", "X-Title": "slopcode" })
+      expect(result.request.headers).toEqual({ "HTTP-Referer": "https://slopcode.dev/", "X-Title": "slopcode" })
       expect(Object.keys(result.request.headers).sort()).toEqual(["HTTP-Referer", "X-Title"])
     }),
   )
@@ -54,7 +54,7 @@ describe("ZenmuxPlugin", () => {
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("zenmux"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://slopcode.ai/",
+        "HTTP-Referer": "https://slopcode.dev/",
         "X-Title": "slopcode",
       })
     }),

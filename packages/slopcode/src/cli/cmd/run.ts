@@ -1,3 +1,4 @@
+import type { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 // CLI entry point for `slopcode run`.
 //
 // Handles three modes:
@@ -22,7 +23,6 @@ import { Filesystem } from "@/util/filesystem"
 import { createSlopcodeClient, type SlopcodeClient, type ToolPart } from "@slopcode-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
-import { runPermissionRules, runSessionPermission } from "./run/permission-rules"
 
 type ModelInput = Parameters<SlopcodeClient["session"]["prompt"]>[0]["model"]
 
@@ -64,7 +64,6 @@ type SessionInfo = {
   id: string
   title?: string
   directory?: string
-  permission?: ReturnType<typeof runPermissionRules>
 }
 
 function inline(info: Inline) {
@@ -381,7 +380,25 @@ export const RunCommand = effectCmd({
         process.exit(1)
       }
 
-      const rules = runPermissionRules(interactive)
+      const rules: PermissionV1.Ruleset = interactive
+        ? []
+        : [
+            {
+              permission: "question",
+              action: "deny",
+              pattern: "*",
+            },
+            {
+              permission: "plan_enter",
+              action: "deny",
+              pattern: "*",
+            },
+            {
+              permission: "plan_exit",
+              action: "deny",
+              pattern: "*",
+            },
+          ]
 
       function title() {
         if (args.title === undefined) return
@@ -415,7 +432,6 @@ export const RunCommand = effectCmd({
               id,
               title: forked.data?.title ?? current.data.title,
               directory: forked.data?.directory ?? current.data.directory,
-              permission: forked.data?.permission ?? current.data.permission,
             }
           }
 
@@ -423,7 +439,6 @@ export const RunCommand = effectCmd({
             id: current.data.id,
             title: current.data.title,
             directory: current.data.directory,
-            permission: current.data.permission,
           }
         }
 
@@ -442,7 +457,6 @@ export const RunCommand = effectCmd({
             id,
             title: forked.data?.title ?? base.title,
             directory: forked.data?.directory ?? base.directory,
-            permission: forked.data?.permission ?? base.permission,
           }
         }
 
@@ -451,7 +465,6 @@ export const RunCommand = effectCmd({
             id: base.id,
             title: base.title,
             directory: base.directory,
-            permission: base.permission,
           }
         }
 
@@ -469,7 +482,6 @@ export const RunCommand = effectCmd({
           id,
           title: result.data?.title ?? name,
           directory: result.data?.directory,
-          permission: result.data?.permission,
         }
       }
 
@@ -513,7 +525,6 @@ export const RunCommand = effectCmd({
         return {
           id,
           title: result.data?.title,
-          permission: result.data?.permission,
         }
       }
 
@@ -638,7 +649,6 @@ export const RunCommand = effectCmd({
         // created, and replies issued from inside the loop must use that client.
         async function loop(client: SlopcodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
-          const batches = new Map<string, { expected: number; requests: Map<string, { id: string }> }>()
           let error: string | undefined
 
           for await (const event of events.stream) {
@@ -739,25 +749,6 @@ export const RunCommand = effectCmd({
             if (event.type === "permission.asked") {
               const permission = event.properties
               if (permission.sessionID !== sessionID) continue
-              if (permission.kind === "forecast" && permission.batchID) {
-                const batch = batches.get(permission.batchID) ?? {
-                  expected: permission.batchSize ?? 1,
-                  requests: new Map<string, { id: string }>(),
-                }
-                batch.expected = Math.max(batch.expected, permission.batchSize ?? 1)
-                batch.requests.set(permission.id, permission)
-                batches.set(permission.batchID, batch)
-                if (batch.requests.size < batch.expected) continue
-                const requests = [...batch.requests.values()].toSorted((a, b) => a.id.localeCompare(b.id))
-                const result = await client.permission.replyBatch({
-                  batchID: permission.batchID,
-                  requestIDs: auto ? requests.map((item) => item.id) : [],
-                  reply: auto ? "once" : "reject",
-                })
-                if (result.error) throw result.error
-                batches.delete(permission.batchID)
-                continue
-              }
 
               if (auto) {
                 await client.permission.reply({
@@ -781,18 +772,6 @@ export const RunCommand = effectCmd({
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
-
-        if (!interactive) {
-          const permission = runSessionPermission(sess.permission, false)
-          if (permission.length) {
-            const updated = await client.session.update({ sessionID, permission })
-            if (updated.error) {
-              if (!emit("error", { error: updated.error })) UI.error(formatRunError(updated.error))
-              process.exitCode = 1
-              return
-            }
-          }
-        }
 
         // Validate agent if specified
         const agent = await pickAgent(client)

@@ -83,114 +83,23 @@ export function opaque(shell: string, command: string) {
   return `[opaque shell statement] shell-utf8=${encode(shell)} source-utf8=${encode(command)}`
 }
 
-type Env = {
-  start: number
-  end: number
-  key: string
-}
-
-function powershellEnv(text: string) {
-  const result: Env[] = []
-  let quote: "'" | '"' | undefined
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i]
-    if (quote === "'") {
-      if (char !== "'") continue
-      if (text[i + 1] === "'") {
-        i++
-        continue
-      }
-      quote = undefined
-      continue
-    }
-    if (char === "`") {
-      i++
-      continue
-    }
-    if (char === '"') {
-      if (quote === '"' && text[i + 1] === '"') {
-        i++
-        continue
-      }
-      quote = quote === '"' ? undefined : '"'
-      continue
-    }
-    if (!quote && char === "'") {
-      quote = "'"
-      continue
-    }
-    if (!quote && text.startsWith("--%", i) && (i === 0 || /\s/.test(text[i - 1]))) break
-    if (char !== "$") continue
-
-    if (text.slice(i + 1, i + 5).toLowerCase() === "env:") {
-      const match = /^[\p{L}\p{Nd}_?]+/u.exec(text.slice(i + 5))
-      if (!match) throw new SyntaxError("powershell")
-      result.push({ start: i, end: i + 5 + match[0].length, key: match[0] })
-      i += 4 + match[0].length
-      continue
-    }
-    if (text.slice(i + 1, i + 6).toLowerCase() !== "{env:") continue
-
-    // Tree-sitter treats escaped braces as terminators, so validate and decode the name here.
-    let key = ""
-    let end = i + 6
-    for (; end < text.length; end++) {
-      const current = text[end]
-      if (current === "`") {
-        const escaped = text[end + 1]
-        if (!escaped || escaped === "\r" || escaped === "\n") throw new SyntaxError("powershell")
-        key += escaped
-        end++
-        continue
-      }
-      if (current === "}") break
-      if (current === "\r" || current === "\n") throw new SyntaxError("powershell")
-      key += current
-    }
-    if (!key || text[end] !== "}") throw new SyntaxError("powershell")
-    result.push({ start: i, end: end + 1, key })
-    i = end
-  }
-  return result
-}
-
-export function expandEnv(text: string, value: (key: string) => string) {
-  return powershellEnv(text)
-    .map((item) => ({ ...item, value: value(item.key) }))
-    .toReversed()
-    .reduce((result, item) => result.slice(0, item.start) + item.value + result.slice(item.end), text)
-}
-
-const powershellInput = (command: string) => {
-  // The grammar cannot parse variables concatenated with path suffixes. Same-length
-  // placeholders preserve offsets so authorization still reads the original source.
-  const env = powershellEnv(command).filter((item) => command[item.end] === "\\" || command[item.end] === "/")
-  if (env.some((item) => /[#;<>&|'"$\r\n]/.test(item.key))) throw new SyntaxError("powershell")
-  return env
-    .toReversed()
-    .reduce(
-      (result, item) => result.slice(0, item.start) + "x".repeat(item.end - item.start) + result.slice(item.end),
-      command,
-    )
-}
-
 export async function parse(command: string, language: Language) {
-  const syntax = (await parser())[language]
-  const input = language === "powershell" ? powershellInput(command) : command
-  const tree = syntax.parse(input)
-  if (tree && !tree.rootNode.hasError) return tree
-  tree?.delete()
-  throw new SyntaxError(language)
+  const tree = (await parser())[language].parse(command)
+  if (!tree || tree.rootNode.hasError) {
+    tree?.delete()
+    throw new SyntaxError(language)
+  }
+  return tree
 }
 
-const item = (command: string, node: Node, source = node): Resource => ({
-  text: command.slice(source.startIndex, source.endIndex).trim(),
+const item = (node: Node, source = node): Resource => ({
+  text: source.text.trim(),
   start: source.startIndex,
   end: source.endIndex,
 })
 
-const through = (command: string, node: Node, end: Node): Resource => ({
-  text: command.slice(node.startIndex, end.endIndex).trim(),
+const through = (node: Node, end: Node): Resource => ({
+  text: node.text.slice(0, end.endIndex - node.startIndex).trim(),
   start: node.startIndex,
   end: end.endIndex,
 })
@@ -216,23 +125,23 @@ const within = (node: Node, types: Set<string>) => {
   return false
 }
 
-const bashResources = (tree: Tree, command: string) => {
+const bashResources = (tree: Tree) => {
   const atoms = new Set(["command", "declaration_command", "test_command", "unset_command", "variable_assignments"])
   const nodes = descendants(tree.rootNode, [...atoms, "variable_assignment"])
     .filter((node) => node.type !== "variable_assignment" || !within(node, atoms))
     .map((node) => {
       const parent = node.parent
-      if (parent?.type !== "redirected_statement") return item(command, node)
-      return parent.childForFieldName("body")?.id === node.id ? item(command, node, parent) : item(command, node)
+      if (parent?.type !== "redirected_statement") return item(node)
+      return parent.childForFieldName("body")?.id === node.id ? item(node, parent) : item(node)
     })
   const redirects = descendants(tree.rootNode, ["redirected_statement"]).flatMap((node) => {
     const body = node.childForFieldName("body")
     if (body && (atoms.has(body.type) || body.type === "variable_assignment")) return []
-    return [item(command, node)]
+    return [item(node)]
   })
   const functions = descendants(tree.rootNode, ["function_definition"])
     .filter((node) => node.childForFieldName("redirect") !== null)
-    .map((node) => item(command, node))
+    .map((node) => item(node))
   return unique([...nodes, ...redirects, ...functions])
 }
 
@@ -245,19 +154,19 @@ const scriptBlock = (node: Node) => {
 const redirected = (node: Node) =>
   node.childForFieldName("command_elements")?.namedChildren.some((child) => child?.type === "redirection") ?? false
 
-const powershellResources = (tree: Tree, command: string) => {
+const powershellResources = (tree: Tree) => {
   const commands = descendants(tree.rootNode, ["command", "data_command"])
     .filter((node) => node.type !== "command" || !scriptBlock(node) || redirected(node))
-    .map((node) => item(command, node))
+    .map((node) => item(node))
   const expressions = descendants(tree.rootNode, ["pipeline_chain"]).flatMap((node) => {
     const children = node.namedChildren.filter((child): child is Node => child !== null)
     const first = children[0]
     if (!first || first.type === "command") return []
     const redirects = children.find((child) => child.type === "redirections")
-    return [redirects ? through(command, node, redirects) : item(command, first)]
+    return [redirects ? through(node, redirects) : item(first)]
   })
-  const assignments = descendants(tree.rootNode, ["assignment_expression"]).map((node) => item(command, node))
-  const invocations = descendants(tree.rootNode, ["invokation_expression"]).map((node) => item(command, node))
+  const assignments = descendants(tree.rootNode, ["assignment_expression"]).map((node) => item(node))
+  const invocations = descendants(tree.rootNode, ["invokation_expression"]).map((node) => item(node))
   return unique([...commands, ...expressions, ...assignments, ...invocations])
 }
 
@@ -340,7 +249,7 @@ export async function resources(command: string, shell: string) {
   if (family === "posix") return posixResources(command, shell)
   const tree = await parse(command, family)
   try {
-    const result = family === "bash" ? bashResources(tree, command) : powershellResources(tree, command)
+    const result = family === "bash" ? bashResources(tree) : powershellResources(tree)
     return result.length ? result : [opaque(shell, command)]
   } finally {
     tree.delete()

@@ -72,9 +72,7 @@ const requestURL = (request: { readonly url: string }) => new URL(request.url, "
 const listenAdditionalServer = <E, R>(handler: TestHandler<E, R>) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
-      NodeHttpServer.layer(Http.createServer, { host: "127.0.0.1", port: 0 }).pipe(
-        Layer.provideMerge(NodeServices.layer),
-      ),
+      NodeHttpServer.layer(Http.createServer, { host: "127.0.0.1", port: 0 }).pipe(Layer.provideMerge(NodeServices.layer)),
     )
     const server = Context.get(context, HttpServer.HttpServer)
     yield* server.serve(HttpServerRequest.HttpServerRequest.use(handler))
@@ -273,177 +271,172 @@ const serveServerProbe = HttpApiBuilder.layer(ServerProbeApi).pipe(
 
 describe.serial("shared /api workspace routing middleware", () => {
   test.serial("waits for sync fence headers from remote shared /api responses", () =>
-    run(
-      Effect.gen(function* () {
-        const dir = yield* tmpdirScoped({ git: true })
-        const project = yield* Project.use.fromDirectory(dir)
-        const workspaceID = WorkspaceV2.ID.ascending()
-        const type = "remote-v2-fence-target"
-        const waited = yield* Ref.make<{ workspaceID: WorkspaceV2.ID; state: Record<string, number> } | undefined>(
-          undefined,
-        )
+    run(Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      const workspaceID = WorkspaceV2.ID.ascending()
+      const type = "remote-v2-fence-target"
+      const waited = yield* Ref.make<{ workspaceID: WorkspaceV2.ID; state: Record<string, number> } | undefined>(
+        undefined,
+      )
 
-        const remoteUrl = yield* startRemoteWorkspaceHttpServer(() =>
-          HttpServerResponse.json(
-            { proxied: true },
-            { status: 202, headers: { [FenceHeader]: JSON.stringify({ aggregate: 3 }) } },
+      const remoteUrl = yield* startRemoteWorkspaceHttpServer(() =>
+        HttpServerResponse.json(
+          { proxied: true },
+          { status: 202, headers: { [FenceHeader]: JSON.stringify({ aggregate: 3 }) } },
+        ),
+      )
+      registerAdapter(project.project.id, type, remoteAdapter(path.join(dir, `.${type}`), `${remoteUrl}/base`))
+
+      const workspace = Workspace.Service.of({
+        create: () => Effect.die("unused"),
+        sessionWarp: () => Effect.die("unused"),
+        list: () => Effect.die("unused"),
+        syncList: () => Effect.die("unused"),
+        get: (id) =>
+          Effect.succeed(
+            id === workspaceID
+              ? {
+                  id: workspaceID,
+                  type,
+                  branch: null,
+                  name: "remote-v2-fence-target",
+                  directory: null,
+                  extra: null,
+                  projectID: project.project.id,
+                  timeUsed: Date.now(),
+                }
+              : undefined,
           ),
-        )
-        registerAdapter(project.project.id, type, remoteAdapter(path.join(dir, `.${type}`), `${remoteUrl}/base`))
+        remove: () => Effect.die("unused"),
+        status: () => Effect.die("unused"),
+        isSyncing: () => Effect.succeed(true),
+        waitForSync: (id, state) => Ref.set(waited, { workspaceID: id, state }),
+        startWorkspaceSyncing: () => Effect.die("unused"),
+      })
 
-        const workspace = Workspace.Service.of({
-          create: () => Effect.die("unused"),
-          sessionWarp: () => Effect.die("unused"),
-          list: () => Effect.die("unused"),
-          syncList: () => Effect.die("unused"),
-          get: (id) =>
-            Effect.succeed(
-              id === workspaceID
-                ? {
-                    id: workspaceID,
-                    type,
-                    branch: null,
-                    name: "remote-v2-fence-target",
-                    directory: null,
-                    extra: null,
-                    projectID: project.project.id,
-                    timeUsed: Date.now(),
-                  }
-                : undefined,
-            ),
-          remove: () => Effect.die("unused"),
-          status: () => Effect.die("unused"),
-          isSyncing: () => Effect.succeed(true),
-          waitForSync: (id, state) => Ref.set(waited, { workspaceID: id, state }),
-          startWorkspaceSyncing: () => Effect.die("unused"),
-        })
+      yield* HttpApiBuilder.layer(ServerProbeApi).pipe(
+        Layer.provide(serverProbeHandlers),
+        Layer.provide(serverWorkspaceRoutingTestLayer),
+        Layer.provide(Layer.succeed(Workspace.Service, workspace)),
+        Layer.provide(Layer.mock(Session.Service)({})),
+        HttpRouter.serve,
+        Layer.build,
+      )
 
-        yield* HttpApiBuilder.layer(ServerProbeApi).pipe(
-          Layer.provide(serverProbeHandlers),
-          Layer.provide(serverWorkspaceRoutingTestLayer),
-          Layer.provide(Layer.succeed(Workspace.Service, workspace)),
-          Layer.provide(Layer.mock(Session.Service)({})),
-          HttpRouter.serve,
-          Layer.build,
-        )
+      const response = yield* HttpClient.get(`/api/probe?workspace=${workspaceID}`)
 
-        const response = yield* HttpClient.get(`/api/probe?workspace=${workspaceID}`)
-
-        expect(response.status).toBe(202)
-        expect(yield* response.json).toEqual({ proxied: true })
-        expect(yield* Ref.get(waited)).toEqual({ workspaceID, state: { aggregate: 3 } })
-      }),
-    ),
+      expect(response.status).toBe(202)
+      expect(yield* response.json).toEqual({ proxied: true })
+      expect(yield* Ref.get(waited)).toEqual({ workspaceID, state: { aggregate: 3 } })
+    })),
   )
 
   test.serial("proxies session-owned shared /api message, permission, and question routes", () =>
-    run(
-      Effect.gen(function* () {
-        const dir = yield* tmpdirScoped({ git: true })
-        const project = yield* Project.use.fromDirectory(dir)
-        const forwarded: ProxiedRequest[] = []
-        const remoteUrl = yield* startRemoteWorkspaceHttpServer((request) => {
-          forwarded.push(request)
-          return HttpServerResponse.json({ proxied: true, path: requestURL(request).pathname })
+    run(Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      const forwarded: ProxiedRequest[] = []
+      const remoteUrl = yield* startRemoteWorkspaceHttpServer((request) => {
+        forwarded.push(request)
+        return HttpServerResponse.json({ proxied: true, path: requestURL(request).pathname })
+      })
+      const workspace = yield* createRemoteWorkspace({
+        dir,
+        projectID: project.project.id,
+        type: "remote-v2-session-target",
+        url: `${remoteUrl}/base`,
+        headers: { "x-target-auth": "secret" },
+      })
+      const session = yield* Session.use.create({ workspaceID: workspace.id }).pipe(provideInstance(dir))
+
+      yield* serveServerProbe
+
+      for (const route of ["message", "permission", "question"]) {
+        const response = yield* HttpClientRequest.get(
+          `/api/session/${session.id}/${route}?directory=${encodeURIComponent("/ignored")}&location[directory]=${encodeURIComponent("/also-ignored")}`,
+        ).pipe(
+          HttpClientRequest.setHeader("x-slopcode-workspace", "internal"),
+          HttpClient.execute,
+        )
+
+        expect(response.status).toBe(200)
+        expect(yield* response.json).toEqual({
+          proxied: true,
+          path: `/base/api/session/${session.id}/${route}`,
         })
-        const workspace = yield* createRemoteWorkspace({
-          dir,
-          projectID: project.project.id,
-          type: "remote-v2-session-target",
-          url: `${remoteUrl}/base`,
-          headers: { "x-target-auth": "secret" },
-        })
-        const session = yield* Session.use.create({ workspaceID: workspace.id }).pipe(provideInstance(dir))
+      }
 
-        yield* serveServerProbe
-
-        for (const route of ["message", "permission", "question"]) {
-          const response = yield* HttpClientRequest.get(
-            `/api/session/${session.id}/${route}?directory=${encodeURIComponent("/ignored")}&location[directory]=${encodeURIComponent("/also-ignored")}`,
-          ).pipe(HttpClientRequest.setHeader("x-slopcode-workspace", "internal"), HttpClient.execute)
-
-          expect(response.status).toBe(200)
-          expect(yield* response.json).toEqual({
-            proxied: true,
-            path: `/base/api/session/${session.id}/${route}`,
-          })
-        }
-
-        for (const request of forwarded) {
-          const url = requestURL(request)
-          expect(url.searchParams.get("workspace")).toBeNull()
-          expect(url.searchParams.get("directory")).toBeNull()
-          expect(url.searchParams.get("location[directory]")).toBeNull()
-          expect(request.headers["x-target-auth"]).toBe("secret")
-          expect(request.headers["x-slopcode-workspace"]).toBeUndefined()
-        }
-      }),
-    ),
+      for (const request of forwarded) {
+        const url = requestURL(request)
+        expect(url.searchParams.get("workspace")).toBeNull()
+        expect(url.searchParams.get("directory")).toBeNull()
+        expect(url.searchParams.get("location[directory]")).toBeNull()
+        expect(request.headers["x-target-auth"]).toBe("secret")
+        expect(request.headers["x-slopcode-workspace"]).toBeUndefined()
+      }
+    })),
   )
 
   test.serial("proxies shared /api event subscriptions through selected remote workspaces", () =>
-    run(
-      Effect.gen(function* () {
-        const dir = yield* tmpdirScoped({ git: true })
-        const project = yield* Project.use.fromDirectory(dir)
-        const forwarded: ProxiedRequest[] = []
-        const remoteUrl = yield* startRemoteWorkspaceHttpServer((request) => {
-          forwarded.push(request)
-          if (requestURL(request).pathname === "/base/api/event") return Effect.succeed(eventStreamResponse())
-          return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
-        })
-        const workspace = yield* createRemoteWorkspace({
-          dir,
-          projectID: project.project.id,
-          type: "remote-v2-event-target",
-          url: `${remoteUrl}/base`,
-        })
+    run(Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      const forwarded: ProxiedRequest[] = []
+      const remoteUrl = yield* startRemoteWorkspaceHttpServer((request) => {
+        forwarded.push(request)
+        if (requestURL(request).pathname === "/base/api/event") return Effect.succeed(eventStreamResponse())
+        return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+      })
+      const workspace = yield* createRemoteWorkspace({
+        dir,
+        projectID: project.project.id,
+        type: "remote-v2-event-target",
+        url: `${remoteUrl}/base`,
+      })
 
-        yield* serveServerProbe
+      yield* serveServerProbe
 
-        const response = yield* HttpClient.get(`/api/event?workspace=${workspace.id}`)
+      const response = yield* HttpClient.get(`/api/event?workspace=${workspace.id}`)
 
-        expect(response.status).toBe(200)
-        expect(response.headers["content-type"]).toContain("text/event-stream")
-        const event = Array.from(yield* response.stream.pipe(Stream.take(1), Stream.runCollect))[0]
-        expect(new TextDecoder().decode(event)).toContain("server.connected")
-        expect(forwarded.some((request) => requestURL(request).pathname === "/base/api/event")).toBe(true)
-      }),
-    ),
+      expect(response.status).toBe(200)
+      expect(response.headers["content-type"]).toContain("text/event-stream")
+      const event = Array.from(yield* response.stream.pipe(Stream.take(1), Stream.runCollect))[0]
+      expect(new TextDecoder().decode(event)).toContain("server.connected")
+      expect(forwarded.some((request) => requestURL(request).pathname === "/base/api/event")).toBe(true)
+    })),
   )
 
   test.serial("proxies shared /api PTY websocket requests through selected remote workspaces", () =>
-    run(
-      Effect.gen(function* () {
-        const dir = yield* tmpdirScoped({ git: true })
-        const project = yield* Project.use.fromDirectory(dir)
-        const remoteUrl = yield* listenRemotePtyWebSocket()
-        const workspace = yield* createRemoteWorkspace({
-          dir,
-          projectID: project.project.id,
-          type: "remote-v2-pty-target",
-          url: `${remoteUrl}/base`,
-          headers: { [RemoteTargetCapabilityHeader]: "pty-secret" },
-        })
+    run(Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      const remoteUrl = yield* listenRemotePtyWebSocket()
+      const workspace = yield* createRemoteWorkspace({
+        dir,
+        projectID: project.project.id,
+        type: "remote-v2-pty-target",
+        url: `${remoteUrl}/base`,
+        headers: { [RemoteTargetCapabilityHeader]: "pty-secret" },
+      })
 
-        yield* serveServerProbe
+      yield* serveServerProbe
 
-        const socket = yield* Socket.makeWebSocket(
-          `${(yield* serverUrl).replace(/^http/, "ws")}/api/pty/pty_remote/connect?workspace=${workspace.id}&cursor=-1`,
-          {
-            closeCodeIsError: () => false,
-            protocols: "chat",
-          },
-        )
-        const messages = yield* Queue.unbounded<string>()
-        yield* socket.runRaw((message) => Queue.offer(messages, String(message))).pipe(Effect.forkScoped)
-        const write = yield* socket.writer
+      const socket = yield* Socket.makeWebSocket(
+        `${(yield* serverUrl).replace(/^http/, "ws")}/api/pty/pty_remote/connect?workspace=${workspace.id}&cursor=-1`,
+        {
+          closeCodeIsError: () => false,
+          protocols: "chat",
+        },
+      )
+      const messages = yield* Queue.unbounded<string>()
+      yield* socket.runRaw((message) => Queue.offer(messages, String(message))).pipe(Effect.forkScoped)
+      const write = yield* socket.writer
 
-        expect(yield* Queue.take(messages)).toBe("protocol:chat")
-        expect(yield* Queue.take(messages)).toBe("capability:pty-secret")
-        yield* write("hello")
-        expect(yield* Queue.take(messages)).toBe("echo:hello")
-      }),
-    ),
+      expect(yield* Queue.take(messages)).toBe("protocol:chat")
+      expect(yield* Queue.take(messages)).toBe("capability:pty-secret")
+      yield* write("hello")
+      expect(yield* Queue.take(messages)).toBe("echo:hello")
+    })),
   )
 })

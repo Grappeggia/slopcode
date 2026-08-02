@@ -10,9 +10,9 @@ export class RouteLocationContext extends Context.Service<
   }
 >()("@slopcode/HttpApiRouteLocationContext") {}
 
-export class RouteLocationMiddleware extends HttpApiMiddleware.Service<RouteLocationMiddleware>()(
-  "@slopcode/HttpApiRouteLocation",
-) {}
+export class RouteLocationMiddleware extends HttpApiMiddleware.Service<
+  RouteLocationMiddleware
+>()("@slopcode/HttpApiRouteLocation") {}
 
 export const routeLocationLayer = Layer.succeed(
   RouteLocationMiddleware,

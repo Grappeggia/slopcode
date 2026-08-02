@@ -1,6 +1,6 @@
 import { createSimpleContext } from "@slopcode-ai/ui/context"
 import { base64Encode } from "@slopcode-ai/core/util/encode"
-import { useParams } from "@solidjs/router"
+import { useParams, useSearchParams } from "@solidjs/router"
 import { batch, createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useModels } from "@/context/models"
@@ -11,6 +11,8 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
+import { useTabs, type PromptModel } from "./tabs"
+import { useServer } from "./server"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
 
@@ -55,13 +57,16 @@ const clone = (value: State | undefined) => {
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
-  init: () => {
+  init: (props: { initial?: () => PromptModel | undefined }) => {
     const params = useParams()
+    const [search] = useSearchParams<{ draftId?: string }>()
     const sdk = useSDK()
     const sync = useSync()
     const serverSDK = useServerSDK()
+    const server = useServer()
     const providers = useProviders()
     const models = useModels()
+    const tabs = useTabs()
 
     const id = createMemo(() => params.id || undefined)
     const list = createMemo(() => sync.data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
@@ -77,6 +82,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }),
     )
 
+    const initial = props.initial?.()
     const [store, setStore] = createStore<{
       current?: string
       draft?: State
@@ -88,7 +94,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
     }>({
       current: list()[0]?.name,
-      draft: undefined,
+      draft: initial
+        ? {
+            model: { providerID: initial.providerID, modelID: initial.modelID },
+            variant: initial.variant,
+          }
+        : undefined,
       last: undefined,
     })
 
@@ -361,6 +372,33 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         },
       },
     }
+
+    const tab = createMemo(() => {
+      if (search.draftId) {
+        return tabs.store.find((item) => item.type === "draft" && item.draftID === search.draftId)
+      }
+      const session = id()
+      if (!session) return
+      const parent = sync.session.get(session)?.parentID
+      return tabs.store.find(
+        (item) =>
+          item.type === "session" &&
+          item.server === server.key &&
+          item.dirBase64 === base64Encode(sdk.directory) &&
+          (item.sessionId === session || item.sessionId === parent),
+      )
+    })
+
+    createEffect(() => {
+      const currentTab = tab()
+      const currentModel = model.current()
+      if (!currentTab || !currentModel) return
+      tabs.rememberModel(currentTab, {
+        providerID: currentModel.provider.id,
+        modelID: currentModel.id,
+        variant: model.variant.current(),
+      })
+    })
 
     const result = {
       slug: createMemo(() => base64Encode(sdk.directory)),

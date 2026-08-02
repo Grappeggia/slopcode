@@ -95,21 +95,8 @@ function normalizeMessages(
         return msg
 
       case "system":
-        const system: unknown = msg.content
-        if (typeof system === "string") {
-          msg.content = sanitizeSurrogates(system)
-          return msg
-        }
-        if (!Array.isArray(system)) return msg
-        return {
-          ...msg,
-          content: system.map((content: unknown) => {
-            if (!content || typeof content !== "object" || !("type" in content) || content.type !== "text")
-              return content
-            if (!("text" in content) || typeof content.text !== "string") return content
-            return { ...content, text: sanitizeSurrogates(content.text) }
-          }),
-        } as unknown as ModelMessage
+        msg.content = sanitizeSurrogates(msg.content)
+        return msg
 
       case "user":
         if (typeof msg.content === "string") {
@@ -476,7 +463,9 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
   if (
     options.store !== true &&
     key &&
-    ["@ai-sdk/openai", "@ai-sdk/azure", "@ai-sdk/amazon-bedrock/mantle"].includes(model.api.npm)
+    ["@ai-sdk/openai", "@ai-sdk/azure", "@ai-sdk/amazon-bedrock/mantle", "@ai-sdk/github-copilot"].includes(
+      model.api.npm,
+    )
   ) {
     msgs = mapProviderOptions(msgs, (options) => {
       if (!options?.[key] || !("itemId" in options[key])) return options

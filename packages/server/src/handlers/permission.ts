@@ -1,7 +1,6 @@
 import { Location } from "@slopcode-ai/core/location"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
-import { ProjectV2 } from "@slopcode-ai/core/project"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -44,70 +43,18 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         "permission.saved.list",
         Effect.fn(function* (ctx) {
           const location = yield* Location.Service
-          const saved = yield* PermissionSaved.Service
-          if (ctx.query.scope === "global") return { data: yield* saved.list({ scope: "global" }) }
-          if (ctx.query.scope === undefined && ctx.query.projectID === undefined)
-            return { data: yield* saved.listCurrent(location) }
-          const projectID = ctx.query.projectID ?? location.project.id
-          if (projectID !== location.project.id && projectID !== ProjectV2.ID.global) return { data: [] }
-          return { data: yield* saved.list({ scope: "project", projectID }) }
+          return {
+            data: yield* (yield* PermissionSaved.Service).list({
+              projectID: ctx.query.projectID ?? location.project.id,
+            }),
+          }
         }),
       )
       .handle(
         "permission.saved.remove",
         Effect.fn(function* (ctx) {
-          const location = yield* Location.Service
-          const saved = yield* PermissionSaved.Service
-          if (ctx.query.scope === "global") yield* saved.remove({ id: ctx.params.id, scope: "global" })
-          else if (ctx.query.scope === undefined && ctx.query.projectID === undefined)
-            yield* saved.removeCurrent({ id: ctx.params.id, location })
-          else {
-            const projectID = ctx.query.projectID ?? location.project.id
-            if (projectID === location.project.id || projectID === ProjectV2.ID.global)
-              yield* saved.remove({ id: ctx.params.id, scope: "project", projectID })
-          }
+          yield* (yield* PermissionSaved.Service).remove(ctx.params.id)
           return HttpApiSchema.NoContent.make()
-        }),
-      )
-      .handle(
-        "permission.saved.clear",
-        Effect.fn(function* (ctx) {
-          const location = yield* Location.Service
-          const saved = yield* PermissionSaved.Service
-          if (ctx.payload.scope === "global") return { data: yield* saved.clear({ scope: "global" }) }
-          const projectID = ctx.payload.projectID ?? location.project.id
-          if (projectID !== location.project.id && projectID !== ProjectV2.ID.global) return { data: 0 }
-          return { data: yield* saved.clear({ scope: "project", projectID }) }
-        }),
-      )
-      .handle(
-        "session.permission.saved.list",
-        Effect.fn(function* (ctx) {
-          return {
-            data: yield* (yield* PermissionSaved.Service).list({ scope: "session", sessionID: ctx.params.sessionID }),
-          }
-        }),
-      )
-      .handle(
-        "session.permission.saved.remove",
-        Effect.fn(function* (ctx) {
-          yield* (yield* PermissionSaved.Service).remove({
-            id: ctx.params.id,
-            scope: "session",
-            sessionID: ctx.params.sessionID,
-          })
-          return HttpApiSchema.NoContent.make()
-        }),
-      )
-      .handle(
-        "session.permission.saved.clear",
-        Effect.fn(function* (ctx) {
-          return {
-            data: yield* (yield* PermissionSaved.Service).clear({
-              scope: "session",
-              sessionID: ctx.params.sessionID,
-            }),
-          }
         }),
       )
   }),

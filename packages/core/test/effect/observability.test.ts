@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Effect, Layer, Logger } from "effect"
-import * as Stream from "effect/Stream"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { fileLogger } from "../../src/observability/logging"
 import { resource } from "../../src/observability/otlp"
-import { preserveStream } from "../../src/observability"
 
 const otelResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES
 const slopcodeClient = process.env.SLOPCODE_CLIENT
@@ -108,17 +106,4 @@ test("file logger flattens nested objects", async () => {
   expect(line).toContain('tags="[\\\"api\\\",\\\"test\\\"]"')
   expect(line).toContain("session.id=session-1")
   expect(line).not.toContain("request={")
-})
-
-test("preserves configured logging when a stream runs after its creating effect", async () => {
-  const messages: unknown[] = []
-  const logger = Logger.make((options) => messages.push(options.message))
-  const stream = await preserveStream(Stream.fromEffect(Effect.logInfo("deferred stream"))).pipe(
-    Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
-    Effect.runPromise,
-  )
-
-  await Stream.runDrain(stream).pipe(Effect.runPromise)
-
-  expect(messages.flat()).toContain("deferred stream")
 })

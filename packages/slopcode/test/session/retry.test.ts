@@ -304,7 +304,7 @@ describe("session.retry.retryable", () => {
 
     expect(SessionRetry.retryable(error, "slopcode-go")).toEqual({
       message:
-        "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance - https://slopcode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
+        "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance - https://slopcode.dev/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
       action: {
         reason: "account_rate_limit",
         provider: "slopcode-go",
@@ -312,7 +312,7 @@ describe("session.retry.retryable", () => {
         message:
           "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance",
         label: "open settings",
-        link: "https://slopcode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
+        link: "https://slopcode.dev/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
       },
     })
   })

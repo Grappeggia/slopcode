@@ -24,8 +24,6 @@ import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Account } from "@/account/account"
-import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
@@ -33,99 +31,6 @@ import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
-
-const GPT5_6 = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-const OFFICIAL = {
-  openai: "https://api.openai.com/v1",
-  slopcode: "https://www.slopcode.dev/zen/v1",
-  "slopcode-go": "https://www.slopcode.dev/zen/go/v1",
-} as const
-
-const eligibleRoute = (model: Provider.Model, auth?: Auth.Info, provider?: Provider.Info) => {
-  const target = OFFICIAL[model.providerID as keyof typeof OFFICIAL]
-  if (!target || auth?.type === "oauth" || !GPT5_6.has(model.api.id.toLowerCase())) return false
-  if (model.api.npm !== "@ai-sdk/openai") return false
-  try {
-    const url = new URL(
-      typeof provider?.options.baseURL === "string" && provider.options.baseURL
-        ? provider.options.baseURL
-        : model.api.url,
-    )
-    if (url.username || url.password || url.search || url.hash || url.port) return false
-    return `${url.origin}${url.pathname.replace(/\/+$/, "")}` === target
-  } catch {
-    return false
-  }
-}
-
-const cacheHint = (messages: readonly ModelMessage[]) =>
-  messages.some(
-    (message) =>
-      (message.role === "system" || message.role === "user") &&
-      Array.isArray(message.content) &&
-      message.content.some(
-        (part) =>
-          !!part &&
-          typeof part === "object" &&
-          part.type === "text" &&
-          "cache" in part &&
-          !!part.cache &&
-          typeof part.cache === "object" &&
-          "type" in part.cache &&
-          part.cache.type === "ephemeral" &&
-          "ttlSeconds" in part.cache &&
-          part.cache.ttlSeconds === 1800,
-      ),
-  )
-
-export function sanitizeMessages(input: {
-  model: Provider.Model
-  auth?: Auth.Info
-  provider?: Provider.Info
-  messages: ModelMessage[]
-}) {
-  const openAI56 =
-    Object.hasOwn(OFFICIAL, input.model.providerID) &&
-    input.model.api.npm === "@ai-sdk/openai" &&
-    GPT5_6.has(input.model.api.id.toLowerCase())
-  if (!openAI56 || eligibleRoute(input.model, input.auth, input.provider)) return input.messages
-  return input.messages.map((message): ModelMessage => {
-    if (!Array.isArray(message.content)) return message
-    if (message.role === "system")
-      return {
-        ...message,
-        content: message.content
-          .filter((part) => part && typeof part === "object" && part.type === "text")
-          .map((part) => part.text)
-          .join("\n"),
-      } as ModelMessage
-    return {
-      ...message,
-      content: message.content.map((part) => {
-        if (!part || typeof part !== "object" || !("cache" in part)) return part
-        const { cache: _, ...clean } = part
-        return clean
-      }),
-    } as ModelMessage
-  })
-}
-
-export function sanitizeOptions(input: {
-  model: Provider.Model
-  auth?: Auth.Info
-  provider?: Provider.Info
-  options: Record<string, any>
-  safetyIdentifier?: string
-  cacheHint: boolean
-}) {
-  const eligible = eligibleRoute(input.model, input.auth, input.provider)
-  const options = Object.fromEntries(
-    Object.entries(input.options).filter(([key]) => key !== "safetyIdentifier" && key !== "promptCacheOptions"),
-  )
-  if (eligible && input.cacheHint) options.promptCacheOptions = { mode: "explicit", ttl: "30m" }
-  if (eligible && input.safetyIdentifier) options.safetyIdentifier = input.safetyIdentifier
-  return options
-}
 
 export type StreamInput = {
   user: SessionV1.User
@@ -140,8 +45,6 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
-  runtime?: "side"
-  maxInputTokens?: number
 }
 
 export type StreamRequest = StreamInput & {
@@ -156,24 +59,6 @@ export class Service extends Context.Service<Service, Interface>()("@slopcode/LL
 
 export const use = serviceUse(Service)
 
-export function contextTokens(input: { system: string[]; messages: ModelMessage[]; tools: Record<string, Tool> }) {
-  const system = input.messages.some((message) => message.role === "system") ? [] : input.system
-  const tools = Object.entries(input.tools).map(([name, item]) => ({
-    name,
-    description: item.description,
-    inputSchema:
-      item.inputSchema && typeof item.inputSchema === "object" && "jsonSchema" in item.inputSchema
-        ? item.inputSchema.jsonSchema
-        : item.inputSchema,
-  }))
-  return (
-    Buffer.byteLength(JSON.stringify({ system, messages: input.messages, tools })) +
-    256 +
-    input.messages.length * 16 +
-    tools.length * 32
-  )
-}
-
 const live: Layer.Layer<
   Service,
   never,
@@ -185,8 +70,6 @@ const live: Layer.Layer<
   | EventV2Bridge.Service
   | LLMClientService
   | RuntimeFlags.Service
-  | Account.Service
-  | SafetyIdentity.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -198,8 +81,6 @@ const live: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
-    const account = yield* Account.Service
-    const safety = yield* SafetyIdentity.Service
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       yield* Effect.logInfo("stream", {
@@ -210,12 +91,6 @@ const live: Layer.Layer<
         agent: input.agent.name,
         mode: input.agent.mode,
       })
-
-      if (input.runtime === "side") {
-        const tools = Object.keys(input.tools)
-        if (tools.length !== 1 || tools[0] !== "read" || !input.tools.read?.execute || input.toolChoice !== "auto")
-          return yield* Effect.fail(new Error("Side questions require exactly one executable private read tool"))
-      }
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
@@ -228,12 +103,6 @@ const live: Layer.Layer<
       )
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
-      if (input.runtime === "side" && isWorkflow)
-        return yield* Effect.fail(
-          new Error(
-            "Side questions are unavailable for GitLab workflow models because private local reads cannot be isolated",
-          ),
-        )
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
         provider: item,
@@ -242,42 +111,6 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
-      const eligible = eligibleRoute(input.model, info, item)
-      const messages = sanitizeMessages({ model: input.model, auth: info, provider: item, messages: prepared.messages })
-      const active = eligible
-        ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
-        : undefined
-      const hint = cacheHint(messages)
-      const options = sanitizeOptions({
-        model: input.model,
-        auth: info,
-        provider: item,
-        options: prepared.params.options,
-        cacheHint: hint,
-        safetyIdentifier: eligible
-          ? safety.identifier({
-              account: active?.id,
-              openai: info?.type === "oauth" ? info.accountId : undefined,
-            })
-          : undefined,
-      })
-      const headers = Object.fromEntries(
-        Object.entries(prepared.headers).filter(([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints"),
-      )
-      if (input.runtime === "side") {
-        const hard =
-          input.model.limit.context === 0
-            ? Infinity
-            : Math.min(
-                input.model.limit.input ?? Infinity,
-                Math.max(0, input.model.limit.context - (prepared.params.maxOutputTokens ?? 0)),
-              )
-        if (
-          contextTokens({ system: prepared.system, messages, tools: prepared.tools }) >
-          Math.min(input.maxInputTokens ?? Infinity, hard)
-        )
-          return yield* Effect.fail(new Error("Side question exceeds the selected model context limit"))
-      }
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via slopcode's tool system
@@ -388,25 +221,23 @@ const live: Layer.Layer<
           })
         : undefined
 
-      // Explicit caching requires native lowering so CacheHint placement reaches
-      // the exact Responses content part without AI SDK prompt conversion.
-      const explicitCache = eligible && hint
-      if (flags.experimentalNativeLlm || explicitCache) {
+      // Runtime seam: native is an opt-in adapter over @slopcode-ai/llm. It
+      // either returns a ready LLMEvent stream or a concrete fallback reason.
+      if (flags.experimentalNativeLlm) {
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
           auth: info,
           llmClient,
-          messages,
+          messages: prepared.messages,
           tools: prepared.tools,
           toolChoice: input.toolChoice,
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
           maxOutputTokens: prepared.params.maxOutputTokens,
-          providerOptions: options,
-          headers,
-          retries: input.retries,
+          providerOptions: prepared.params.options,
+          headers: prepared.headers,
           abort: input.abort,
         })
         if (native.type === "supported") {
@@ -420,10 +251,6 @@ const live: Layer.Layer<
             stream: native.stream,
           }
         }
-        if (explicitCache)
-          return yield* Effect.fail(
-            new Error(`Explicit GPT-5.6 caching requires native OpenAI Responses: ${native.reason}`),
-          )
         yield* Effect.logInfo("llm runtime selected", {
           "llm.runtime": "ai-sdk",
           "llm.provider": input.model.providerID,
@@ -486,15 +313,15 @@ const live: Layer.Layer<
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, options),
+          providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
           activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
           tools: prepared.tools,
           toolChoice: input.toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
-          headers,
+          headers: prepared.headers,
           maxRetries: input.retries ?? 0,
-          messages,
+          messages: prepared.messages,
           model: wrapLanguageModel({
             model: language,
             middleware: [
@@ -569,8 +396,6 @@ export const defaultLayer = Layer.suspend(() =>
       LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
     ),
     Layer.provide(RuntimeFlags.defaultLayer),
-    Layer.provide(Account.defaultLayer),
-    Layer.provide(SafetyIdentity.defaultLayer),
   ),
 )
 
@@ -585,8 +410,6 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   llmClient,
   RuntimeFlags.node,
-  Account.node,
-  SafetyIdentity.node,
 ])
 
 export * as LLM from "./llm"

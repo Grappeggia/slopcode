@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
@@ -15,7 +15,6 @@ import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Prompt } from "@slopcode-ai/core/session/prompt"
-import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionInput } from "@slopcode-ai/core/session/input"
@@ -23,10 +22,8 @@ import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
-import { SessionTask } from "@slopcode-ai/core/session/task"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
-import { locationServices } from "./lib/location-services"
 import { tmpdir } from "./fixture/tmpdir"
 
 const database = Database.layerFromPath(":memory:")
@@ -48,7 +45,6 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(projects),
   Layer.provide(SessionExecution.noopLayer),
-  Layer.provide(locationServices),
 )
 const it = testEffect(
   Layer.mergeAll(database, events, projects, projector, store, runtime, SessionExecution.noopLayer, sessions),
@@ -188,7 +184,7 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("persists creation through the V2 created event", () =>
+  it.effect("persists creation through the existing legacy created event", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
@@ -196,7 +192,7 @@ describe("SessionV2.create", () => {
 
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-      ).toMatchObject([{ type: "session.next.created.1" }])
+      ).toMatchObject([{ type: EventV2.versionedType(SessionV1.Event.Created.type, 1) }])
     }),
   )
 
@@ -238,7 +234,7 @@ describe("SessionV2.create", () => {
         .where(eq(EventTable.aggregate_id, created.id))
         .get()
         .pipe(Effect.orDie)
-      expect(event?.data).toHaveProperty("runtime", "v2")
+      expect(event?.data).not.toHaveProperty("runtime")
       expect(event?.data).not.toHaveProperty("owner")
     }),
   )
@@ -480,7 +476,7 @@ describe("SessionV2.create", () => {
             .all()
             .pipe(Effect.orDie)).map((event) => [event.seq, event.type]),
         ).toEqual([
-          [0, EventV2.versionedType(SessionEvent.Created.type, 1)],
+          [0, EventV2.versionedType(SessionV1.Event.Created.type, 1)],
           [1, EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1)],
           [2, EventV2.versionedType(SessionEvent.PromptLifecycle.Promoted.type, 1)],
         ])
@@ -493,9 +489,27 @@ describe("SessionV2.create", () => {
       const session = yield* SessionV2.Service
       const event = yield* EventV2.Service
       const defect = new Error("unrelated projector defect")
-      yield* event.project(SessionEvent.Created, () => Effect.die(defect))
+      yield* event.project(SessionV1.Event.Created, () => Effect.die(defect))
 
       expect(yield* session.create({ id, location }).pipe(Effect.catchDefect(Effect.succeed))).toBe(defect)
+    }),
+  )
+
+  it.effect("reports unfinished Session operations as unavailable", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+      const unavailable = (
+        effect: Effect.Effect<void, SessionV2.NotFoundError | SessionV2.OperationUnavailableError>,
+      ) =>
+        effect.pipe(
+          Effect.flip,
+          Effect.map((error) => (error instanceof SessionV2.OperationUnavailableError ? error.operation : "not-found")),
+        )
+
+      expect(yield* unavailable(session.shell({ sessionID: created.id, command: "pwd" }))).toBe("shell")
+      expect(yield* unavailable(session.skill({ sessionID: created.id, skill: "review" }))).toBe("skill")
+      expect(yield* unavailable(session.switchAgent({ sessionID: created.id, agent: "build" }))).toBe("switchAgent")
     }),
   )
 
@@ -535,240 +549,6 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("replays old function and new custom calls in exact durable order", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const created = yield* session.create({ location })
-      const assistantMessageID = SessionMessage.ID.make("msg_mixed_tool_replay")
-      const base = {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        provider: { executed: false },
-      }
-      yield* events.publish(SessionEvent.Step.Started, {
-        sessionID: created.id,
-        timestamp: base.timestamp,
-        assistantMessageID,
-        agent: "build",
-        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6-sol"), providerID: ProviderV2.ID.make("openai") }),
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Started, {
-        sessionID: created.id,
-        timestamp: base.timestamp,
-        assistantMessageID,
-        callID: "call-function",
-        name: "read",
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Ended, {
-        sessionID: created.id,
-        timestamp: base.timestamp,
-        assistantMessageID,
-        callID: "call-function",
-        text: '{"path":"README.md"}',
-      })
-      yield* events.publish(SessionEvent.Tool.CalledV1, {
-        ...base,
-        callID: "call-function",
-        tool: "read",
-        input: { path: "README.md" },
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Started, {
-        sessionID: created.id,
-        timestamp: base.timestamp,
-        assistantMessageID,
-        callID: "call-custom",
-        name: "exec",
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Ended, {
-        sessionID: created.id,
-        timestamp: base.timestamp,
-        assistantMessageID,
-        callID: "call-custom",
-        text: "return 42",
-      })
-      yield* events.publish(SessionEvent.Tool.CalledV2, {
-        ...base,
-        callID: "call-custom",
-        tool: "exec",
-        input: "return 42",
-        toolType: "custom",
-      })
-      yield* events.publish(SessionEvent.Tool.Success, {
-        ...base,
-        callID: "call-custom",
-        structured: { value: 42 },
-        content: [{ type: "text", text: "42" }],
-      })
-
-      const replayed = Array.from(
-        yield* session.events({ sessionID: created.id }).pipe(Stream.take(8), Stream.runCollect),
-      )
-      expect(
-        replayed.map((item) => [
-          item.cursor,
-          item.event.type,
-          "callID" in item.event.data ? item.event.data.callID : undefined,
-        ]),
-      ).toEqual([
-        [1, SessionEvent.Step.Started.type, undefined],
-        [2, SessionEvent.Tool.Input.Started.type, "call-function"],
-        [3, SessionEvent.Tool.Input.Ended.type, "call-function"],
-        [4, SessionEvent.Tool.CalledV1.type, "call-function"],
-        [5, SessionEvent.Tool.Input.Started.type, "call-custom"],
-        [6, SessionEvent.Tool.Input.Ended.type, "call-custom"],
-        [7, SessionEvent.Tool.CalledV2.type, "call-custom"],
-        [8, SessionEvent.Tool.Success.type, "call-custom"],
-      ])
-      expect((yield* session.message({ sessionID: created.id, messageID: assistantMessageID }))?.content).toMatchObject(
-        [
-          { type: "tool", id: "call-function", state: { input: { path: "README.md" } } },
-          { type: "tool", id: "call-custom", toolType: "custom", state: { input: "return 42", status: "completed" } },
-        ],
-      )
-    }),
-  )
-
-  it.effect("rejects switching custom-call history to an incompatible destination before mutation", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const created = yield* session.create({
-        location,
-        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6-sol"), providerID: ProviderV2.ID.make("openai") }),
-      })
-      const assistantMessageID = SessionMessage.ID.make("msg_custom_switch_guard")
-      yield* events.publish(SessionEvent.Step.Started, {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        agent: "build",
-        model: created.model!,
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Started, {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        callID: "call-exec",
-        name: "exec",
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Ended, {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        callID: "call-exec",
-        text: "return 42",
-      })
-      yield* events.publish(SessionEvent.Tool.CalledV2, {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        callID: "call-exec",
-        tool: "exec",
-        input: "return 42",
-        toolType: "custom",
-        provider: { executed: false },
-      })
-      yield* events.publish(SessionEvent.Tool.Success, {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        callID: "call-exec",
-        structured: { value: 42 },
-        content: [{ type: "text", text: "42" }],
-        provider: { executed: false },
-      })
-      const incompatible = [
-        ["anthropic", "anthropic-messages"],
-        ["gemini", "gemini"],
-        ["bedrock", "bedrock-converse"],
-        ["openai-chat", "openai-chat"],
-      ] as const
-      for (const [providerID, protocol] of incompatible) {
-        const destination = ModelV2.Ref.make({
-          id: ModelV2.ID.make("destination"),
-          providerID: ProviderV2.ID.make(providerID),
-        })
-        expect(
-          yield* session.switchModel({ sessionID: created.id, model: destination }).pipe(Effect.flip),
-        ).toMatchObject({
-          _tag: "Session.ModelHistoryIncompatibleError",
-          protocol,
-        })
-        expect((yield* session.get(created.id)).model).toEqual(created.model)
-      }
-
-      const compatible = ModelV2.Ref.make({
-        id: ModelV2.ID.make("responses"),
-        providerID: ProviderV2.ID.make("openai"),
-      })
-      yield* session.switchModel({ sessionID: created.id, model: compatible })
-      expect((yield* session.get(created.id)).model).toMatchObject(compatible)
-    }),
-  )
-
-  it.effect("allows function-only destinations after custom history is compacted away", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const created = yield* session.create({
-        location,
-        model: ModelV2.Ref.make({ id: ModelV2.ID.make("responses"), providerID: ProviderV2.ID.make("openai") }),
-      })
-      const assistantMessageID = SessionMessage.ID.make("msg_compacted_custom_switch")
-      const base = {
-        sessionID: created.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID,
-        callID: "call-compacted-custom",
-      }
-      yield* events.publish(SessionEvent.Step.Started, {
-        sessionID: created.id,
-        timestamp: base.timestamp,
-        assistantMessageID,
-        agent: "build",
-        model: created.model!,
-      })
-      yield* events.publish(SessionEvent.Tool.CalledV2, {
-        ...base,
-        tool: "exec",
-        input: "return 42",
-        toolType: "custom",
-        provider: { executed: false },
-      })
-      yield* events.publish(SessionEvent.Tool.Success, {
-        ...base,
-        structured: { value: 42 },
-        content: [{ type: "text", text: "42" }],
-        provider: { executed: false },
-      })
-      const compactionID = SessionMessage.ID.make("msg_compacted_custom_summary")
-      yield* events.publish(SessionEvent.Compaction.Started, {
-        sessionID: created.id,
-        messageID: compactionID,
-        timestamp: yield* DateTime.now,
-        reason: "manual",
-      })
-      yield* events.publish(SessionEvent.Compaction.Ended, {
-        sessionID: created.id,
-        messageID: compactionID,
-        timestamp: yield* DateTime.now,
-        reason: "manual",
-        text: "Summary without custom calls",
-        recent: "",
-      })
-      const destination = ModelV2.Ref.make({
-        id: ModelV2.ID.make("destination"),
-        providerID: ProviderV2.ID.make("anthropic"),
-      })
-
-      yield* session.switchModel({ sessionID: created.id, model: destination })
-
-      expect((yield* session.get(created.id)).model).toMatchObject(destination)
-    }),
-  )
-
   it.effect("rejects a model switch for a missing Session", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -785,271 +565,6 @@ describe("SessionV2.create", () => {
             Effect.map((error) => error._tag),
           ),
       ).toBe("Session.NotFoundError")
-    }),
-  )
-
-  it.effect("public interruption durably cascades to the child and awaits cleanup", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const db = (yield* Database.Service).db
-      const parent = yield* session.create({ id, location, runtime: "v2" })
-      const messageID = SessionMessage.ID.make("msg_public_task_interrupt")
-      const childID = SessionTask.childID(parent.id, messageID, "call-public-task-interrupt")
-      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
-      yield* db
-        .insert(SessionTable)
-        .values({
-          id: childID,
-          project_id: parent.projectID,
-          parent_id: parent.id,
-          slug: childID,
-          directory: location.directory,
-          title: "Wait (@general subagent)",
-          version: "test",
-          runtime: "v2",
-          agent: "general",
-          model,
-          metadata: {
-            task: {
-              version: 1,
-              parentID: parent.id,
-              agent: "general",
-              origin: { messageID, callID: "call-public-task-interrupt" },
-              ceiling: [],
-            },
-          },
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* events.publish(SessionEvent.Step.Started, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        agent: "build",
-        model,
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Started, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        callID: "call-public-task-interrupt",
-        name: "task",
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Ended, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        callID: "call-public-task-interrupt",
-        text: '{"description":"Wait","prompt":"wait","subagent_type":"general"}',
-      })
-      yield* events.publish(SessionEvent.Tool.CalledV1, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        callID: "call-public-task-interrupt",
-        tool: "task",
-        input: { description: "Wait", prompt: "wait", subagent_type: "general" },
-        provider: { executed: false },
-      })
-      yield* events.publish(
-        SessionEvent.Task.Requested,
-        {
-          sessionID: parent.id,
-          timestamp: yield* DateTime.now,
-          assistantMessageID: messageID,
-          callID: "call-public-task-interrupt",
-          childSessionID: childID,
-          promptMessageID: SessionTask.promptID(parent.id, messageID, "call-public-task-interrupt"),
-          description: "Wait",
-          prompt: "wait",
-          agent: "general",
-          model,
-          multiAgent: "v2",
-          callerAgent: "build",
-          permissions: [],
-          plan: { multiAgent: "v2" },
-          projectID: parent.projectID,
-          location,
-          title: "Wait (@general subagent)",
-          ceiling: [],
-        },
-        { id: SessionTask.requestEventID(parent.id, messageID, "call-public-task-interrupt") },
-      )
-      const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      yield* events.listen((event) =>
-        Schema.is(SessionEvent.Task.Interrupt)(event)
-          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)))
-          : Effect.void,
-      )
-
-      const finished = yield* Deferred.make<void>()
-      const fiber = yield* session
-        .interrupt(parent.id)
-        .pipe(Effect.ensuring(Deferred.succeed(finished, undefined)), Effect.forkChild)
-      yield* Deferred.await(started)
-      expect(yield* Deferred.isDone(finished)).toBeFalse()
-      yield* Deferred.succeed(release, undefined)
-      yield* Fiber.join(fiber)
-
-      expect(yield* SessionTask.interrupted(db, parent.id, messageID, "call-public-task-interrupt")).toBeTrue()
-      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
-      expect(yield* session.context(parent.id)).toMatchObject([
-        {
-          type: "assistant",
-          content: [
-            {
-              type: "tool",
-              id: "call-public-task-interrupt",
-              state: { status: "error", error: { message: "Tool execution interrupted" } },
-            },
-          ],
-        },
-      ])
-    }),
-  )
-
-  it.effect("public interruption terminally settles a prepared task before its request", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const db = (yield* Database.Service).db
-      const parent = yield* session.create({ id, location, runtime: "v2" })
-      const messageID = SessionMessage.ID.make("msg_public_prepared_interrupt")
-      const callID = "call-public-prepared-interrupt"
-      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
-      const input = { description: "Prepared", prompt: "wait", subagent_type: "general" }
-      yield* events.publish(SessionEvent.Step.Started, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        agent: "build",
-        model,
-      })
-      yield* events.publish(
-        SessionEvent.Task.Prepared,
-        {
-          sessionID: parent.id,
-          timestamp: yield* DateTime.now,
-          assistantMessageID: messageID,
-          callID,
-          input,
-          callerAgent: "build",
-          permissions: [],
-          plan: { multiAgent: "v2" },
-          agent: "general",
-          available: ["general"],
-          model,
-          projectID: parent.projectID,
-          location,
-          title: "Prepared (@general subagent)",
-          ceiling: [],
-        },
-        { id: SessionTask.preparedEventID(parent.id, messageID, callID) },
-      )
-      yield* events.publish(SessionEvent.Tool.Input.Started, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        callID,
-        name: "task",
-      })
-      yield* events.publish(SessionEvent.Tool.Input.Ended, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-        assistantMessageID: messageID,
-        callID,
-        text: JSON.stringify(input),
-      })
-
-      yield* Effect.all([session.interrupt(parent.id), session.interrupt(parent.id)], { concurrency: "unbounded" })
-
-      expect(yield* SessionTask.request(db, parent.id, messageID, callID)).toBeUndefined()
-      expect(yield* SessionTask.interrupted(db, parent.id, messageID, callID)).toBeFalse()
-      expect(yield* session.context(parent.id)).toMatchObject([
-        {
-          type: "assistant",
-          content: [
-            {
-              type: "tool",
-              id: callID,
-              state: { status: "error", error: { message: "Tool execution interrupted" } },
-            },
-          ],
-        },
-      ])
-      expect(
-        yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.id, SessionTask.interruptedToolEventID(parent.id, messageID, callID)))
-          .all()
-          .pipe(Effect.orDie),
-      ).toHaveLength(1)
-    }),
-  )
-
-  it.effect("a durable parent interrupt immediately orphans its child before task settlement", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const db = (yield* Database.Service).db
-      const parent = yield* session.create({ id, location, runtime: "v2" })
-      const messageID = SessionMessage.ID.make("msg_parent_interrupt_window")
-      const callID = "call-parent-interrupt-window"
-      const childID = SessionTask.childID(parent.id, messageID, callID)
-      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
-      yield* db
-        .insert(SessionTable)
-        .values({
-          id: childID,
-          project_id: parent.projectID,
-          parent_id: parent.id,
-          slug: childID,
-          directory: location.directory,
-          title: "Window (@general subagent)",
-          version: "test",
-          runtime: "v2",
-          agent: "general",
-          model,
-          metadata: {
-            task: { version: 1, parentID: parent.id, agent: "general", origin: { messageID, callID }, ceiling: [] },
-          },
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* events.publish(
-        SessionEvent.Task.Requested,
-        {
-          sessionID: parent.id,
-          timestamp: yield* DateTime.now,
-          assistantMessageID: messageID,
-          callID,
-          childSessionID: childID,
-          promptMessageID: SessionTask.promptID(parent.id, messageID, callID),
-          description: "Window",
-          prompt: "window",
-          agent: "general",
-          model,
-          multiAgent: "v2",
-          callerAgent: "build",
-          permissions: [],
-          plan: { multiAgent: "v2" },
-          projectID: parent.projectID,
-          location,
-          title: "Window (@general subagent)",
-          ceiling: [],
-        },
-        { id: SessionTask.requestEventID(parent.id, messageID, callID) },
-      )
-      yield* events.publish(SessionEvent.InterruptRequested, {
-        sessionID: parent.id,
-        timestamp: yield* DateTime.now,
-      })
-
-      expect(yield* SessionTask.interrupted(db, parent.id, messageID, callID)).toBeFalse()
-      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
     }),
   )
 })

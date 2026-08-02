@@ -1,6 +1,6 @@
 // Auto-generated fallback catalog for local development
 // Generated from models.dev API snapshot
-// Contains the OpenAI GPT-5.6 family plus 61 slopcode models and 15 slopcode-go models
+// Contains the OpenAI GPT-5.6 family plus 61 slopcode models and 14 slopcode-go models
 
 function gpt(id: string, name: string, family: string, description: string, input: number, output: number) {
   return {
@@ -71,20 +71,6 @@ function gpt(id: string, name: string, family: string, description: string, inpu
   }
 }
 
-function managedGPT(free: boolean) {
-  return {
-    ...gpt(
-      "gpt-5.6",
-      "GPT-5.6",
-      "gpt",
-      "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
-      free ? 0 : 5,
-      free ? 0 : 30,
-    ),
-    provider: { npm: "@ai-sdk/openai" },
-  }
-}
-
 export const fallback: Record<string, Record<string, unknown>> = {
   openai: {
     id: "openai",
@@ -130,11 +116,23 @@ export const fallback: Record<string, Record<string, unknown>> = {
     id: "slopcode",
     env: ["SLOPCODE_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
-    api: "https://www.slopcode.dev/zen/v1",
+    api: "https://slopcode.dev/zen/v1",
     name: "SlopCode Zen",
-    doc: "https://slopcode.ai/docs/zen",
+    doc: "https://slopcode.dev/docs/zen",
     models: {
-      "gpt-5.6": managedGPT(true),
+      "gpt-5.6-sol": {
+        ...gpt(
+          "gpt-5.6-sol",
+          "GPT-5.6 Sol",
+          "gpt",
+          "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+          5,
+          30,
+        ),
+        provider: {
+          npm: "@ai-sdk/openai",
+        },
+      },
       "minimax-m2.7": {
         id: "minimax-m2.7",
         name: "MiniMax M2.7",
@@ -2038,11 +2036,10 @@ export const fallback: Record<string, Record<string, unknown>> = {
     id: "slopcode-go",
     env: ["SLOPCODE_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
-    api: "https://www.slopcode.dev/zen/go/v1",
+    api: "https://slopcode.dev/zen/go/v1",
     name: "SlopCode Go",
-    doc: "https://slopcode.ai/docs/zen",
+    doc: "https://slopcode.dev/docs/zen",
     models: {
-      "gpt-5.6": managedGPT(false),
       "minimax-m2.7": {
         id: "minimax-m2.7",
         name: "MiniMax M2.7",

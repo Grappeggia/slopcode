@@ -1,13 +1,13 @@
 {
   "name": "@slopcode-ai/desktop",
   "private": true,
-  "version": "0.2.209",
+  "version": "0.2.192",
   "type": "module",
   "license": "MIT",
-  "homepage": "https://slopcode.ai",
+  "homepage": "https://slopcode.dev",
   "author": {
     "name": "SlopCode",
-    "email": "hello@slopcode.ai"
+    "email": "hello@slopcode.dev"
   },
   "scripts": {
     "typecheck": "tsgo -b",

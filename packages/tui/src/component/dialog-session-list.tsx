@@ -244,39 +244,39 @@ export function DialogSessionList() {
           onTrigger: async (option) => {
             if (toDelete() === option.value) {
               const session = sessions().find((item) => item.id === option.value)
-              const status = () => (session?.workspaceID ? project.workspace.status(session.workspaceID) : undefined)
-              const unavailable = () => {
-                const value = status()
-                return value === "disconnected" || value === "error"
-              }
-              const fail = (error: unknown) => {
-                if (session?.workspaceID && unavailable()) {
-                  recover(session)
-                  setToDelete(undefined)
-                  return
-                }
-                toast.show({
-                  variant: "error",
-                  title: "Failed to delete session",
-                  message: errorMessage(error),
-                })
-                setToDelete(undefined)
-              }
+              const status = session?.workspaceID ? project.workspace.status(session.workspaceID) : undefined
 
               try {
                 const result = await sdk.client.session.delete({
                   sessionID: option.value,
                 })
                 if (result.error) {
-                  fail(result.error)
+                  if (session?.workspaceID) {
+                    recover(session)
+                  } else {
+                    toast.show({
+                      variant: "error",
+                      title: "Failed to delete session",
+                      message: errorMessage(result.error),
+                    })
+                  }
+                  setToDelete(undefined)
                   return
                 }
               } catch (err) {
-                fail(err)
+                if (session?.workspaceID) {
+                  recover(session)
+                } else {
+                  toast.show({
+                    variant: "error",
+                    title: "Failed to delete session",
+                    message: errorMessage(err),
+                  })
+                }
+                setToDelete(undefined)
                 return
               }
-              const workspace = status()
-              if (session?.workspaceID && workspace && workspace !== "connected") {
+              if (status && status !== "connected") {
                 await sync.session.refresh()
               }
               if (search()) await refetch()

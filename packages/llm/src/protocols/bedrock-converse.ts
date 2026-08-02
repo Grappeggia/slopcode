@@ -379,15 +379,14 @@ const lowerSystem = (
 ): BedrockSystemBlock[] => system.flatMap((part) => textWithCache(breakpoints, part.text, part.cache))
 
 const fromRequest = Effect.fn("BedrockConverse.fromRequest")(function* (request: LLMRequest) {
-  const definitions = yield* ProviderShared.functionToolDefinitions("Bedrock Converse", request)
   const toolChoice = request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined
   const generation = request.generation
   // Bedrock-Claude shares Anthropic's 4-breakpoint cap. Spend the budget in
   // tools → system → messages order to favour the highest-impact prefixes.
   const breakpoints = BedrockCache.breakpoints()
   const toolConfig =
-    definitions.length > 0 && request.toolChoice?.type !== "none"
-      ? { tools: lowerTools(breakpoints, definitions), toolChoice }
+    request.tools.length > 0 && request.toolChoice?.type !== "none"
+      ? { tools: lowerTools(breakpoints, request.tools), toolChoice }
       : undefined
   const system = request.system.length === 0 ? undefined : lowerSystem(breakpoints, request.system)
   const messages = yield* lowerMessages(request, breakpoints)

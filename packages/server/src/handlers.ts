@@ -3,7 +3,7 @@ import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
-import { Effect, Layer } from "effect"
+import { Layer } from "effect"
 import { layer as locationLayer } from "./groups/location"
 import { sessionLocationLayer } from "./middleware/session-location"
 import { MessageHandler } from "./handlers/message"
@@ -25,28 +25,10 @@ import { IntegrationHandler } from "./handlers/integration"
 import { CredentialHandler } from "./handlers/credential"
 import { Credential } from "@slopcode-ai/core/credential"
 import { ProjectCopyHandler } from "./handlers/project-copy"
-import { Database } from "@slopcode-ai/core/database/database"
-import { ProjectV2 } from "@slopcode-ai/core/project"
-import { SessionProjector } from "@slopcode-ai/core/session/projector"
-import { SessionStore } from "@slopcode-ai/core/session/store"
-import { SessionGraph } from "./session-graph"
-import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
+import { PtyHandler } from "./handlers/pty"
+import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 
-const store = SessionStore.layer
-const execution = SessionExecutionLocal.layer.pipe(Layer.provide(store))
-const status = SessionExecutionStatus.layer
-export const sessionServices = Layer.mergeAll(
-  SessionV2.layer.pipe(Layer.provide(execution), Layer.provide(store), Layer.provide(status)),
-  SessionProjector.layer,
-  status,
-).pipe(Layer.orDie)
-export const isolatedSessionServices = Layer.mergeAll(
-  Layer.fresh(SessionV2.layer).pipe(Layer.provide(execution), Layer.provide(store), Layer.provide(status)),
-  SessionProjector.layer,
-  status,
-).pipe(Layer.orDie)
-
-const raw = Layer.mergeAll(
+export const handlers = Layer.mergeAll(
   HealthHandler,
   LocationHandler,
   AgentHandler,
@@ -64,36 +46,16 @@ const raw = Layer.mergeAll(
   QuestionHandler,
   ReferenceHandler,
   ProjectCopyHandler,
+  PtyHandler,
+).pipe(
+  Layer.provide(sessionLocationLayer),
+  Layer.provide(locationLayer),
+  Layer.provide(SessionControl.layer),
+  Layer.provide(SessionV2.defaultLayer),
+  Layer.provide(SessionRuntime.defaultLayer),
+  Layer.provide(SessionExecutionLocal.defaultLayer),
+  Layer.provide(PermissionSaved.defaultLayer),
+  Layer.provide(LocationServiceMap.layer),
+  Layer.provide(Credential.defaultLayer),
+  Layer.provide(PtyTicket.defaultLayer),
 )
-
-export const makeRawHandlers = (saved: Layer.Layer<PermissionSaved.Service> = PermissionSaved.defaultLayer) =>
-  raw.pipe(
-    Layer.provide(sessionLocationLayer),
-    Layer.provide(locationLayer),
-    Layer.provide(saved),
-    Layer.provide(Credential.defaultLayer),
-  )
-
-export const rawHandlers = makeRawHandlers()
-
-const graph = Layer.effect(
-  SessionGraph.Service,
-  SessionV2.Service.use((session) =>
-    SessionControl.Service.use((control) =>
-      SessionRuntime.Service.use((runtime) => Effect.succeed(SessionGraph.Service.of({ session, control, runtime }))),
-    ),
-  ),
-).pipe(Layer.provide(SessionControl.layer), Layer.provide(sessionServices), Layer.provide(SessionRuntime.defaultLayer))
-
-export const makeHandlers = (
-  database: Layer.Layer<Database.Service> = Database.defaultLayer,
-  saved: Layer.Layer<PermissionSaved.Service> = PermissionSaved.layer.pipe(Layer.provide(database)),
-) =>
-  makeRawHandlers(saved).pipe(
-    Layer.provide(graph),
-    Layer.provide(SessionRuntime.defaultLayer),
-    Layer.provide(ProjectV2.defaultLayer),
-    Layer.provide(database),
-  )
-
-export const handlers = makeHandlers()

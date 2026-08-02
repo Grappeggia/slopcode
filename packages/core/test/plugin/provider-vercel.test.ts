@@ -24,7 +24,7 @@ describe("VercelPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("vercel"))).request.headers).toEqual({
         Existing: "1",
-        "http-referer": "https://slopcode.ai/",
+        "http-referer": "https://slopcode.dev/",
         "x-title": "slopcode",
       })
     }),

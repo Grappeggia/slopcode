@@ -58,37 +58,29 @@ if (sseTypesPatched === sseTypesSource) {
 }
 await Bun.write(sseTypesPath, sseTypesPatched)
 
-// Keep SSE retry backoff owned by the request's AbortSignal. The generated
-// client otherwise waits for the full exponential delay after aborting.
-const sseRuntimePath = "./src/v2/gen/core/serverSentEvents.gen.ts"
-const sseRuntimeFile = Bun.file(sseRuntimePath)
-const sseRuntimeSource = await sseRuntimeFile.text()
-const replacements = [
-  [
-    /import type \{ Config \} from ['"]\.\/types\.gen\.js['"];?/,
-    'import type { Config } from "./types.gen.js"\nimport { abortableSleep } from "../../../sse.js"',
-  ],
-  [
-    /sseSleepFn\?: \(ms: number\) => Promise<void>;?/,
-    "sseSleepFn?: (ms: number, signal: AbortSignal) => Promise<void>",
-  ],
-  [
-    /const sleep =\s*sseSleepFn \?\?\s*\(\(ms: number\) => new Promise\(\(resolve\) => setTimeout\(resolve, ms\)\)\);?/,
-    "const sleep = sseSleepFn ?? abortableSleep",
-  ],
-  [/onSseError\?\.\(error\);?/, "onSseError?.(error)\n\n        if (signal.aborted) break"],
-  [/await sleep\(backoff\);?/, "await sleep(backoff, signal)"],
-] as const
-const sseRuntimePatched = replacements.reduce((source, [before, after]) => {
-  if (!before.test(source)) {
-    throw new Error(`SSE runtime patch did not apply; @hey-api/openapi-ts output may have changed (${sseRuntimePath})`)
-  }
-  return source.replace(before, after)
-}, sseRuntimeSource)
-await Bun.write(sseRuntimePath, sseRuntimePatched)
-
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`
+
+// Flattened required request bodies are emitted with optional fields. Keep the
+// MCP completion identity mandatory in the callable SDK surface.
+const sdkPath = "./src/v2/gen/sdk.gen.ts"
+const sdkFile = Bun.file(sdkPath)
+const sdkSource = await sdkFile.text()
+const sdkPatched = sdkSource.replace(
+  `      workspace?: string
+      state?: string
+      code?: string
+    },`,
+  `      workspace?: string
+      state: string
+      code: string
+    },`,
+)
+if (sdkPatched === sdkSource) {
+  throw new Error(`MCP callback patch did not apply; @hey-api/openapi-ts output may have changed (${sdkPath})`)
+}
+await Bun.write(sdkPath, sdkPatched)
+
 await $`rm -rf dist`
 await $`bun tsc`
 await $`rm openapi.json`

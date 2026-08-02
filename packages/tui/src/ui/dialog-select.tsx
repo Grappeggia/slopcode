@@ -35,7 +35,14 @@ export interface DialogSelectProps<T> {
   skipFilter?: boolean
   renderFilter?: boolean
   locked?: boolean
-  actions?: DialogSelectAction<T>[]
+  actions?: {
+    command: string
+    title: string
+    side?: "left" | "right"
+    hidden?: boolean
+    disabled?: boolean | ((option: DialogSelectOption<T> | undefined) => boolean)
+    onTrigger: (option: DialogSelectOption<T>) => void
+  }[]
   footerHints?: {
     title: string
     label: string
@@ -44,23 +51,6 @@ export interface DialogSelectProps<T> {
   bindings?: readonly Binding<Renderable, KeyEvent>[]
   current?: T
 }
-
-export type DialogSelectAction<T> = {
-  command: string
-  title: string
-  side?: "left" | "right"
-  hidden?: boolean
-  disabled?: boolean | ((option: DialogSelectOption<T> | undefined) => boolean)
-} & (
-  | {
-      requiresSelection: false
-      onTrigger: () => void
-    }
-  | {
-      requiresSelection?: true
-      onTrigger: (option: DialogSelectOption<T>) => void
-    }
-)
 
 export interface DialogSelectOption<T = any> {
   title: string
@@ -397,7 +387,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
             if (props.locked) return
             if (isActionDisabled(item)) return
             setStore("input", "keyboard")
-            runAction(item, selected())
+            const option = selected()
+            if (!option) return
+            item.onTrigger(option)
           },
         })),
       ],
@@ -458,15 +450,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     if (props.locked) return
     if (!item || !isActionItem(item) || isActionDisabled(item)) return
     setStore("input", "keyboard")
-    runAction(item, selected())
-  }
-
-  function runAction(item: Action, option: DialogSelectOption<T> | undefined) {
-    if (item.requiresSelection === false) {
-      item.onTrigger()
-      return
-    }
-    if (option) item.onTrigger(option)
+    const option = selected()
+    if (!option) return
+    item.onTrigger(option)
   }
 
   function isActionItem(item: VisibleAction): item is Action & { label: string } {

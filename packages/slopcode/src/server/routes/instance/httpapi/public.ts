@@ -110,8 +110,9 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       const isV2Api = isV2ApiPath(path)
       if (operation.requestBody) {
         // The legacy OpenAPI surface never marked request bodies as required.
-        // Keep that SDK surface stable while the HttpApi spec is tightened.
-        if (!isV2Api) delete operation.requestBody.required
+        // Keep that SDK surface stable except where omitting a body would break
+        // flow ownership and CSRF validation.
+        if (!isV2Api && path !== "/mcp/{name}/auth/callback") delete operation.requestBody.required
         const body = operation.requestBody.content?.["application/json"]
         if (body?.schema) body.schema = stripOptionalNull(structuredClone(body.schema))
         if (path === "/experimental/workspace" && method === "post") {
@@ -166,14 +167,6 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
                   : { $ref: "#/components/schemas/GlobalEvent" },
             },
           },
-        }
-      }
-      if (path === "/session/{sessionID}/side-question" && method === "post") {
-        const response = operation.responses?.["200"]
-        const schema = response?.content?.["application/json"]?.schema
-        if (response && schema) {
-          response.description = "Side-question event stream"
-          response.content = { "text/event-stream": { schema } }
         }
       }
       const route = `${method.toUpperCase()} ${path}`

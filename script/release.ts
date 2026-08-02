@@ -99,7 +99,7 @@ type Run = {
 const getRun = async (dispatch: string) =>
   findDispatch(
     parse<Run[]>(
-      await $`gh run list --repo ${repo} --workflow publish.yml --branch ${ref} --json databaseId,displayTitle,status,conclusion,url --limit 100`.text(),
+      await $`gh run list --workflow publish.yml --branch ${ref} --json databaseId,displayTitle,status,conclusion,url --limit 100`.text(),
     ),
     dispatch,
   )
@@ -115,7 +115,7 @@ async function waitForRun(dispatch: string, left: number): Promise<Run> {
 
 async function waitForCompletion(id: number, left: number): Promise<string> {
   const run = parse<{ status: string; conclusion?: string; url?: string }>(
-    await $`gh run view ${id} --repo ${repo} --json status,conclusion,url`.text(),
+    await $`gh run view ${id} --json status,conclusion,url`.text(),
   )
   if (run.status === "completed") {
     if (run.conclusion !== "success") {
@@ -130,9 +130,7 @@ async function waitForCompletion(id: number, left: number): Promise<string> {
 }
 
 async function waitForRerun(id: number, left: number): Promise<string> {
-  const run = parse<{ status: string; conclusion?: string }>(
-    await $`gh run view ${id} --repo ${repo} --json status,conclusion`.text(),
-  )
+  const run = parse<{ status: string; conclusion?: string }>(await $`gh run view ${id} --json status,conclusion`.text())
   if (run.status !== "completed" || run.conclusion === "success") {
     return waitForCompletion(id, completionWait)
   }
@@ -156,7 +154,7 @@ if (early && (earlyPlan === "success" || earlyPlan === "wait")) {
 if (early && earlyPlan === "rerun") {
   const draft = (await $`gh release view ${lineage.target} --json isDraft --jq .isDraft --repo ${repo}`.text()).trim()
   if (draft === "false") {
-    await $`gh run rerun ${early.databaseId} --repo ${repo}`.nothrow()
+    await $`gh run rerun ${early.databaseId}`.nothrow()
     const url = await waitForRerun(early.databaseId, runWait)
     console.log(`Recovered finalized publish.yml run: ${url}`)
     process.exit(0)
@@ -200,10 +198,10 @@ if (plan === "success") {
 }
 if (plan === "dispatch") {
   const previous = prepared.previous_tag ? ["-f", `previous_tag=${prepared.previous_tag}`] : []
-  await $`gh workflow run publish.yml --repo ${repo} --ref ${ref} -f version=${prepared.version} -f source_sha=${prepared.source_sha} ${previous} -f dispatch_id=${dispatch}`.nothrow()
+  await $`gh workflow run publish.yml --ref ${ref} -f version=${prepared.version} -f source_sha=${prepared.source_sha} ${previous} -f dispatch_id=${dispatch}`.nothrow()
 }
 if (plan === "rerun") {
-  await $`gh run rerun ${existing!.databaseId} --repo ${repo}`.nothrow()
+  await $`gh run rerun ${existing!.databaseId}`.nothrow()
   await Bun.sleep(2000)
 }
 

@@ -1,16 +1,12 @@
 import { describe, expect } from "bun:test"
 import { createServer, type Server } from "node:http"
-import { DateTime, Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { Catalog } from "@slopcode-ai/core/catalog"
 import { Config } from "@slopcode-ai/core/config"
 import { ConfigProviderPlugin } from "@slopcode-ai/core/config/plugin/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
-import { ProjectV2 } from "@slopcode-ai/core/project"
-import { AbsolutePath } from "@slopcode-ai/core/schema"
-import { SessionV2 } from "@slopcode-ai/core/session"
-import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
 import { it } from "../plugin/provider-helper"
 
 function request(headers: Record<string, string>, variant?: string) {
@@ -23,77 +19,6 @@ function request(headers: Record<string, string>, variant?: string) {
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
-  it.effect("preserves a user-configured managed endpoint after catalog defaults", () =>
-    Effect.gen(function* () {
-      const catalog = yield* Catalog.Service
-      const plugin = yield* PluginV2.Service
-      const providerID = ProviderV2.ID.slopcode
-      const modelID = ModelV2.ID.make("gpt-5.6")
-      yield* catalog.transform((draft) => {
-        draft.provider.update(providerID, (provider) => {
-          provider.api = {
-            type: "aisdk",
-            package: "@ai-sdk/openai-compatible",
-            url: "https://www.slopcode.dev/zen/v1",
-          }
-        })
-        draft.model.update(providerID, modelID, (model) => {
-          model.api = {
-            id: modelID,
-            type: "aisdk",
-            package: "@ai-sdk/openai",
-            url: "https://www.slopcode.dev/zen/v1",
-          }
-          model.limit = { context: 1_050_000, output: 128_000 }
-          model.time.released = DateTime.makeUnsafe(0)
-        })
-      })
-      const config = Config.Service.of({
-        entries: () =>
-          Effect.succeed([
-            new Config.Document({
-              type: "document",
-              info: decode({
-                providers: {
-                  slopcode: {
-                    api: { type: "aisdk", package: "@ai-sdk/openai", url: "https://custom.example/managed/v1" },
-                  },
-                },
-              }),
-            }),
-          ]),
-      })
-      yield* plugin.add({
-        ...ConfigProviderPlugin.Plugin,
-        effect: ConfigProviderPlugin.Plugin.effect.pipe(
-          Effect.provideService(Config.Service, config),
-          Effect.provideService(Catalog.Service, catalog),
-        ),
-      })
-
-      const model = yield* catalog.model.get(providerID, modelID)
-      const resolved = yield* SessionRunnerModel.resolve(
-        SessionV2.Info.make({
-          id: SessionV2.ID.make("ses_custom_managed"),
-          projectID: ProjectV2.ID.global,
-          title: "test",
-          model: { id: modelID, providerID },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          time: { created: model.time.released, updated: model.time.released },
-          location: { directory: AbsolutePath.make("/project") },
-        }),
-        model,
-      )
-
-      expect(model.api.url).toBe("https://custom.example/managed/v1")
-      expect(resolved.model.route.endpoint).toMatchObject({
-        baseURL: "https://custom.example/managed/v1",
-        path: "/responses",
-      })
-    }),
-  )
-
   it.effect("partitions existing model variant bodies without changing config shape", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

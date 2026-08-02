@@ -2,7 +2,7 @@ export * as SlopCode from "./slopcode"
 
 import path from "path"
 import { type ParseError, parse } from "jsonc-parser"
-import { Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { Database } from "../database/database"
@@ -13,7 +13,6 @@ import { ProjectV2 } from "../project"
 import { SessionV2 } from "../session"
 import * as SessionExecutionLocal from "../session/execution/local"
 import { SessionRuntime } from "../session/runtime"
-import { SessionControl } from "../session/control"
 import { SessionProjector } from "../session/projector"
 import { SessionStore } from "../session/store"
 import { ApplicationTools } from "../tool/application-tools"
@@ -138,28 +137,24 @@ const SessionModelValidationLayer = Layer.effect(
   }),
 )
 
-const RuntimeLayer = SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer))
-const SessionLayer = SessionV2.layer.pipe(
-  Layer.provide(SessionProjector.layer),
-  Layer.provide(SessionExecutionLocal.layer),
-  Layer.provide(RuntimeLayer),
-  Layer.provide(SessionStore.layer),
-  Layer.provide(EventV2.layer),
-  Layer.provide(Database.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
-  Layer.orDie,
-)
-const ControlLayer = SessionControl.layer.pipe(Layer.provide(SessionLayer), Layer.provide(RuntimeLayer))
-const SessionsLayer = Layer.mergeAll(SessionLayer, RuntimeLayer, ControlLayer, SessionModelValidationLayer).pipe(
-  Layer.provide(LocationServicesLayer),
-)
+const SessionsLayer = Layer.merge(
+  SessionV2.layer.pipe(
+    Layer.provide(SessionProjector.layer),
+    Layer.provide(SessionExecutionLocal.layer),
+    Layer.provide(SessionRuntime.layer),
+    Layer.provide(SessionStore.layer),
+    Layer.provide(EventV2.layer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(ProjectV2.defaultLayer),
+    Layer.orDie,
+  ),
+  SessionModelValidationLayer,
+).pipe(Layer.provide(LocationServicesLayer))
 // TODO: Accept explicit storage so tests and embeddings can select disposable or application-owned persistence.
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const sessions = yield* SessionV2.Service
-    const control = yield* SessionControl.Service
-    const runtime = yield* SessionRuntime.Service
     const tools = yield* ApplicationTools.Service
     const validation = yield* SessionModelValidation
     return Service.of({
@@ -177,15 +172,12 @@ export const layer = Layer.effect(
         list: sessions.list,
         switchModel: Effect.fn("SlopCode.sessions.switchModel")(function* (input) {
           const session = yield* sessions.get(input.sessionID)
-          yield* runtime.assert({ sessionID: input.sessionID, owner: "v2", state: "ready" })
           yield* validation.validate({ ...input, location: session.location })
-          yield* control.switchModel(input)
+          yield* sessions.switchModel(input)
         }),
-        switchAgent: control.switchAgent,
-        skill: control.skill,
-        interrupt: control.interrupt,
+        interrupt: sessions.interrupt,
         prompt: (input) =>
-          control.prompt({
+          sessions.prompt({
             id: input.id,
             sessionID: input.sessionID,
             prompt: input.prompt,
@@ -200,10 +192,7 @@ export const layer = Layer.effect(
           }),
         message: (input) => sessions.message({ sessionID: input.sessionID, messageID: input.messageID }),
         context: sessions.context,
-        events: (input) =>
-          sessions
-            .events({ sessionID: input.sessionID, after: input.after })
-            .pipe(Stream.filter((event): event is Session.Event => EventV2.isPublic(event.event))),
+        events: (input) => sessions.events({ sessionID: input.sessionID, after: input.after }),
       },
     })
   }),

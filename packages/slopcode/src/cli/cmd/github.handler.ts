@@ -200,7 +200,7 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
             "",
             "    3. Go to a GitHub issue and comment `/oc summarize` to see the agent in action",
             "",
-            "   Learn more about the GitHub agent - https://slopcode.ai/docs/github/#usage-examples",
+            "   Learn more about the GitHub agent - https://slopcode.dev/docs/github/#usage-examples",
           ].join("\n"),
         )
       }
@@ -320,7 +320,7 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
         s.stop("Installed GitHub app")
 
         async function getInstallation() {
-          return await fetch(`https://api.slopcode.ai/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`)
+          return await fetch(`https://api.slopcode.dev/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`)
             .then((res) => res.json())
             .then((data) => data.installation)
         }
@@ -426,7 +426,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         ? (payload as IssueCommentEvent | IssuesEvent).issue.number
         : (payload as PullRequestEvent | PullRequestReviewCommentEvent).pull_request.number
     const runUrl = `/${owner}/${repo}/actions/runs/${runId}`
-    const shareBaseUrl = isMock ? "https://dev.slopcode.ai" : "https://slopcode.ai"
+    const shareBaseUrl = isMock ? "https://dev.slopcode.dev" : "https://slopcode.dev"
 
     let appToken: string
     let octoRest: Octokit
@@ -687,7 +687,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     function normalizeOidcBaseUrl(): string {
       const value = process.env["OIDC_BASE_URL"]
-      if (!value) return "https://api.slopcode.ai"
+      if (!value) return "https://api.slopcode.dev"
       return value.replace(/\/+$/, "")
     }
 

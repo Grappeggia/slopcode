@@ -3,6 +3,7 @@ import { createRoot, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import {
   createServerProjects,
+  isServerStateReady,
   migrateCanonicalLocalServerState,
   nextServerAfterRemoval,
   resolveServerList,
@@ -59,6 +60,39 @@ describe("resolveServerList", () => {
     })
     expect(list[0]?.type === "http" ? list[0].authToken : true).toBeUndefined()
   })
+
+  test("keeps remote workspace connections distinct by selected folder", () => {
+    const list = resolveServerList({
+      stored: [
+        {
+          type: "http",
+          http: {
+            url: "https://desktop.example.test",
+            workspaceID: "ws_alpha",
+            directory: "/srv/alpha",
+          },
+        },
+        {
+          type: "http",
+          http: {
+            url: "https://desktop.example.test",
+            workspaceID: "ws_beta",
+            directory: "/srv/beta",
+          },
+        },
+      ],
+    })
+
+    expect(list).toHaveLength(2)
+    expect(ServerConnection.key(list[0]!) as string).not.toBe(ServerConnection.key(list[1]!))
+  })
+})
+
+test("waits for an external server catalog before exposing server state", () => {
+  expect(isServerStateReady(false, true)).toBe(false)
+  expect(isServerStateReady(true, false)).toBe(false)
+  expect(isServerStateReady(true, true)).toBe(true)
+  expect(isServerStateReady(true, undefined)).toBe(true)
 })
 
 test("treats WSL sidecars as remote server connections", () => {

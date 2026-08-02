@@ -6,12 +6,10 @@ const BUILTIN: Record<string, WorkspaceAdapter> = {
   worktree: WorktreeAdapter,
 }
 
-type Entry = { readonly token: symbol; readonly adapter: WorkspaceAdapter }
-
-const state = new Map<ProjectV2.ID, Map<string, Entry[]>>()
+const state = new Map<ProjectV2.ID, Map<string, WorkspaceAdapter>>()
 
 export function getAdapter(projectID: ProjectV2.ID, type: string): WorkspaceAdapter {
-  const custom = state.get(projectID)?.get(type)?.at(-1)?.adapter
+  const custom = state.get(projectID)?.get(type)
   if (custom) return custom
 
   const builtin = BUILTIN[type]
@@ -30,30 +28,14 @@ export function listAdapters(projectID: ProjectV2.ID): WorkspaceAdapterEntry[] {
 
 export function registeredAdapters(projectID: ProjectV2.ID): [string, WorkspaceAdapter][] {
   const adapters = new Map(Object.entries(BUILTIN))
-  for (const [type, entries] of state.get(projectID)?.entries() ?? []) {
-    const adapter = entries.at(-1)?.adapter
-    if (adapter) adapters.set(type, adapter)
-  }
+  for (const [type, adapter] of state.get(projectID)?.entries() ?? []) adapters.set(type, adapter)
   return [...adapters.entries()]
 }
 
 // Plugins can be loaded per-project so we need to scope them. If you
 // want to install a global one pass `ProjectV2.ID.global`
 export function registerAdapter(projectID: ProjectV2.ID, type: string, adapter: WorkspaceAdapter) {
-  const token = Symbol(type)
-  const adapters = state.get(projectID) ?? new Map<string, Entry[]>()
-  adapters.set(type, [...(adapters.get(type) ?? []), { token, adapter }])
+  const adapters = state.get(projectID) ?? new Map<string, WorkspaceAdapter>()
+  adapters.set(type, adapter)
   state.set(projectID, adapters)
-  let active = true
-  return () => {
-    if (!active) return
-    active = false
-    const entries = state
-      .get(projectID)
-      ?.get(type)
-      ?.filter((entry) => entry.token !== token)
-    if (entries?.length) state.get(projectID)?.set(type, entries)
-    if (!entries?.length) state.get(projectID)?.delete(type)
-    if (state.get(projectID)?.size === 0) state.delete(projectID)
-  }
 }

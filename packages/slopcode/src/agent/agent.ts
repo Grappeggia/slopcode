@@ -28,7 +28,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { AbsolutePath, type DeepMutable } from "@slopcode-ai/core/schema"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
-import { LocationServiceMap, node as locationServiceMapNode } from "@slopcode-ai/core/location-layer"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
 import { Reference } from "@slopcode-ai/core/reference"
 import { Location } from "@slopcode-ai/core/location"
@@ -58,7 +58,7 @@ export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
 const slopcodeModeModel = () => ({
   providerID: ProviderV2.ID.slopcode,
-  modelID: ModelV2.ID.make("gpt-5.5-fast"),
+  modelID: ModelV2.ID.make("gpt-5.6-sol-fast"),
 })
 
 const GeneratedAgent = Schema.Struct({
@@ -130,7 +130,6 @@ export const layer = Layer.effect(
           question: "deny",
           plan_enter: "deny",
           plan_exit: "deny",
-          plan_permissions: "deny",
           // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
           read: {
             "*": "allow",
@@ -142,7 +141,7 @@ export const layer = Layer.effect(
 
         const user = Permission.fromConfig(cfg.permission ?? {})
         const modeModel = Option.isSome(
-          yield* provider.getModel(ProviderV2.ID.slopcode, ModelV2.ID.make("gpt-5.5-fast")).pipe(Effect.option),
+          yield* provider.getModel(ProviderV2.ID.slopcode, ModelV2.ID.make("gpt-5.6-sol-fast")).pipe(Effect.option),
         )
           ? slopcodeModeModel
           : undefined
@@ -173,7 +172,6 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 plan_exit: "allow",
-                plan_permissions: "allow",
                 task: {
                   general: "deny",
                 },
@@ -497,6 +495,8 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Skill.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
 )
+
+const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 
 export const node = LayerNode.make(layer, [
   Config.node,

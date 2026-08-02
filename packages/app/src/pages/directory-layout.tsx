@@ -9,8 +9,11 @@ import { SDKProvider } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { decode64 } from "@/utils/base64"
 import { Schema } from "effect"
+import type { PromptModel } from "@/context/tabs"
 
-export function DirectoryDataProvider(props: ParentProps<{ directory: string; draftID?: string }>) {
+export function DirectoryDataProvider(
+  props: ParentProps<{ directory: string; draftID?: string; model?: PromptModel }>,
+) {
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
@@ -38,7 +41,7 @@ export function DirectoryDataProvider(props: ParentProps<{ directory: string; dr
       onNavigateToSession={(sessionID: string) => navigate(`/${slug()}/session/${sessionID}`)}
       onSessionHref={(sessionID: string) => `/${slug()}/session/${sessionID}`}
     >
-      <LocalProvider>{props.children}</LocalProvider>
+      <LocalProvider initial={() => props.model}>{props.children}</LocalProvider>
     </DataProvider>
   )
 }

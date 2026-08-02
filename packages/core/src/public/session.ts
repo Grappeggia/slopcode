@@ -9,8 +9,6 @@ import { SessionEvent } from "../session/event"
 import { SessionInput } from "../session/input"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
-import { SessionRuntime } from "../session/runtime"
-import { SessionRunnerModel } from "../session/runner/model"
 import { Agent } from "./agent"
 import { Location } from "./location"
 import { Model } from "./model"
@@ -38,31 +36,13 @@ export type ListInput = SessionV2.ListInput
 
 export const EventCursor = EventV2.Cursor
 export type EventCursor = EventV2.Cursor
-export type EventPayload = Exclude<SessionEvent.DurableEvent, typeof SessionEvent.Tool.CalledV2.Type>
-export type Event = EventV2.CursorEvent<EventPayload>
+export type Event = EventV2.CursorEvent<SessionEvent.DurableEvent>
 
 export const NotFoundError = SessionV2.NotFoundError
 export type NotFoundError = SessionV2.NotFoundError
 
 export const PromptConflictError = SessionV2.PromptConflictError
 export type PromptConflictError = SessionV2.PromptConflictError
-export const PromptFormatConflictError = SessionV2.PromptFormatConflictError
-export type PromptFormatConflictError = SessionV2.PromptFormatConflictError
-
-export const StructuredFormatAdmissionError = SessionV2.StructuredFormatAdmissionError
-export type StructuredFormatAdmissionError = SessionV2.StructuredFormatAdmissionError
-
-export const AgentUnavailableError = SessionV2.AgentUnavailableError
-export type AgentUnavailableError = SessionV2.AgentUnavailableError
-
-export const SkillNotFoundError = SessionV2.SkillNotFoundError
-export type SkillNotFoundError = SessionV2.SkillNotFoundError
-
-export const ModelHistoryIncompatibleError = SessionV2.ModelHistoryIncompatibleError
-export type ModelHistoryIncompatibleError = SessionV2.ModelHistoryIncompatibleError
-
-export const RuntimeMismatchError = SessionRuntime.Mismatch
-export type RuntimeMismatchError = SessionRuntime.Mismatch
 
 export class ModelUnavailableError extends Schema.TaggedErrorClass<ModelUnavailableError>()(
   "Session.ModelUnavailableError",
@@ -102,18 +82,6 @@ export interface SwitchModelInput {
   readonly model: Model.Ref
 }
 
-export interface SwitchAgentInput {
-  readonly sessionID: ID
-  readonly agent: Agent.ID
-}
-
-export interface SkillInput {
-  readonly id?: MessageID
-  readonly sessionID: ID
-  readonly skill: string
-  readonly resume?: boolean
-}
-
 export interface MessagesInput {
   readonly sessionID: ID
   readonly limit?: number
@@ -138,44 +106,12 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info>
   readonly get: (sessionID: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
-  readonly prompt: (
-    input: PromptInput,
-  ) => Effect.Effect<
-    Admission,
-    | NotFoundError
-    | PromptConflictError
-    | PromptFormatConflictError
-    | StructuredFormatAdmissionError
-    | SessionRuntime.Error
-  >
+  readonly prompt: (input: PromptInput) => Effect.Effect<Admission, NotFoundError | PromptConflictError>
   readonly switchModel: (
     input: SwitchModelInput,
-  ) => Effect.Effect<
-    void,
-    | NotFoundError
-    | MessageDecodeError
-    | ModelUnavailableError
-    | VariantUnavailableError
-    | ModelHistoryIncompatibleError
-    | SessionRunnerModel.Error
-    | SessionRuntime.Error
-  >
-  readonly switchAgent: (
-    input: SwitchAgentInput,
-  ) => Effect.Effect<void, NotFoundError | AgentUnavailableError | SessionRuntime.Error>
-  readonly skill: (
-    input: SkillInput,
-  ) => Effect.Effect<
-    Admission,
-    | NotFoundError
-    | SkillNotFoundError
-    | PromptConflictError
-    | PromptFormatConflictError
-    | StructuredFormatAdmissionError
-    | SessionRuntime.Error
-  >
+  ) => Effect.Effect<void, NotFoundError | ModelUnavailableError | VariantUnavailableError>
   /** Interrupt the active V2 execution chain for one Session on this process. Interrupting an idle or missing Session is a no-op. */
-  readonly interrupt: (sessionID: ID) => Effect.Effect<void, SessionRuntime.Error>
+  readonly interrupt: (sessionID: ID) => Effect.Effect<void>
   readonly messages: (input: MessagesInput) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>
   readonly message: (input: MessageInput) => Effect.Effect<Message | undefined>
   readonly context: (sessionID: ID) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>

@@ -1,13 +1,12 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Context, Effect, Equal, Exit, Hash, Layer, Schema, Scope } from "effect"
+import { Effect, Equal, Hash, Layer, Schema } from "effect"
 import { Tool } from "@slopcode-ai/core/public"
 import { Catalog } from "@slopcode-ai/core/catalog"
-import { dependencies, LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { Location } from "@slopcode-ai/core/location"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
-import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { tmpdir } from "./fixture/tmpdir"
@@ -29,11 +28,7 @@ const applicationTools = ApplicationTools.layer
 const it = testEffect(
   Layer.merge(
     Layer.mergeAll(applicationTools, Database.defaultLayer, EventV2.defaultLayer),
-    LocationServiceMap.layerNoDeps.pipe(
-      Layer.provide([
-        ...dependencies.filter((dependency) => dependency !== Global.defaultLayer),
-        Global.layerWith({ config: path.join(import.meta.dir, "fixture", "empty-global-config") }),
-      ]),
+    LocationServiceMap.layer.pipe(
       Layer.provide(applicationTools),
       Layer.provide(
         Layer.mergeAll(
@@ -44,6 +39,7 @@ const it = testEffect(
           Npm.defaultLayer,
           ModelsDev.defaultLayer,
           FSUtil.defaultLayer,
+          Global.defaultLayer,
         ),
       ),
     ),
@@ -51,122 +47,6 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
-  it.live("disposes a programmatic plugin exactly once on Location shutdown", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((dir) =>
-        Effect.gen(function* () {
-          const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const scope = yield* Scope.make()
-          const context = yield* Layer.buildWithScope(LocationServiceMap.get(ref), scope)
-          yield* Context.get(context, PluginBoot.Service).wait()
-          let disposed = 0
-          yield* Context.get(context, PluginV2.Service).add({
-            id: PluginV2.ID.make("location-dispose"),
-            effect: Effect.succeed({
-              tool: { location_dispose: { description: "location", args: {}, execute: async () => "location" } },
-              dispose: () => {
-                disposed++
-              },
-            }),
-          })
-          expect(
-            (yield* Context.get(context, ToolRegistry.Service).materialize()).definitions.some(
-              (tool) => tool.name === "location_dispose",
-            ),
-          ).toBe(true)
-          yield* Scope.close(scope, Exit.void)
-          yield* LocationServiceMap.invalidate(ref)
-          expect(disposed).toBe(1)
-        }),
-      ),
-    ),
-  )
-
-  it.live("completes PluginBoot after a bad local tool and keeps later healthy tools", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((dir) =>
-        Effect.gen(function* () {
-          const tools = path.join(dir.path, ".slopcode", "tool")
-          yield* Effect.promise(() => fs.mkdir(tools, { recursive: true }))
-          yield* Effect.promise(() =>
-            Promise.all([
-              fs.writeFile(
-                path.join(tools, "bad.ts"),
-                `export default { description: "bad", args: { value: { type: "string", invalid: undefined } }, execute: async () => "bad" }`,
-              ),
-              fs.writeFile(
-                path.join(tools, "healthy.ts"),
-                `export default { description: "healthy", args: {}, execute: async () => "healthy" }`,
-              ),
-            ]),
-          )
-          const result = yield* Effect.gen(function* () {
-            yield* (yield* PluginBoot.Service).wait()
-            return yield* toolDefinitions(yield* ToolRegistry.Service)
-          }).pipe(
-            Effect.scoped,
-            Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
-          )
-          expect(result.some((tool) => tool.name === "bad")).toBe(false)
-          expect(result.some((tool) => tool.name === "healthy")).toBe(true)
-        }),
-      ),
-    ),
-  )
-
-  it.live("completes PluginBoot after a failed configured plugin and loads the next package", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((dir) =>
-        Effect.gen(function* () {
-          Object.assign(globalThis, { __h5c3b_location_disposed: 0 })
-          const tools = path.join(dir.path, ".slopcode", "tool")
-          yield* Effect.promise(() => fs.mkdir(tools, { recursive: true }))
-          yield* Effect.promise(() =>
-            Promise.all([
-              Bun.write(
-                path.join(dir.path, "slopcode.json"),
-                JSON.stringify({ plugins: ["./failed.ts", "./healthy.ts"] }),
-              ),
-              Bun.write(
-                path.join(dir.path, "failed.ts"),
-                `export default async () => new Proxy({}, { ownKeys() { throw new Error("hostile ownKeys") } })`,
-              ),
-              Bun.write(
-                path.join(dir.path, "healthy.ts"),
-                `export default async () => ({
-                  tool: { configured_healthy: { description: "healthy", args: {}, execute: async () => "healthy" } },
-                  dispose: () => globalThis.__h5c3b_location_disposed++
-                })`,
-              ),
-              Bun.write(
-                path.join(tools, "after-proxy.ts"),
-                `export default { description: "local", args: {}, execute: async () => "local" }`,
-              ),
-            ]),
-          )
-          const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
-          const result = yield* Effect.gen(function* () {
-            yield* (yield* PluginBoot.Service).wait()
-            return yield* toolDefinitions(yield* ToolRegistry.Service)
-          }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get(ref)))
-          expect(result.some((tool) => tool.name === "configured_healthy")).toBe(true)
-          expect(result.some((tool) => tool.name === "after-proxy")).toBe(true)
-          yield* LocationServiceMap.invalidate(ref)
-          expect((globalThis as { __h5c3b_location_disposed: number }).__h5c3b_location_disposed).toBe(1)
-        }),
-      ),
-    ),
-  )
-
   it.effect("compares equivalent location refs by value", () =>
     Effect.sync(() => {
       const directory = AbsolutePath.make("/project")
@@ -228,7 +108,6 @@ describe("LocationServiceMap", () => {
             "question",
             "read",
             "skill",
-            "task",
             "todowrite",
             "webfetch",
             "websearch",
@@ -246,7 +125,6 @@ describe("LocationServiceMap", () => {
             "question",
             "read",
             "skill",
-            "task",
             "todowrite",
             "webfetch",
             "websearch",

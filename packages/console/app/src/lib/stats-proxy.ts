@@ -7,7 +7,7 @@ export async function statsProxy(evt: APIEvent) {
   const req = evt.request.clone()
   const targetUrl = new URL(req.url)
   targetUrl.protocol = "https:"
-  targetUrl.hostname = Resource.App.stage === "production" ? "stats.slopcode.ai" : "stats.dev.slopcode.ai"
+  targetUrl.hostname = Resource.App.stage === "production" ? "stats.slopcode.dev" : "stats.dev.slopcode.dev"
   targetUrl.port = ""
 
   if (

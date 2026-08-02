@@ -1,5 +1,4 @@
 import { Catalog } from "@slopcode-ai/core/catalog"
-import { ModelV2 } from "@slopcode-ai/core/model"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -20,7 +19,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
         const catalog = yield* Catalog.Service
         const pluginBoot = yield* PluginBoot.Service
         yield* pluginBoot.wait().pipe(Effect.catchDefect(() => Effect.fail(catalogUnavailable)))
-        return yield* response(catalog.model.available().pipe(Effect.map((models) => models.map(ModelV2.publicInfo))))
+        return yield* response(catalog.model.available())
       }),
     )
   }),

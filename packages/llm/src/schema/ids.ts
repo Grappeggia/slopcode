@@ -23,11 +23,7 @@ export type ContentBlockID = Schema.Schema.Type<typeof ContentBlockID>
 export const ToolCallID = Schema.String
 export type ToolCallID = Schema.Schema.Type<typeof ToolCallID>
 
-export const ToolTypes = ["function", "custom"] as const
-export const ToolType = Schema.Literals(ToolTypes)
-export type ToolType = Schema.Schema.Type<typeof ToolType>
-
-export const ReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const
+export const ReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const
 export const ReasoningEffort = Schema.Literals(ReasoningEfforts)
 export type ReasoningEffort = Schema.Schema.Type<typeof ReasoningEffort>
 

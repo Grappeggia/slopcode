@@ -3,32 +3,24 @@ import { showToast } from "@/utils/toast"
 import { base64Encode } from "@slopcode-ai/core/util/encode"
 import { Binary } from "@slopcode-ai/core/util/binary"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
-import { batch, createEffect, onCleanup, type Accessor } from "solid-js"
+import { batch, type Accessor } from "solid-js"
 import type { FileSelection } from "@/context/file"
 import { useServer } from "@/context/server"
-import {
-  draftSubmissionOwner,
-  type DraftRequest,
-  type DraftSnapshot,
-  type DraftSubmission,
-  useTabs,
-} from "@/context/tabs"
+import { useTabs } from "@/context/tabs"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useLocal } from "@/context/local"
 import { usePermission } from "@/context/permission"
-import { DEFAULT_PROMPT, type ImageAttachmentPart, type Prompt, usePrompt } from "@/context/prompt"
+import { type ContextItem, type ImageAttachmentPart, type Prompt, usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
-import { buildRequestParts, type PreparedPrompt } from "./build-request-parts"
+import { buildRequestParts } from "./build-request-parts"
 import { setCursorPosition } from "./editor-dom"
 import { formatServerError } from "@/utils/server-errors"
 import { ScopedKey } from "@/utils/server-scope"
-import { useComments } from "@/context/comments"
-import { useServerSDK } from "@/context/server-sdk"
 
 type PendingPrompt = {
   abort: AbortController
@@ -37,25 +29,15 @@ type PendingPrompt = {
 
 const pending = new Map<string, PendingPrompt>()
 
-function disposeSubmission(
-  input: { serverSDK: ReturnType<typeof useServerSDK>; serverSync: ReturnType<typeof useServerSync> },
-  state: DraftSubmission,
-) {
-  const worktree = WorktreeState.get(input.serverSDK.scope, state.directory)
-  if (state.worktree === "create" || worktree?.status !== "failed")
-    WorktreeState.clear(input.serverSDK.scope, state.directory)
-  const messageID = state.delivery?.messageID ?? state.lastMessageID
-  if (state.session && messageID && state.cleanedMessageID !== messageID) {
-    input.serverSync.optimistic.remove(state.directory, state.session.id, messageID)
-    state.cleanedMessageID = messageID
-  }
-  if (!state.session || state.cleanedSessionID === state.session.id) return
-  state.cleanedSessionID = state.session.id
-  const client = input.serverSDK.createClient({ directory: state.directory, throwOnError: true })
-  void client.session.delete({ sessionID: state.session.id }).catch(() => {})
+export type FollowupDraft = {
+  sessionID: string
+  sessionDirectory: string
+  prompt: Prompt
+  context: (ContextItem & { key: string })[]
+  agent: string
+  model: { providerID: string; modelID: string }
+  variant?: string
 }
-
-export type FollowupDraft = DraftRequest
 
 type FollowupSendInput = {
   client: ReturnType<typeof useSDK>["client"]
@@ -65,40 +47,6 @@ type FollowupSendInput = {
   messageID?: string
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
-  prepared?: PreparedPrompt
-}
-
-export type PromptDelivery = "rejected" | "ambiguous" | "not-sent"
-
-const ambiguous = new Set([408, 425, 429, 499])
-
-function detailMessage(detail: unknown): string | undefined {
-  if (detail instanceof Error) return detail.message
-  if (typeof detail === "string") return detail
-  if (!detail || typeof detail !== "object") return undefined
-  if ("message" in detail && typeof detail.message === "string") return detail.message
-  if (!("data" in detail)) return undefined
-  const data = detail.data
-  if (!data || typeof data !== "object" || !("message" in data) || typeof data.message !== "string") return undefined
-  return data.message
-}
-
-export class PromptDeliveryError extends Error {
-  readonly delivery: PromptDelivery
-  readonly status?: number
-  readonly detail: unknown
-
-  constructor(detail: unknown, response?: Response, delivery?: PromptDelivery) {
-    super(detailMessage(detail) ?? "Prompt delivery failed")
-    this.name = "PromptDeliveryError"
-    this.delivery =
-      delivery ??
-      (response && response.status >= 400 && response.status < 500 && !ambiguous.has(response.status)
-        ? "rejected"
-        : "ambiguous")
-    this.status = response?.status
-    this.detail = detail
-  }
 }
 
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
@@ -128,7 +76,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
 
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
-  if (!input.prepared && cmd && input.sync.data.command.find((item) => item.name === cmd)) {
+  if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
     setBusy()
     try {
       if (!(await wait())) {
@@ -159,17 +107,15 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   }
 
   const messageID = input.messageID ?? Identifier.ascending("message")
-  const { requestParts, optimisticParts } =
-    input.prepared ??
-    buildRequestParts({
-      prompt: input.draft.prompt,
-      context: input.draft.context,
-      images,
-      text,
-      sessionID: input.draft.sessionID,
-      messageID,
-      sessionDirectory: input.draft.sessionDirectory,
-    })
+  const { requestParts, optimisticParts } = buildRequestParts({
+    prompt: input.draft.prompt,
+    context: input.draft.context,
+    images,
+    text,
+    sessionID: input.draft.sessionID,
+    messageID,
+    sessionDirectory: input.draft.sessionDirectory,
+  })
 
   const message: Message = {
     id: messageID,
@@ -197,7 +143,6 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
 
   batch(() => {
     setBusy()
-    remove()
     add()
   })
 
@@ -209,35 +154,22 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       })
       return false
     }
-  } catch (err) {
-    batch(() => {
-      setIdle()
-      remove()
-    })
-    throw new PromptDeliveryError(err, undefined, "not-sent")
-  }
 
-  try {
-    const result = await input.client.session.promptAsync(
-      {
-        sessionID: input.draft.sessionID,
-        agent: input.draft.agent,
-        model: input.draft.model,
-        messageID,
-        parts: requestParts,
-        variant: input.draft.variant,
-      },
-      { throwOnError: false },
-    )
-    if (result.error) throw new PromptDeliveryError(result.error, result.response)
+    await input.client.session.promptAsync({
+      sessionID: input.draft.sessionID,
+      agent: input.draft.agent,
+      model: input.draft.model,
+      messageID,
+      parts: requestParts,
+      variant: input.draft.variant,
+    })
     return true
   } catch (err) {
     batch(() => {
       setIdle()
       remove()
     })
-    if (err instanceof PromptDeliveryError) throw err
-    throw new PromptDeliveryError(err)
+    throw err
   }
 }
 
@@ -261,7 +193,6 @@ type PromptSubmitInput = {
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
-  draftReady?: Accessor<boolean>
 }
 
 type CommentItem = {
@@ -276,13 +207,11 @@ type CommentItem = {
 export function createPromptSubmit(input: PromptSubmitInput) {
   const navigate = useNavigate()
   const sdk = useSDK()
-  const serverSDK = useServerSDK()
   const sync = useSync()
   const serverSync = useServerSync()
   const local = useLocal()
   const permission = usePermission()
   const prompt = usePrompt()
-  const comments = useComments()
   const layout = useLayout()
   const language = useLanguage()
   const params = useParams()
@@ -290,37 +219,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const server = useServer()
   const tabs = useTabs()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk.scope, sessionID)
-  const draftID = search.draftId
-  const owner = draftSubmissionOwner(server.key, draftID, sdk.directory)
-  let submission: Promise<void> | undefined
-  let active = true
-  const draftAlive = () =>
-    !draftID || tabs.store.some((tab) => tab.type === "draft" && tab.draftID === draftID && tab.server === server.key)
-  const activeOwner = () => active && !params.id && (draftID ? search.draftId === draftID : !search.draftId)
-  const held = (state: NonNullable<ReturnType<typeof tabs.submission.get>>) =>
-    draftAlive() && tabs.submission.get(owner) === state
-  const owns = (state: NonNullable<ReturnType<typeof tabs.submission.get>>) => activeOwner() && held(state)
-  const cleanup = (state: NonNullable<ReturnType<typeof tabs.submission.get>>) =>
-    disposeSubmission({ serverSDK, serverSync }, state)
-  const discard = (state: NonNullable<ReturnType<typeof tabs.submission.get>>) => {
-    if (tabs.submission.get(owner) !== state) return
-    tabs.submission.clear(owner)
-  }
-  onCleanup(() => {
-    active = false
-    if (draftID) return
-    const state = tabs.submission.get(owner)
-    if (!state) return
-    state.abandoned = true
-    if (state.creating || state.delivery?.sending) {
-      tabs.submission.touch()
-      return
-    }
-    discard(state)
-  })
 
   const errorMessage = (err: unknown) => {
-    return detailMessage(err) ?? language.t("common.requestFailed")
+    if (err && typeof err === "object" && "data" in err) {
+      const data = (err as { data?: { message?: string } }).data
+      if (data?.message) return data.message
+    }
+    if (err instanceof Error) return err.message
+    return language.t("common.requestFailed")
   }
 
   const abort = async () => {
@@ -388,119 +294,22 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
   }
 
-  const currentSnapshot = (worktree: string): DraftSnapshot => {
-    const value = prompt.snapshot()
-    return {
-      prompt: value.prompt,
-      cursor: value.cursor,
-      context: value.context,
-      mode: input.mode(),
-      worktree,
-    }
-  }
+  const handleSubmit = async (event: Event) => {
+    event.preventDefault()
 
-  const sameSnapshot = (a: DraftSnapshot, b: DraftSnapshot) =>
-    JSON.stringify({ prompt: a.prompt, context: a.context, mode: a.mode, worktree: a.worktree }) ===
-    JSON.stringify({ prompt: b.prompt, context: b.context, mode: b.mode, worktree: b.worktree })
-
-  const clearDraft = () => {
-    prompt.replace({ prompt: DEFAULT_PROMPT, cursor: 0, context: [], mode: "normal" })
-    input.setMode("normal")
-    input.setPopover(null)
-    input.onSubmit?.()
-  }
-
-  const finalize = (state: NonNullable<ReturnType<typeof tabs.submission.get>>) => {
-    if (
-      !owns(state) ||
-      (input.draftReady && !input.draftReady()) ||
-      state.finalizing ||
-      !state.accepted ||
-      !state.session ||
-      !state.delivery
-    )
-      return
-    state.finalizing = true
-    const current = currentSnapshot(input.newSessionWorktree?.() || "main")
-    const unchanged = sameSnapshot(current, state.delivery.snapshot)
-    const scope = { dir: base64Encode(state.directory), id: state.session.id }
-
-    if (unchanged) clearDraft()
-    if (!unchanged) {
-      prompt.replace(
-        {
-          prompt: current.prompt,
-          cursor: current.cursor,
-          context: current.context,
-          mode: current.mode,
-        },
-        scope,
-      )
-      comments.replace(comments.all(), scope)
-      if (!draftID) {
-        prompt.replace({ prompt: DEFAULT_PROMPT, cursor: 0, context: [], mode: "normal" })
-        comments.clear()
-      }
-    }
-
-    input.addToHistory(state.delivery.request.prompt, state.delivery.snapshot.mode)
-    input.resetHistoryNavigation()
-    seed(state.directory, state.session)
-    local.session.promote(state.directory, state.session.id)
-    layout.handoff.setTabs(base64Encode(state.directory), state.session.id)
-    input.onNewSessionWorktreeReset?.()
-    if (draftID) {
-      tabs.promoteDraft(draftID, {
-        server: server.key,
-        dirBase64: base64Encode(state.directory),
-        sessionId: state.session.id,
-      })
-      return
-    }
-    tabs.submission.release(owner)
-    navigate(`/${base64Encode(state.directory)}/session/${state.session.id}`)
-  }
-
-  createEffect(() => {
-    const state = tabs.submission.get(owner)
-    if (state?.accepted) finalize(state)
-  })
-
-  const submit = async () => {
-    const worktreeSelection = input.newSessionWorktree?.() || "main"
-    const snapshot = currentSnapshot(worktreeSelection)
-    const currentPrompt = snapshot.prompt
+    const currentPrompt = prompt.current()
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
-    const images = input.imageAttachments().map((image) => ({ ...image }))
-    const mode = snapshot.mode
-    const context = snapshot.context
-    const selectedModel = local.model.current()
-    const selectedAgent = local.agent.current()
-    const variant = local.model.variant.current()
-
-    const projectDirectory = sdk.directory
-    const isNewSession = !params.id
-    let retained = isNewSession ? tabs.submission.get(owner) : undefined
-    if (retained?.abandoned || (retained && WorktreeState.get(sdk.scope, retained.directory)?.status === "failed")) {
-      discard(retained)
-      retained = undefined
-    }
-    if (retained && !retained.delivery && retained.worktree !== worktreeSelection) {
-      discard(retained)
-      retained = undefined
-    }
-    if (retained?.accepted) {
-      finalize(retained)
-      return
-    }
+    const images = input.imageAttachments().slice()
+    const mode = input.mode()
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
       if (input.working()) void abort()
       return
     }
 
-    const currentModel = selectedModel ?? local.model.current()
-    const currentAgent = selectedAgent ?? local.agent.current()
+    const currentModel = local.model.current()
+    const currentAgent = local.agent.current()
+    const variant = local.model.variant.current()
     if (!currentModel || !currentAgent) {
       showToast({
         title: language.t("prompt.toast.modelAgentRequired.title"),
@@ -509,147 +318,83 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    if (!isNewSession) {
-      input.addToHistory(currentPrompt, mode)
-      input.resetHistoryNavigation()
-    }
+    input.addToHistory(currentPrompt, mode)
+    input.resetHistoryNavigation()
 
+    const projectDirectory = sdk.directory
+    const isNewSession = !params.id
     const shouldAutoAccept = isNewSession && input.autoAccept()
-    let state = retained
-    let scopedClient: typeof sdk.client | undefined
-    if (isNewSession && state?.creating) return
-    if (isNewSession && !state) {
-      state = tabs.submission.set(owner, {
-        directory:
-          worktreeSelection !== "main" && worktreeSelection !== "create" ? worktreeSelection : projectDirectory,
-        worktree: worktreeSelection,
-        creating: true,
-        autoAccept: shouldAutoAccept,
-      })
-      const createdState = state
-      state.dispose = () => disposeSubmission({ serverSDK, serverSync }, createdState)
+    const worktreeSelection = input.newSessionWorktree?.() || "main"
 
+    let sessionDirectory = projectDirectory
+    let client = sdk.client
+
+    if (isNewSession) {
       if (worktreeSelection === "create") {
-        const failure: { value?: unknown } = {}
-        const created = await sdk.client.worktree
+        const createdWorktree = await client.worktree
           .create({ directory: projectDirectory })
-          .then((result) => result.data)
+          .then((x) => x.data)
           .catch((err) => {
-            failure.value = err
+            showToast({
+              title: language.t("prompt.toast.worktreeCreateFailed.title"),
+              description: errorMessage(err),
+            })
             return undefined
           })
-        if (!held(state)) {
-          cleanup(state)
-          return
-        }
-        if (!created?.directory) {
-          const visible = owns(state)
-          discard(state)
-          if (!visible) return
+
+        if (!createdWorktree?.directory) {
           showToast({
             title: language.t("prompt.toast.worktreeCreateFailed.title"),
-            description: failure.value ? errorMessage(failure.value) : language.t("common.requestFailed"),
+            description: language.t("common.requestFailed"),
           })
           return
         }
-        state.directory = created.directory
-        WorktreeState.pending(sdk.scope, state.directory)
-        if (state.abandoned) {
-          state.creating = false
-          discard(state)
-          return
-        }
-        if (!owns(state)) {
-          state.creating = false
-          return
-        }
+        WorktreeState.pending(sdk.scope, createdWorktree.directory)
+        sessionDirectory = createdWorktree.directory
       }
 
-      const scoped =
-        state.directory === projectDirectory
-          ? sdk.client
-          : sdk.createClient({ directory: state.directory, throwOnError: true })
-      scopedClient = scoped
-      const failure: { value?: unknown } = {}
-      const created = await scoped.session
-        .create()
-        .then((result) => result.data)
-        .catch((err) => {
-          failure.value = err
-          return undefined
+      if (worktreeSelection !== "main" && worktreeSelection !== "create") {
+        sessionDirectory = worktreeSelection
+      }
+
+      if (sessionDirectory !== projectDirectory) {
+        client = sdk.createClient({
+          directory: sessionDirectory,
+          throwOnError: true,
         })
-      state.creating = false
-      if (created) state.session = created
-      if (!held(state)) {
-        cleanup(state)
-        return
+        serverSync.child(sessionDirectory)
       }
-      if (!created) {
-        const visible = owns(state)
-        discard(state)
-        if (!visible) return
-        showToast({
-          title: language.t("prompt.toast.sessionCreateFailed.title"),
-          description: failure.value ? errorMessage(failure.value) : language.t("common.requestFailed"),
-        })
-        return
-      }
-      if (state.abandoned) {
-        discard(state)
-        return
-      }
-      if (!owns(state)) return
+
+      input.onNewSessionWorktreeReset?.()
     }
 
-    if (isNewSession && state && !state.session && !state.creating) {
-      state.creating = true
-      const scoped =
-        state.directory === projectDirectory
-          ? sdk.client
-          : sdk.createClient({ directory: state.directory, throwOnError: true })
-      scopedClient = scoped
-      const failure: { value?: unknown } = {}
-      const created = await scoped.session
+    let session = input.info()
+    if (!session && isNewSession) {
+      const created = await client.session
         .create()
-        .then((result) => result.data)
+        .then((x) => x.data ?? undefined)
         .catch((err) => {
-          failure.value = err
+          showToast({
+            title: language.t("prompt.toast.sessionCreateFailed.title"),
+            description: errorMessage(err),
+          })
           return undefined
         })
-      state.creating = false
-      if (created) state.session = created
-      if (!held(state)) {
-        cleanup(state)
-        return
+      if (created) {
+        seed(sessionDirectory, created)
+        session = created
+        if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
+        local.session.promote(sessionDirectory, session.id)
+        layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
+        const draftID = search.draftId
+        if (draftID)
+          tabs.promoteDraft(draftID, {
+            server: server.key,
+            dirBase64: base64Encode(sessionDirectory),
+            sessionId: session.id,
+          })
+        else navigate(`/${base64Encode(sessionDirectory)}/session/${session.id}`)
       }
-      if (!created) {
-        const visible = owns(state)
-        discard(state)
-        if (!visible) return
-        showToast({
-          title: language.t("prompt.toast.sessionCreateFailed.title"),
-          description: failure.value ? errorMessage(failure.value) : language.t("common.requestFailed"),
-        })
-        return
-      }
-      if (state.abandoned) {
-        discard(state)
-        return
-      }
-      if (!owns(state)) return
-    }
-
-    const sessionDirectory = state?.directory ?? projectDirectory
-    const client =
-      scopedClient ??
-      (sessionDirectory === projectDirectory
-        ? sdk.client
-        : sdk.createClient({ directory: sessionDirectory, throwOnError: true }))
-    if (sessionDirectory !== projectDirectory) serverSync.child(sessionDirectory)
-    const session = state?.session ?? input.info()
-    if (state?.session && state.autoAccept && !state.autoAccepted) {
-      permission.enableAutoAccept(state.session.id, state.directory)
-      state.autoAccepted = true
     }
     if (!session) {
       showToast({
@@ -664,6 +409,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       providerID: currentModel.provider.id,
     }
     const agent = currentAgent.name
+    const context = prompt.context.items().slice()
     const draft: FollowupDraft = {
       sessionID: session.id,
       sessionDirectory,
@@ -693,24 +439,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
     }
 
-    const promoteImmediate = () => {
-      if (!isNewSession || !state?.session || !owns(state)) return
-      seed(sessionDirectory, state.session)
-      local.session.promote(sessionDirectory, session.id)
-      layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
-      if (draftID)
-        tabs.promoteDraft(draftID, {
-          server: server.key,
-          dirBase64: base64Encode(sessionDirectory),
-          sessionId: session.id,
-        })
-      else {
-        tabs.submission.release(owner)
-        navigate(`/${base64Encode(sessionDirectory)}/session/${session.id}`)
-      }
-      input.onNewSessionWorktreeReset?.()
-    }
-
     if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {
       input.onQueue?.(draft)
       clearContext()
@@ -718,15 +446,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    if (!isNewSession) input.onSubmit?.()
+    input.onSubmit?.()
 
-    if (mode === "shell" && !state?.delivery) {
-      if (isNewSession) {
-        input.addToHistory(currentPrompt, mode)
-        input.resetHistoryNavigation()
-        promoteImmediate()
-        input.onSubmit?.()
-      }
+    if (mode === "shell") {
       clearInput()
       client.session
         .shell({
@@ -745,17 +467,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    if (text.startsWith("/") && !state?.delivery) {
+    if (text.startsWith("/")) {
       const [cmdName, ...args] = text.split(" ")
       const commandName = cmdName.slice(1)
       const customCommand = sync.data.command.find((c) => c.name === commandName)
       if (customCommand) {
-        if (isNewSession) {
-          input.addToHistory(currentPrompt, mode)
-          input.resetHistoryNavigation()
-          promoteImmediate()
-          input.onSubmit?.()
-        }
         clearInput()
         client.session
           .command({
@@ -784,30 +500,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       }
     }
 
-    const delivery =
-      state?.delivery ??
-      (() => {
-        const messageID = Identifier.ascending("message")
-        return {
-          messageID,
-          request: draft,
-          snapshot,
-          prepared: buildRequestParts({
-            prompt: draft.prompt,
-            context: draft.context,
-            images: draftImages(draft.prompt),
-            text: draftText(draft.prompt),
-            sessionID: draft.sessionID,
-            messageID,
-            sessionDirectory: draft.sessionDirectory,
-          }),
-          sending: false,
-        }
-      })()
-    if (state) state.delivery = delivery
-    if (state) state.lastMessageID = delivery.messageID
-    const commentItems = delivery.request.context.filter((item) => item.type === "file" && !!item.comment?.trim())
-    const messageID = delivery.messageID
+    const commentItems = context.filter((item) => item.type === "file" && !!item.comment?.trim())
+    const messageID = Identifier.ascending("message")
 
     const removeOptimisticMessage = () => {
       sync.session.optimistic.remove({
@@ -817,15 +511,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
     }
 
-    if (!isNewSession) {
-      removeCommentItems(commentItems)
-      clearInput()
-    }
+    removeCommentItems(commentItems)
+    clearInput()
 
     const waitForWorktree = async () => {
       const worktree = WorktreeState.get(sdk.scope, sessionDirectory)
-      if (!worktree || worktree.status === "ready") return true
-      if (worktree.status === "failed") throw new Error(worktree.message)
+      if (!worktree || worktree.status !== "pending") return true
 
       if (sessionDirectory === projectDirectory) {
         sync.set("session_status", session.id, { type: "busy" })
@@ -837,10 +528,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           sync.set("session_status", session.id, { type: "idle" })
         }
         removeOptimisticMessage()
-        if (!isNewSession) {
-          restoreCommentItems(commentItems)
-          restoreInput()
-        }
+        restoreCommentItems(commentItems)
+        restoreInput()
       }
 
       pending.set(pendingKey(session.id), { abort: controller, cleanup })
@@ -877,81 +566,20 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         },
       )
       pending.delete(pendingKey(session.id))
-      if (isNewSession && state && !owns(state)) return false
       if (controller.signal.aborted) return false
       if (result.status === "failed") throw new Error(result.message)
       return true
     }
 
-    if (isNewSession && delivery.sending) return
-    if (isNewSession) delivery.sending = true
-    const send = sendFollowupDraft({
+    void sendFollowupDraft({
       client,
       sync,
       serverSync,
-      draft: delivery.request,
+      draft,
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory,
       before: waitForWorktree,
-      prepared: delivery.prepared,
-    })
-
-    if (isNewSession) {
-      try {
-        const accepted = await send
-        if (!state) return
-        if (!held(state)) {
-          cleanup(state)
-          return
-        }
-        delivery.sending = false
-        if (state.abandoned) {
-          discard(state)
-          return
-        }
-        if (!accepted) {
-          state.delivery = undefined
-          const failed = WorktreeState.get(sdk.scope, state.directory)?.status === "failed"
-          const changed = (input.newSessionWorktree?.() || "main") !== state.worktree
-          if (failed || changed) discard(state)
-          return
-        }
-        state.accepted = true
-        tabs.submission.touch()
-        if (!owns(state)) return
-        finalize(state)
-      } catch (err) {
-        if (!state) return
-        if (!held(state)) {
-          cleanup(state)
-          return
-        }
-        delivery.sending = false
-        pending.delete(pendingKey(session.id))
-        if (sessionDirectory === projectDirectory) sync.set("session_status", session.id, { type: "idle" })
-        if (state.abandoned) {
-          discard(state)
-          return
-        }
-        if (err instanceof PromptDeliveryError && err.delivery !== "ambiguous") {
-          state.delivery = undefined
-          const failed = WorktreeState.get(sdk.scope, state.directory)?.status === "failed"
-          const changed = (input.newSessionWorktree?.() || "main") !== state.worktree
-          if (failed || changed) {
-            discard(state)
-            return
-          }
-        }
-        if (!owns(state)) return
-        showToast({
-          title: language.t("prompt.toast.promptSendFailed.title"),
-          description: errorMessage(err),
-        })
-      }
-      return
-    }
-
-    void send.catch((err) => {
+    }).catch((err) => {
       pending.delete(pendingKey(session.id))
       if (sessionDirectory === projectDirectory) {
         sync.set("session_status", session.id, { type: "idle" })
@@ -964,17 +592,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       restoreCommentItems(commentItems)
       restoreInput()
     })
-  }
-
-  const handleSubmit = (event: Event) => {
-    event.preventDefault()
-    if (params.id) return submit()
-    if (submission) return submission
-    const next = submit().finally(() => {
-      if (submission === next) submission = undefined
-    })
-    submission = next
-    return next
   }
 
   return {

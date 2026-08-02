@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
+import { Permission } from "@/permission"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { PermissionNotFoundError } from "../errors"
@@ -11,9 +12,6 @@ const root = "/permission"
 const ReplyPayload = Schema.Struct({
   reply: PermissionV1.Reply,
   message: Schema.optional(Schema.String),
-})
-const BatchReplyPayload = Schema.Struct({
-  ...PermissionV1.BatchReplyBody.fields,
 })
 
 export const PermissionApi = HttpApi.make("permission")
@@ -41,19 +39,6 @@ export const PermissionApi = HttpApi.make("permission")
             identifier: "permission.reply",
             summary: "Respond to permission request",
             description: "Approve or deny a permission request from the AI assistant.",
-          }),
-        ),
-        HttpApiEndpoint.post("replyBatch", `${root}/batch/:batchID/reply`, {
-          params: { batchID: PermissionV1.BatchID },
-          query: WorkspaceRoutingQuery,
-          payload: BatchReplyPayload,
-          success: described(Schema.Boolean, "Permission forecast batch processed successfully"),
-          error: [HttpApiError.BadRequest],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "permission.replyBatch",
-            summary: "Respond to a forecast batch",
-            description: "Approve selected forecast permissions and skip every unselected item atomically.",
           }),
         ),
       )

@@ -18,7 +18,7 @@ export const product = {
   },
   share: {
     default_url: "https://slopcode.dev",
-    dev_url: "https://dev.slopcode.ai",
+    dev_url: "https://dev.slopcode.dev",
   },
   github: {
     owner: "teamslop",
@@ -35,7 +35,7 @@ export const product = {
     docs: "https://slopcode.dev/docs",
     discord: "https://slopcode.dev/discord",
     install: "https://slopcode.dev/install",
-    api: "https://api.slopcode.ai",
+    api: "https://api.slopcode.dev",
     github: "https://github.com/teamslop/slopcode",
     github_app: "https://github.com/apps/slopcode-agent",
   },

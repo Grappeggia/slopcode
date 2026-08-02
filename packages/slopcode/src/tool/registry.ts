@@ -1,7 +1,7 @@
 import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
 import { httpClient } from "@slopcode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
-import { PlanExitTool, PlanPermissionsTool } from "./plan"
+import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -96,7 +96,6 @@ export const layer = Layer.effect(
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
-    const planPermissions = yield* PlanPermissionsTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -213,7 +212,6 @@ export const layer = Layer.effect(
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
-          planPermissions: Tool.init(planPermissions),
         })
 
         return {
@@ -234,7 +232,7 @@ export const layer = Layer.effect(
             tool.skill,
             tool.patch,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.planPermissions, tool.plan] : []),
+            ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
           task: tool.task,
           read: tool.read,
@@ -323,7 +321,6 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Config.defaultLayer),
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(Question.defaultLayer),
-      Layer.provide(Permission.defaultLayer),
       Layer.provide(Todo.defaultLayer),
       Layer.provide(Skill.defaultLayer),
       Layer.provide(Agent.defaultLayer),
@@ -422,7 +419,6 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   Config.node,
   Plugin.node,
   Question.node,
-  Permission.node,
   Todo.node,
   Agent.node,
   Skill.node,

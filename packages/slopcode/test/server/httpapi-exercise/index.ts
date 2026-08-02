@@ -144,34 +144,6 @@ const scenarios: Scenario[] = [
   http.protected.get("/skill", "app.skills").json(200, array, "status"),
   http.protected.get("/lsp", "lsp.status").json(200, array),
   http.protected.get("/formatter", "formatter.status").json(200, array),
-  http.protected.get("/memory", "memory.list").json(200, array),
-  http.protected
-    .post("/memory", "memory.create")
-    .mutating()
-    .at((ctx) => ({
-      path: "/memory",
-      headers: ctx.headers(),
-      body: { content: "Keep HTTP API memory coverage deterministic" },
-    }))
-    .json(200, object),
-  http.protected
-    .patch("/memory/{memoryID}", "memory.update.missing")
-    .at((ctx) => ({
-      path: route("/memory/{memoryID}", { memoryID: "mem_missing" }),
-      headers: ctx.headers(),
-      body: { enabled: false },
-    }))
-    .status(400),
-  http.protected
-    .delete("/memory/{memoryID}", "memory.delete.missing")
-    .mutating()
-    .at((ctx) => ({
-      path: route("/memory/{memoryID}", { memoryID: "mem_missing" }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body) => {
-      check(body === true, "memory delete should be idempotent")
-    }),
   http.protected.get("/config", "config.get").json(200, undefined, "status"),
   http.protected
     .patch("/config", "config.update")
@@ -291,7 +263,6 @@ const scenarios: Scenario[] = [
     .status(204, undefined, "status"),
   http.protected.get("/provider", "provider.list").json(),
   http.protected.get("/provider/auth", "provider.auth").json(),
-  http.protected.get("/provider/openai/usage", "provider.openai.usage").json(200, object),
   http.protected
     .post("/provider/{providerID}/oauth/authorize", "provider.oauth.authorize")
     .at((ctx) => ({
@@ -325,14 +296,6 @@ const scenarios: Scenario[] = [
       body: { reply: "once" },
     }))
     .json(404, object, "status"),
-  http.protected
-    .post("/permission/batch/{batchID}/reply", "permission.replyBatch")
-    .at((ctx) => ({
-      path: route("/permission/batch/{batchID}/reply", { batchID: "pmb_httpapi" }),
-      headers: ctx.headers(),
-      body: { requestIDs: [], reply: "reject" },
-    }))
-    .status(400),
   http.protected.get("/question", "question.list").json(200, array),
   http.protected
     .post("/question/{requestID}/reply", "question.reply.invalid")
@@ -455,9 +418,9 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/mcp/{name}/auth/callback", { name: "httpapi-missing" }),
       headers: ctx.headers(),
-      body: { code: "code" },
+      body: { state: "state", code: "code" },
     }))
-    .json(404, object, "status"),
+    .json(400, object, "status"),
   http.protected
     .post("/mcp/{name}/connect", "mcp.connect")
     .mutating()
@@ -699,7 +662,6 @@ const scenarios: Scenario[] = [
   http.protected.get("/api/agent", "v2.agent.list").json(200, locationData(array)),
   http.protected.get("/api/model", "v2.model.list").json(200, locationData(array)),
   http.protected.get("/api/provider", "v2.provider.list").json(200, locationData(array)),
-  http.protected.get("/api/provider/openai/usage", "v2.provider.openai.usage").json(200, locationData(object)),
   http.protected.get("/api/integration", "v2.integration.list").json(200, locationData(array)),
   http.protected
     .get("/api/integration/{integrationID}", "v2.integration.get")
@@ -861,60 +823,14 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
     }))
     .json(404, object, "status"),
-  http.protected
-    .get("/api/permission/saved", "v2.permission.saved.list")
-    .at((ctx) => ({ path: "/api/permission/saved?projectID=global", headers: ctx.headers() }))
-    .json(200, (body) => {
-      object(body)
-      array(body.data)
-      check(body.data.length === 0, "global project must not expose saved permissions")
-    }),
+  http.protected.get("/api/permission/saved", "v2.permission.saved.list").json(200, (body) => {
+    object(body)
+    array(body.data)
+  }),
   http.protected
     .delete("/api/permission/saved/{id}", "v2.permission.saved.remove")
     .at((ctx) => ({ path: route("/api/permission/saved/{id}", { id: "psv_httpapi_missing" }), headers: ctx.headers() }))
     .status(204, undefined, "status"),
-  http.protected
-    .post("/api/permission/saved/clear", "v2.permission.saved.clear")
-    .at((ctx) => ({
-      path: "/api/permission/saved/clear",
-      headers: ctx.headers(),
-      body: { scope: "global", confirm: true },
-    }))
-    .json(
-      200,
-      data((value) => check(typeof value === "number", "saved clear should return a count")),
-    ),
-  http.protected
-    .get("/api/session/{sessionID}/permission/saved", "v2.session.permission.saved.list")
-    .seeded((ctx) => ctx.session({ title: "Session saved permissions" }))
-    .at((ctx) => ({
-      path: route("/api/session/{sessionID}/permission/saved", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-    }))
-    .json(200, data(array)),
-  http.protected
-    .delete("/api/session/{sessionID}/permission/saved/{id}", "v2.session.permission.saved.remove")
-    .seeded((ctx) => ctx.session({ title: "Session saved permission removal" }))
-    .at((ctx) => ({
-      path: route("/api/session/{sessionID}/permission/saved/{id}", {
-        sessionID: ctx.state.id,
-        id: "psv_httpapi_missing",
-      }),
-      headers: ctx.headers(),
-    }))
-    .status(204, undefined, "status"),
-  http.protected
-    .post("/api/session/{sessionID}/permission/saved/clear", "v2.session.permission.saved.clear")
-    .seeded((ctx) => ctx.session({ title: "Session saved permission clear" }))
-    .at((ctx) => ({
-      path: route("/api/session/{sessionID}/permission/saved/clear", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-      body: { confirm: true },
-    }))
-    .json(
-      200,
-      data((value) => check(typeof value === "number", "session saved clear should return a count")),
-    ),
   http.protected
     .get("/api/session", "v2.session.list")
     .at((ctx) => ({ path: "/api/session?roots=true", headers: ctx.headers() }))
@@ -1330,6 +1246,15 @@ const scenarios: Scenario[] = [
       check(body === true, "abort should return true")
     }),
   http.protected
+    .post("/session/{sessionID}/abort", "session.abort.missing")
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/abort", { sessionID: "ses_httpapi_missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      check(body === true, "missing session abort should remain a no-op success")
+    }),
+  http.protected
     .post("/session/{sessionID}/init", "session.init")
     .preserveDatabase()
     .withLlm()
@@ -1444,6 +1369,7 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/session/{sessionID}/side-question", "session.side_question")
     .withLlm()
+    .stream()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "Side question session" })
@@ -1457,7 +1383,6 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: {
         question: "What is the relevant context?",
-        turns: [{ question: "What are we discussing?", answer: "The relevant context." }],
         agent: "build",
         model: { providerID: "test", modelID: "test-model" },
       },
@@ -1558,34 +1483,6 @@ const scenarios: Scenario[] = [
         }),
       "status",
     ),
-  http.protected
-    .post("/session/{sessionID}/autocomplete", "session.autocomplete")
-    .seeded((ctx) => ctx.session({ title: "Autocomplete" }))
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/autocomplete", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-      body: {
-        requestID: "httpapi-autocomplete",
-        model: { providerID: "slopcode", modelID: "big-pickle" },
-        prefix: "const value =",
-      },
-    }))
-    .json(200, (body) => {
-      object(body)
-      check(typeof body.completion === "string", "autocomplete should return text")
-      check(typeof body.model === "string", "autocomplete should return its model")
-    }),
-  http.protected
-    .delete("/session/{sessionID}/autocomplete/{requestID}", "session.abortAutocomplete")
-    .seeded((ctx) => ctx.session({ title: "Abort autocomplete" }))
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/autocomplete/{requestID}", {
-        sessionID: ctx.state.id,
-        requestID: "httpapi-autocomplete-missing",
-      }),
-      headers: ctx.headers(),
-    }))
-    .json(200, boolean),
   http.protected
     .post("/session/{sessionID}/revert", "session.revert")
     .mutating()

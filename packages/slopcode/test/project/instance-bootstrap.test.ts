@@ -47,7 +47,7 @@ const bootstrapFixture = Effect.gen(function* () {
     Bun.write(
       path.join(dir, "slopcode.json"),
       JSON.stringify({
-        $schema: "https://slopcode.ai/config.json",
+        $schema: "https://slopcode.dev/config.json",
         plugin: [pathToFileURL(pluginFile).href],
       }),
     ),

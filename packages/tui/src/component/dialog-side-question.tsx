@@ -1,38 +1,16 @@
 import { ScrollBoxRenderable, TextareaRenderable, TextAttributes } from "@opentui/core"
-import type { SessionSideQuestionEvent, SessionSideQuestionTurn } from "@slopcode-ai/sdk/v2"
-import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useClipboard } from "../context/clipboard"
 import { useSDK } from "../context/sdk"
 import { useTheme } from "../context/theme"
 import { useBindings } from "../keymap"
 import { errorMessage } from "../util/error"
-import { density, isDense } from "../util/density"
 import { useToast } from "../ui/toast"
 
-const INACTIVITY_TIMEOUT = 30_000
-const MAX_TURNS = 32
-const MAX_TEXT = 64_000
+type SideEvent = { type: "text"; text: string } | { type: "error"; message: string } | { type: "done" }
 
-function context(items: SessionSideQuestionTurn[]) {
-  const selected = items.slice(-MAX_TURNS)
-  const questions = selected.filter((turn) => turn.question.length > MAX_TEXT).length
-  const answers = selected.filter((turn) => turn.answer.length > MAX_TEXT).length
-  const omitted = items.length - selected.length
-  const notes = [
-    ...(omitted ? [`${omitted} older ${omitted === 1 ? "turn" : "turns"} omitted`] : []),
-    ...(questions ? [`${questions} oversized ${questions === 1 ? "question" : "questions"} truncated`] : []),
-    ...(answers ? [`${answers} oversized ${answers === 1 ? "answer" : "answers"} truncated`] : []),
-  ]
-  return {
-    turns: selected.map((turn) => ({
-      question: turn.question.slice(0, MAX_TEXT),
-      answer: turn.answer.trim().slice(0, MAX_TEXT),
-    })),
-    note: notes.length ? `Carried context limited: ${notes.join("; ")}. Full transcript remains visible.` : undefined,
-  }
-}
+const FIRST_EVENT_TIMEOUT = 30_000
 
 export function SideQuestion(props: {
   sessionID: string
@@ -41,33 +19,18 @@ export function SideQuestion(props: {
   model: { providerID: string; modelID: string }
   variant?: string
   focused?: boolean
-  inactivityTimeout?: number
   onClose: () => void
 }) {
   const sdk = useSDK()
   const clipboard = useClipboard()
   const toast = useToast()
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
-  const dense = () => isDense(density(dimensions()))
-  const [store, setStore] = createStore<{
-    turns: SessionSideQuestionTurn[]
-    question?: string
-    answer: string
-    error?: string
-    context?: string
-    loading: boolean
-    started: boolean
-    used: number
-    status?: Extract<SessionSideQuestionEvent, { type: "status" }>
-    read?: Extract<SessionSideQuestionEvent, { type: "read" }>
-    usage?: Extract<SessionSideQuestionEvent, { type: "usage" }>
-  }>({
-    turns: [],
+  const [store, setStore] = createStore({
     answer: "",
+    error: undefined as string | undefined,
     loading: false,
+    complete: false,
     started: false,
-    used: 0,
   })
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable>()
   let input: TextareaRenderable
@@ -75,70 +38,37 @@ export function SideQuestion(props: {
   let controller: AbortController | undefined
 
   const bottom = () => setTimeout(() => scroll?.scrollTo(scroll.scrollHeight), 0)
-  const files = () => store.used
-  const copyable = () => (store.loading && store.answer ? store.answer : store.turns.at(-1)?.answer)
   const copy = () => {
-    const answer = copyable()
-    if (!answer || !clipboard.write) return
-    void clipboard.write(answer).then(
+    if (!store.answer || !clipboard.write) return
+    void clipboard.write(store.answer).then(
       () => toast.show({ message: "Side answer copied to clipboard", variant: "info" }),
       (error) => toast.error(error),
     )
   }
 
   function ask() {
-    if (store.loading) return
+    if (store.loading || store.complete) return
     const question = input.plainText.trim()
     if (!question) return
-    if (question.length > MAX_TEXT) {
-      setStore({
-        error: `Side question cannot exceed ${MAX_TEXT.toLocaleString("en-US")} characters. Shorten it and press enter to retry.`,
-        context: undefined,
-        loading: false,
-        started: true,
-      })
-      bottom()
-      return
-    }
 
     controller?.abort()
     const ctrl = new AbortController()
     controller = ctrl
-    const carried = context(store.turns)
-    setStore({
-      question,
-      answer: "",
-      error: undefined,
-      context: carried.note,
-      loading: true,
-      started: true,
-      used: 0,
-      status: undefined,
-      read: undefined,
-      usage: undefined,
-    })
+    setStore({ answer: "", error: undefined, loading: true, complete: false, started: true })
 
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    let answer = ""
-    let done = false
-    const activity = () => {
-      clearTimeout(timeout)
-      timeout = setTimeout(() => {
-        if (ctrl.signal.aborted) return
-        setStore("error", "Side question timed out due to inactivity. Press enter to retry.")
-        setStore("loading", false)
-        ctrl.abort()
-      }, props.inactivityTimeout ?? INACTIVITY_TIMEOUT)
-    }
-    ctrl.signal.addEventListener("abort", () => clearTimeout(timeout), { once: true })
-    activity()
+    let received = false
+    const timeout = setTimeout(() => {
+      if (received || ctrl.signal.aborted) return
+      setStore("error", "Side question timed out before receiving a response. Press enter to retry.")
+      setStore("loading", false)
+      ctrl.abort()
+    }, FIRST_EVENT_TIMEOUT)
 
     void (async () => {
       const result = await sdk.client.session.sideQuestion(
         {
           sessionID: props.sessionID,
           question,
-          turns: carried.turns.length ? carried.turns : undefined,
           agent: props.agent,
           model: props.model,
           variant: props.variant,
@@ -146,58 +76,25 @@ export function SideQuestion(props: {
         { signal: ctrl.signal, sseMaxRetryAttempts: 0 },
       )
 
-      for await (const event of result.stream) {
+      for await (const event of result.stream as AsyncGenerator<SideEvent>) {
         if (ctrl.signal.aborted) return
-        if (event.type === "status") {
-          activity()
-          setStore("status", event)
-          bottom()
-        }
-        if (event.type === "read") {
-          activity()
-          setStore("read", event)
-          setStore("used", (used) => Math.max(used, event.files))
-          bottom()
-        }
-        if (event.type === "usage") {
-          setStore("usage", event)
-          setStore("used", (used) => Math.max(used, event.files))
-          bottom()
+        if (!received) {
+          received = true
+          clearTimeout(timeout)
         }
         if (event.type === "text") {
-          activity()
-          answer += event.text
-          setStore("answer", answer)
+          setStore("answer", (text) => text + event.text)
           bottom()
         }
         if (event.type === "error") {
           setStore("error", event.message)
           setStore("loading", false)
-          ctrl.abort()
-          return
         }
         if (event.type === "done") {
-          done = true
-          clearTimeout(timeout)
           setStore("loading", false)
-          if (!answer.trim()) {
-            setStore("error", "Side question completed without an answer. Press enter to retry.")
-            return
-          }
-          setStore("turns", (items) => [...items, { question, answer }])
-          setStore({ question: undefined, answer: "", status: undefined, read: undefined, usage: undefined, used: 0 })
-          input.setText("")
-          setTimeout(() => {
-            if (props.focused === false || input.isDestroyed) return
-            input.focus()
-            input.gotoBufferEnd()
-          }, 0)
-          bottom()
-          return
+          setStore("complete", !store.error)
         }
       }
-      if (done || ctrl.signal.aborted) return
-      setStore("error", "Side question stream ended before done. Press enter to retry.")
     })()
       .catch((error) => {
         if (ctrl.signal.aborted) return
@@ -215,19 +112,14 @@ export function SideQuestion(props: {
       { key: "escape", desc: "Close side question", group: "Prompt", cmd: props.onClose },
       { key: "up", desc: "Scroll side answer up", group: "Dialog", cmd: () => scroll?.scrollBy(-1) },
       { key: "down", desc: "Scroll side answer down", group: "Dialog", cmd: () => scroll?.scrollBy(1) },
-      { key: "ctrl+c", desc: "Copy side answer", group: "Dialog", cmd: copy },
-    ].filter(
-      (binding) =>
-        binding.key === "escape" ||
-        ((binding.key === "up" || binding.key === "down") && store.started) ||
-        (binding.key === "ctrl+c" && Boolean(copyable())),
-    ),
+      { key: "c", desc: "Copy side answer", group: "Dialog", cmd: copy },
+    ].filter((binding) => binding.key === "escape" || store.loading || store.complete),
   }))
 
   createEffect(() => {
     const target = inputTarget()
     if (!target || target.isDestroyed) return
-    target.traits = store.loading ? { suspend: true, status: "BUSY" } : {}
+    target.traits = store.loading || store.complete ? { suspend: true, status: "BUSY" } : {}
   })
 
   createEffect(() => {
@@ -266,64 +158,19 @@ export function SideQuestion(props: {
         height={store.started ? 1 : 3}
         placeholder="Ask a question about the current session"
         placeholderColor={theme.textMuted}
-        textColor={store.loading ? theme.textMuted : theme.text}
-        focusedTextColor={store.loading ? theme.textMuted : theme.text}
+        textColor={store.loading || store.complete ? theme.textMuted : theme.text}
+        focusedTextColor={store.loading || store.complete ? theme.textMuted : theme.text}
         onSubmit={() => {
           if (store.error) setStore("error", undefined)
           ask()
         }}
       />
       <Show when={store.started}>
-        <scrollbox ref={(r: ScrollBoxRenderable) => (scroll = r)} height={8} scrollbarOptions={{ visible: false }}>
-          <For each={store.turns}>
-            {(turn) => (
-              <>
-                <text fg={theme.textMuted} wrapMode="word">
-                  You: {turn.question}
-                </text>
-                <text fg={theme.text} wrapMode="word">
-                  Side: {turn.answer}
-                </text>
-              </>
-            )}
-          </For>
-          <Show when={store.question}>
-            {(question) => (
-              <text fg={theme.textMuted} wrapMode="word">
-                You: {question()}
-              </text>
-            )}
-          </Show>
-          <Show when={store.loading && !store.answer}>
-            <text fg={theme.textMuted}>{store.status?.status === "reading" ? "Reading..." : "Thinking..."}</text>
-          </Show>
-          <Show when={store.answer}>
+        <scrollbox ref={(r: ScrollBoxRenderable) => (scroll = r)} height={4} scrollbarOptions={{ visible: false }}>
+          <Show when={store.answer} fallback={<text fg={theme.textMuted}>Thinking...</text>}>
             <text fg={theme.text} wrapMode="word">
-              Side: {store.answer}
+              {store.answer}
             </text>
-          </Show>
-          <Show when={store.read}>
-            {(read) => (
-              <text fg={theme.textMuted} wrapMode="word">
-                read {read().reference ? `${read().reference}:${read().path}` : read().path} at {read().offset} |{" "}
-                {read().lines} lines | {files()}/5 files
-              </text>
-            )}
-          </Show>
-          <Show when={store.usage}>
-            {(usage) => (
-              <text fg={theme.textMuted} wrapMode="word">
-                {usage().rounds} {usage().rounds === 1 ? "round" : "rounds"} | {usage().calls} reads | {usage().lines}{" "}
-                lines | {usage().bytes} bytes | {files()}/5 files
-              </text>
-            )}
-          </Show>
-          <Show when={store.usage}>
-            {(usage) => (
-              <text fg={theme.textMuted} wrapMode="word">
-                {usage().inputTokens} input tokens | {usage().outputTokens} output tokens
-              </text>
-            )}
           </Show>
           <Show when={store.error}>
             <text fg={theme.error} wrapMode="word">
@@ -332,21 +179,12 @@ export function SideQuestion(props: {
           </Show>
         </scrollbox>
       </Show>
-      <Show when={store.context}>
-        <text fg={theme.textMuted} wrapMode="word">
-          {store.context}
-        </text>
-      </Show>
-      <box flexDirection={dense() ? "column" : "row"} justifyContent="space-between">
+      <box flexDirection="row" justifyContent="space-between">
         <text fg={theme.textMuted}>
-          {store.loading
-            ? `${store.status?.status ?? "generating"}${store.status ? ` round ${store.status.round}` : ""} | ${files()}/5 files`
-            : store.error
-              ? `failed | ${files()}/5 files`
-              : `enter ask | ${files()}/5 files`}
+          {store.loading ? "streaming" : store.complete ? "complete" : store.error ? "failed" : "enter ask"}
         </text>
         <Show when={store.started}>
-          <text fg={theme.textMuted}>{copyable() ? "ctrl+c copy | " : ""}up/down scroll</text>
+          <text fg={theme.textMuted}>c copy | up/down scroll</text>
         </Show>
       </box>
     </box>

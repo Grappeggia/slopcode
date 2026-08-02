@@ -1,16 +1,5 @@
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
-import {
-  batch,
-  createContext,
-  createEffect,
-  getOwner,
-  onCleanup,
-  runWithOwner,
-  Show,
-  useContext,
-  type JSX,
-  type ParentProps,
-} from "solid-js"
+import { batch, createContext, createEffect, onCleanup, Show, useContext, type JSX, type ParentProps } from "solid-js"
 import { useTheme } from "../context/theme"
 import { MouseButton, Renderable, RGBA } from "@opentui/core"
 import { createStore } from "solid-js/store"
@@ -76,12 +65,10 @@ export function Dialog(
   )
 }
 
-type DialogElement = JSX.Element | (() => JSX.Element)
-
 function init() {
   const [store, setStore] = createStore({
     stack: [] as {
-      element: () => JSX.Element
+      element: JSX.Element
       onClose?: () => void
     }[],
     size: "medium" as "medium" | "large" | "xlarge",
@@ -159,12 +146,7 @@ function init() {
       })
       refocus()
     },
-    replace(input: DialogElement, onClose?: () => void) {
-      const owner = getOwner()
-      const element = () => {
-        const render = () => (typeof input === "function" ? input() : input)
-        return owner ? runWithOwner(owner, render) : render()
-      }
+    replace(input: any, onClose?: () => void) {
       if (store.stack.length === 0) {
         focus = renderer.currentFocusedRenderable
         focus?.blur()
@@ -175,7 +157,7 @@ function init() {
       setStore("size", "medium")
       setStore("stack", [
         {
-          element,
+          element: input,
           onClose,
         },
       ])
@@ -231,7 +213,7 @@ export function DialogProvider(props: ParentProps) {
       >
         <Show when={value.stack.length}>
           <Dialog onClose={() => value.clear()} size={value.size}>
-            {value.stack.at(-1)!.element()}
+            {value.stack.at(-1)!.element}
           </Dialog>
         </Show>
       </box>

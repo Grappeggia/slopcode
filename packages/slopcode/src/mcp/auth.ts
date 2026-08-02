@@ -22,14 +22,23 @@ export const ClientInfo = Schema.Struct({
 })
 export type ClientInfo = Schema.Schema.Type<typeof ClientInfo>
 
-const fields = {
+const legacyFields = {
   tokens: Schema.mutableKey(Schema.optional(Tokens)),
   clientInfo: Schema.mutableKey(Schema.optional(ClientInfo)),
   codeVerifier: Schema.mutableKey(Schema.optional(Schema.String)),
   oauthState: Schema.mutableKey(Schema.optional(Schema.String)),
 }
 
-export const Entry = Schema.Struct(fields)
+export const Flow = Schema.Struct({
+  state: Schema.String,
+  codeVerifier: Schema.mutableKey(Schema.optional(Schema.String)),
+})
+export type Flow = Schema.Schema.Type<typeof Flow>
+
+export const Entry = Schema.Struct({
+  ...legacyFields,
+  flows: Schema.mutableKey(Schema.optional(Schema.Record(Schema.String, Flow))),
+})
 export type Entry = Schema.Schema.Type<typeof Entry>
 
 export const Identity = Schema.Struct({
@@ -39,7 +48,7 @@ export const Identity = Schema.Struct({
 export type Identity = Schema.Schema.Type<typeof Identity>
 
 const LegacyEntry = Schema.Struct({
-  ...fields,
+  ...legacyFields,
   serverUrl: Schema.mutableKey(Schema.optional(Schema.String)),
 })
 type LegacyEntry = Schema.Schema.Type<typeof LegacyEntry>
@@ -88,16 +97,16 @@ function empty(): Data {
   return { version: 2, entries: {} }
 }
 
-function present(entry: LegacyEntry) {
-  return !!(entry.tokens || entry.clientInfo || entry.codeVerifier || entry.oauthState)
-}
-
 function migrate(raw: unknown): { data: Data; dirty: boolean } {
   const current = decodeData(raw)
   if (Option.isSome(current)) return { data: current.value, dirty: false }
 
+  if (typeof raw === "object" && raw !== null && "version" in raw) {
+    throw new Error("Unsupported MCP OAuth storage version")
+  }
+
   const decoded = decodeLegacy(raw)
-  if (Option.isNone(decoded)) return { data: empty(), dirty: false }
+  if (Option.isNone(decoded)) throw new Error("Invalid MCP OAuth storage")
 
   const legacy: Record<string, LegacyEntry> = {}
   const recoverable: Record<string, LegacyEntry> = {}
@@ -114,10 +123,7 @@ function migrate(raw: unknown): { data: Data; dirty: boolean } {
       continue
     }
 
-    const stable = { serverUrl, tokens: entry.tokens, clientInfo: entry.clientInfo }
-    const transient = { serverUrl, codeVerifier: entry.codeVerifier, oauthState: entry.oauthState }
-    if (present(stable)) legacy[name] = stable
-    if (present(transient)) recoverable[name] = transient
+    legacy[name] = { ...entry, serverUrl }
   }
 
   return {
@@ -131,44 +137,6 @@ function migrate(raw: unknown): { data: Data; dirty: boolean } {
   }
 }
 
-function claim(data: Data, identity: Identity, serverUrl: string): { data: Data; entry?: Entry } {
-  const bucket = data.entries[id(identity)]
-  const entry = bucket?.servers[serverUrl]
-  const source = data.legacy?.[identity.name]
-  if (!source || source.serverUrl !== serverUrl) return { data, entry }
-
-  const moved = {
-    ...(!entry?.tokens && source.tokens ? { tokens: source.tokens } : {}),
-    ...(!entry?.clientInfo && source.clientInfo ? { clientInfo: source.clientInfo } : {}),
-  }
-  if (!moved.tokens && !moved.clientInfo) return { data, entry }
-
-  const next = { ...entry, ...moved }
-  const remaining = {
-    ...source,
-    ...(moved.tokens ? { tokens: undefined } : {}),
-    ...(moved.clientInfo ? { clientInfo: undefined } : {}),
-  }
-  const legacy = { ...data.legacy }
-  if (present(remaining)) legacy[identity.name] = remaining
-  else delete legacy[identity.name]
-
-  return {
-    data: {
-      ...data,
-      entries: {
-        ...data.entries,
-        [id(identity)]: {
-          identity,
-          servers: { ...bucket?.servers, [serverUrl]: next },
-        },
-      },
-      legacy: Object.keys(legacy).length ? legacy : undefined,
-    },
-    entry: next,
-  }
-}
-
 export interface Interface {
   readonly get: (identity: Identity, serverUrl: string) => Effect.Effect<Entry | undefined>
   readonly set: (identity: Identity, serverUrl: string, entry: Entry) => Effect.Effect<void>
@@ -177,11 +145,15 @@ export interface Interface {
   readonly clearTokens: (identity: Identity, serverUrl: string) => Effect.Effect<void>
   readonly updateClientInfo: (identity: Identity, serverUrl: string, clientInfo: ClientInfo) => Effect.Effect<void>
   readonly clearClientInfo: (identity: Identity, serverUrl: string) => Effect.Effect<void>
-  readonly updateCodeVerifier: (identity: Identity, serverUrl: string, codeVerifier: string) => Effect.Effect<void>
-  readonly clearCodeVerifier: (identity: Identity, serverUrl: string) => Effect.Effect<void>
-  readonly updateOAuthState: (identity: Identity, serverUrl: string, oauthState: string) => Effect.Effect<void>
-  readonly getOAuthState: (identity: Identity, serverUrl: string) => Effect.Effect<string | undefined>
-  readonly clearOAuthState: (identity: Identity, serverUrl: string) => Effect.Effect<void>
+  readonly startFlow: (identity: Identity, serverUrl: string, state: string) => Effect.Effect<void>
+  readonly updateCodeVerifier: (
+    identity: Identity,
+    serverUrl: string,
+    state: string,
+    codeVerifier: string,
+  ) => Effect.Effect<void>
+  readonly getCodeVerifier: (identity: Identity, serverUrl: string, state: string) => Effect.Effect<string | undefined>
+  readonly clearFlow: (identity: Identity, serverUrl: string, state: string) => Effect.Effect<void>
   readonly isTokenExpired: (identity: Identity, serverUrl: string) => Effect.Effect<boolean | null>
 }
 
@@ -199,10 +171,12 @@ export const layer = Layer.effect(
     const lockKey = `mcp-auth:${filepath}`
 
     const load = Effect.fnUntraced(function* () {
-      return yield* fs.readJson(filepath).pipe(
-        Effect.map(migrate),
-        Effect.catch(() => Effect.succeed({ data: empty(), dirty: false })),
+      const raw = yield* fs.readJson(filepath).pipe(
+        Effect.map((value) => Option.some(value)),
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(Option.none())),
       )
+      if (Option.isNone(raw)) return { data: empty(), dirty: false }
+      return migrate(raw.value)
     })
 
     const write = Effect.fnUntraced(function* (data: Data) {
@@ -225,22 +199,18 @@ export const layer = Layer.effect(
 
     const get = Effect.fn("McpAuth.get")(function* (identity: Identity, value: string) {
       const serverUrl = normalizeServerUrl(value)
-      return yield* transact((data) => {
-        const result = claim(data, identity, serverUrl)
-        return { data: result.data === data ? undefined : result.data, value: result.entry }
-      })
+      return yield* transact((data) => ({ value: data.entries[id(identity)]?.servers[serverUrl] }))
     })
 
     const set = Effect.fn("McpAuth.set")(function* (identity: Identity, value: string, entry: Entry) {
       const serverUrl = normalizeServerUrl(value)
       yield* transact((data) => {
-        const result = claim(data, identity, serverUrl)
-        const bucket = result.data.entries[id(identity)]
+        const bucket = data.entries[id(identity)]
         return {
           data: {
-            ...result.data,
+            ...data,
             entries: {
-              ...result.data.entries,
+              ...data.entries,
               [id(identity)]: { identity, servers: { ...bucket?.servers, [serverUrl]: entry } },
             },
           },
@@ -253,27 +223,17 @@ export const layer = Layer.effect(
       const serverUrl = normalizeServerUrl(value)
       yield* transact((data) => {
         const bucket = data.entries[id(identity)]
-        const source = data.legacy?.[identity.name]
-        const recoverable = data.recoverable?.[identity.name]
-        if (!bucket?.servers[serverUrl] && source?.serverUrl !== serverUrl && recoverable?.serverUrl !== serverUrl) {
-          return { value: undefined }
-        }
+        if (!bucket?.servers[serverUrl]) return { value: undefined }
 
         const servers = { ...bucket?.servers }
         delete servers[serverUrl]
         const entries = { ...data.entries }
         if (Object.keys(servers).length) entries[id(identity)] = { identity, servers }
         else delete entries[id(identity)]
-        const legacy = { ...data.legacy }
-        if (source?.serverUrl === serverUrl) delete legacy[identity.name]
-        const remaining = { ...data.recoverable }
-        if (recoverable?.serverUrl === serverUrl) delete remaining[identity.name]
         return {
           data: {
             ...data,
             entries,
-            legacy: Object.keys(legacy).length ? legacy : undefined,
-            recoverable: Object.keys(remaining).length ? remaining : undefined,
           },
           value: undefined,
         }
@@ -284,16 +244,16 @@ export const layer = Layer.effect(
       Effect.fn(`McpAuth.${span}`)(function* (identity: Identity, value: string, fieldValue: NonNullable<Entry[K]>) {
         const serverUrl = normalizeServerUrl(value)
         yield* transact((data) => {
-          const result = claim(data, identity, serverUrl)
-          const bucket = result.data.entries[id(identity)]
+          const bucket = data.entries[id(identity)]
+          const entry = bucket?.servers[serverUrl]
           return {
             data: {
-              ...result.data,
+              ...data,
               entries: {
-                ...result.data.entries,
+                ...data.entries,
                 [id(identity)]: {
                   identity,
-                  servers: { ...bucket?.servers, [serverUrl]: { ...result.entry, [field]: fieldValue } },
+                  servers: { ...bucket?.servers, [serverUrl]: { ...entry, [field]: fieldValue } },
                 },
               },
             },
@@ -306,18 +266,16 @@ export const layer = Layer.effect(
       Effect.fn(`McpAuth.${span}`)(function* (identity: Identity, value: string) {
         const serverUrl = normalizeServerUrl(value)
         yield* transact((data) => {
-          const result = claim(data, identity, serverUrl)
-          if (!result.entry || !(field in result.entry)) {
-            return { data: result.data === data ? undefined : result.data, value: undefined }
-          }
-          const entry = { ...result.entry }
+          const bucket = data.entries[id(identity)]
+          const current = bucket?.servers[serverUrl]
+          if (!current || !(field in current)) return { value: undefined }
+          const entry = { ...current }
           delete entry[field]
-          const bucket = result.data.entries[id(identity)]
           return {
             data: {
-              ...result.data,
+              ...data,
               entries: {
-                ...result.data.entries,
+                ...data.entries,
                 [id(identity)]: { identity, servers: { ...bucket?.servers, [serverUrl]: entry } },
               },
             },
@@ -326,17 +284,126 @@ export const layer = Layer.effect(
         })
       })
 
-    const updateTokens = updateField("tokens", "updateTokens")
+    const updateTokens = Effect.fn("McpAuth.updateTokens")(function* (
+      identity: Identity,
+      value: string,
+      tokens: Tokens,
+    ) {
+      const serverUrl = normalizeServerUrl(value)
+      yield* transact((data) => {
+        const bucket = data.entries[id(identity)]
+        const entry = bucket?.servers[serverUrl]
+        const next = {
+          ...tokens,
+          ...(tokens.refreshToken === undefined && entry?.tokens?.refreshToken !== undefined
+            ? { refreshToken: entry.tokens.refreshToken }
+            : {}),
+          ...(tokens.scope === undefined && entry?.tokens?.scope !== undefined ? { scope: entry.tokens.scope } : {}),
+        }
+        return {
+          data: {
+            ...data,
+            entries: {
+              ...data.entries,
+              [id(identity)]: {
+                identity,
+                servers: { ...bucket?.servers, [serverUrl]: { ...entry, tokens: next } },
+              },
+            },
+          },
+          value: undefined,
+        }
+      })
+    })
     const clearTokens = clearField("tokens", "clearTokens")
     const updateClientInfo = updateField("clientInfo", "updateClientInfo")
     const clearClientInfo = clearField("clientInfo", "clearClientInfo")
-    const updateCodeVerifier = updateField("codeVerifier", "updateCodeVerifier")
-    const clearCodeVerifier = clearField("codeVerifier", "clearCodeVerifier")
-    const updateOAuthState = updateField("oauthState", "updateOAuthState")
-    const clearOAuthState = clearField("oauthState", "clearOAuthState")
 
-    const getOAuthState = Effect.fn("McpAuth.getOAuthState")(function* (identity: Identity, serverUrl: string) {
-      return (yield* get(identity, serverUrl))?.oauthState
+    const startFlow = Effect.fn("McpAuth.startFlow")(function* (identity: Identity, value: string, state: string) {
+      const serverUrl = normalizeServerUrl(value)
+      yield* transact((data) => {
+        const bucket = data.entries[id(identity)]
+        const entry = bucket?.servers[serverUrl]
+        return {
+          data: {
+            ...data,
+            entries: {
+              ...data.entries,
+              [id(identity)]: {
+                identity,
+                servers: {
+                  ...bucket?.servers,
+                  [serverUrl]: { ...entry, flows: { ...entry?.flows, [state]: { state } } },
+                },
+              },
+            },
+          },
+          value: undefined,
+        }
+      })
+    })
+
+    const updateCodeVerifier = Effect.fn("McpAuth.updateCodeVerifier")(function* (
+      identity: Identity,
+      value: string,
+      state: string,
+      codeVerifier: string,
+    ) {
+      const serverUrl = normalizeServerUrl(value)
+      yield* transact((data) => {
+        const bucket = data.entries[id(identity)]
+        const entry = bucket?.servers[serverUrl]
+        const flow = entry?.flows?.[state]
+        return {
+          data: {
+            ...data,
+            entries: {
+              ...data.entries,
+              [id(identity)]: {
+                identity,
+                servers: {
+                  ...bucket?.servers,
+                  [serverUrl]: {
+                    ...entry,
+                    flows: { ...entry?.flows, [state]: { ...flow, state, codeVerifier } },
+                  },
+                },
+              },
+            },
+          },
+          value: undefined,
+        }
+      })
+    })
+
+    const getCodeVerifier = Effect.fn("McpAuth.getCodeVerifier")(function* (
+      identity: Identity,
+      serverUrl: string,
+      state: string,
+    ) {
+      return (yield* get(identity, serverUrl))?.flows?.[state]?.codeVerifier
+    })
+
+    const clearFlow = Effect.fn("McpAuth.clearFlow")(function* (identity: Identity, value: string, state: string) {
+      const serverUrl = normalizeServerUrl(value)
+      yield* transact((data) => {
+        const bucket = data.entries[id(identity)]
+        const current = bucket?.servers[serverUrl]
+        if (!current?.flows?.[state]) return { value: undefined }
+        const flows = { ...current.flows }
+        delete flows[state]
+        const entry = { ...current, flows: Object.keys(flows).length ? flows : undefined }
+        return {
+          data: {
+            ...data,
+            entries: {
+              ...data.entries,
+              [id(identity)]: { identity, servers: { ...bucket.servers, [serverUrl]: entry } },
+            },
+          },
+          value: undefined,
+        }
+      })
     })
 
     const isTokenExpired = Effect.fn("McpAuth.isTokenExpired")(function* (identity: Identity, serverUrl: string) {
@@ -354,11 +421,10 @@ export const layer = Layer.effect(
       clearTokens,
       updateClientInfo,
       clearClientInfo,
+      startFlow,
       updateCodeVerifier,
-      clearCodeVerifier,
-      updateOAuthState,
-      getOAuthState,
-      clearOAuthState,
+      getCodeVerifier,
+      clearFlow,
       isTokenExpired,
     })
   }),

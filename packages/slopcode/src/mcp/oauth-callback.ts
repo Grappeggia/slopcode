@@ -47,10 +47,24 @@ interface PendingAuth {
   resolve: (code: string) => void
   reject: (error: Error) => void
   timeout: ReturnType<typeof setTimeout>
-  key?: string
+  key: string
+  endpoint: Endpoint
 }
 
-const servers = new Map<number, { server: ReturnType<typeof createServer>; paths: Set<string> }>()
+export interface Endpoint {
+  host: string
+  port: number
+  path: string
+  key: string
+}
+
+interface CallbackServer {
+  server: ReturnType<typeof createServer>
+  paths: Map<string, number>
+  pending: number
+}
+
+const servers = new Map<string, CallbackServer>()
 let transition = Promise.resolve()
 const pendingAuths = new Map<string, PendingAuth>()
 const pendingKeys = new Map<string, Set<string>>()
@@ -59,17 +73,17 @@ const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
 function cleanup(oauthState: string, pending: PendingAuth) {
   pendingAuths.delete(oauthState)
-  if (!pending.key) return
   const states = pendingKeys.get(pending.key)
   states?.delete(oauthState)
   if (!states?.size) pendingKeys.delete(pending.key)
+  queueMicrotask(() => void release(pending.endpoint))
 }
 
 function handleRequest(
   req: import("http").IncomingMessage,
   res: import("http").ServerResponse,
   port: number,
-  paths: Set<string>,
+  paths: Map<string, number>,
 ) {
   const url = new URL(req.url || "/", `http://localhost:${port}`)
 
@@ -137,31 +151,47 @@ function serial<A>(run: () => Promise<A>) {
   return result
 }
 
-export function ensureRunning(redirectUri?: string): Promise<void> {
+export function ensureRunning(redirectUri?: string): Promise<Endpoint> {
   return serial(async () => {
-    const { port, path } = parseRedirectUri(redirectUri)
+    const { host, port, path } = parseRedirectUri(redirectUri)
+    const key = JSON.stringify([host, port])
+    const endpoint = { host, port, path, key }
 
-    const running = servers.get(port)
+    const running = servers.get(key)
     if (running) {
-      running.paths.add(path)
-      return
+      if (!running.paths.has(path)) running.paths.set(path, 0)
+      return endpoint
     }
-    if (await isPortInUse(port)) return
 
-    const paths = new Set([path])
+    const paths = new Map([[path, 0]])
     const next = createServer((req, res) => handleRequest(req, res, port, paths))
     await new Promise<void>((resolve, reject) => {
-      next.listen(port, resolve)
-      next.on("error", reject)
+      const fail = () => reject(new Error("MCP OAuth callback address is unavailable"))
+      next.once("error", fail)
+      next.listen(port, host, () => {
+        next.off("error", fail)
+        resolve()
+      })
     })
-    servers.set(port, { server: next, paths })
+    servers.set(key, { server: next, paths, pending: 0 })
+    return endpoint
   })
 }
 
-export function waitForCallback(oauthState: string, key?: string): Promise<string> {
+export function waitForCallback(
+  oauthState: string,
+  key: string,
+  endpoint: Endpoint,
+  timeoutMs = CALLBACK_TIMEOUT_MS,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     if (pendingAuths.has(oauthState)) {
       reject(new Error("OAuth state is already pending"))
+      return
+    }
+    const server = servers.get(endpoint.key)
+    if (!server || !server.paths.has(endpoint.path)) {
+      reject(new Error("OAuth callback listener is unavailable"))
       return
     }
 
@@ -170,30 +200,34 @@ export function waitForCallback(oauthState: string, key?: string): Promise<strin
       if (!pending) return
       cleanup(oauthState, pending)
       reject(new Error("OAuth callback timeout - authorization took too long"))
-    }, CALLBACK_TIMEOUT_MS)
+    }, timeoutMs)
 
-    pendingAuths.set(oauthState, { resolve, reject, timeout, key })
-    if (key) {
-      const states = pendingKeys.get(key) ?? new Set<string>()
-      states.add(oauthState)
-      pendingKeys.set(key, states)
-    }
+    server.pending++
+    server.paths.set(endpoint.path, (server.paths.get(endpoint.path) ?? 0) + 1)
+    pendingAuths.set(oauthState, { resolve, reject, timeout, key, endpoint })
+    const states = pendingKeys.get(key) ?? new Set<string>()
+    states.add(oauthState)
+    pendingKeys.set(key, states)
   })
 }
 
-export function cancelPending(key: string): void {
+export function cancelPending(oauthState: string): void {
+  const pending = pendingAuths.get(oauthState)
+  if (!pending) return
+  clearTimeout(pending.timeout)
+  cleanup(oauthState, pending)
+  pending.reject(new Error("Authorization cancelled"))
+}
+
+export function cancelByKey(key: string): void {
   for (const oauthState of [...(pendingKeys.get(key) ?? [])]) {
-    const pending = pendingAuths.get(oauthState)
-    if (!pending) continue
-    clearTimeout(pending.timeout)
-    cleanup(oauthState, pending)
-    pending.reject(new Error("Authorization cancelled"))
+    cancelPending(oauthState)
   }
 }
 
-export async function isPortInUse(port: number = OAUTH_CALLBACK_PORT): Promise<boolean> {
+export async function isPortInUse(port: number = OAUTH_CALLBACK_PORT, host = "127.0.0.1"): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = createConnection(port, "127.0.0.1")
+    const socket = createConnection(port, host)
     socket.on("connect", () => {
       socket.destroy()
       resolve(true)
@@ -204,18 +238,33 @@ export async function isPortInUse(port: number = OAUTH_CALLBACK_PORT): Promise<b
   })
 }
 
+function release(endpoint: Endpoint) {
+  return serial(async () => {
+    const entry = servers.get(endpoint.key)
+    if (!entry) return
+    entry.pending = Math.max(0, entry.pending - 1)
+    const count = Math.max(0, (entry.paths.get(endpoint.path) ?? 0) - 1)
+    if (count) entry.paths.set(endpoint.path, count)
+    else entry.paths.delete(endpoint.path)
+    if (entry.pending) return
+    servers.delete(endpoint.key)
+    await new Promise<void>((resolve) => entry.server.close(() => resolve()))
+  })
+}
+
 async function stopServer() {
+  const pending = [...pendingAuths.values()]
+  pendingAuths.clear()
+  pendingKeys.clear()
+  for (const entry of pending) {
+    clearTimeout(entry.timeout)
+    entry.reject(new Error("OAuth callback server stopped"))
+  }
+
   await Promise.all(
     [...servers.values()].map((entry) => new Promise<void>((resolve) => entry.server.close(() => resolve()))),
   )
   servers.clear()
-
-  for (const pending of pendingAuths.values()) {
-    clearTimeout(pending.timeout)
-    pending.reject(new Error("OAuth callback server stopped"))
-  }
-  pendingAuths.clear()
-  pendingKeys.clear()
 }
 
 export function stop(): Promise<void> {

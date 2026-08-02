@@ -58,3 +58,47 @@ passed
 
 - The shell intentionally stays minimal for this task: it does not add the later mobile UX flows from the plan, and it does not duplicate agent or remote schema logic.
 - QR pairing and remote transport are exposed as native boundaries/capability slots, while the shell page itself only persists and reads remote workspace bootstrap state in this task.
+
+## Task 3 implementation: app-wide command palette
+
+Implementation commit: `f83750f66d` (`feat(app): add server-wide command palette`)
+
+### Changed files
+
+- `packages/app/src/components/dialog-select-file.tsx`
+- `packages/app/src/components/dialog-select-file-controller.ts`
+- `packages/app/src/components/dialog-select-file-controller.test.ts`
+- `packages/app/src/context/command.tsx`
+- `packages/app/src/pages/home.tsx`
+- `packages/app/src/pages/session/use-session-commands.tsx`
+
+### Implemented
+
+- Routed the app-level palette shortcut through a route-specific `command.palette` command on Home and session surfaces, including legacy Home/session layouts.
+- Replaced active-project-only session enumeration with the server session search API (`roots`, `search`, and `limit`) and project labels from opened and stored server projects.
+- Kept workspace file and command search in the existing palette while adding loading, empty, accessible error, and abort handling.
+- Added canonical server-aware session selection that opens/touches the owning project, reuses an existing tab, preserves drafts, and navigates to the selected tab without duplicating it.
+
+### Validation
+
+Run from `packages/app`:
+
+```text
+bun test --preload ./happydom.ts ./src/components/dialog-select-file-controller.test.ts ./src/context/command.test.ts ./src/context/command-keybind.test.ts
+11 pass, 0 fail, 37 assertions
+
+bun test ./src/components/dialog-select-file-controller.test.ts
+3 pass, 0 fail, 13 assertions
+
+bun run typecheck
+passed
+
+bun run build
+passed; 2,157 modules transformed
+```
+
+The production build retained existing Vite warnings for the `virtua` JSX pragma, duplicate static/dynamic theme import, duplicate sourcemap output, and large chunks.
+
+### Concerns
+
+- No live desktop interaction run was performed for this app-only task. Focused tests cover command/file/session search and canonical server-tab selection; the existing shared `List` component continues to provide keyboard selection behavior.

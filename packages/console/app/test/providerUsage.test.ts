@@ -6,7 +6,6 @@ import { googleHelper } from "../src/routes/zen/util/provider/google"
 import { fromOaCompatibleRequest, oaCompatHelper } from "../src/routes/zen/util/provider/openai-compatible"
 import { openaiHelper } from "../src/routes/zen/util/provider/openai"
 import { calculateUsageCost } from "../src/routes/zen/util/cost"
-import { sanitizeSafety } from "../src/routes/zen/util/safety"
 
 const providers = {
   anthropic: anthropicHelper({ reqModel: "claude-haiku-4-5", providerModel: "claude-haiku-4-5" }),
@@ -66,58 +65,6 @@ describe("provider usage extraction", () => {
       input_tokens: 5,
       output_tokens: 7,
     })
-  })
-
-  test("normalizes OpenAI cache writes once", () => {
-    expect(
-      providers.openai.normalizeUsage({
-        input_tokens: 10,
-        output_tokens: 2,
-        input_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
-      }),
-    ).toMatchObject({ inputTokens: 3, cacheReadTokens: 3, cacheWrite5mTokens: 4 })
-  })
-
-  test("clamps malformed OpenAI usage before billing", () => {
-    expect(
-      providers.openai.normalizeUsage({
-        input_tokens: 10,
-        output_tokens: 2,
-        input_tokens_details: { cached_tokens: 12, cache_write_tokens: 9 },
-      }),
-    ).toMatchObject({ inputTokens: 0, cacheReadTokens: 10, cacheWrite5mTokens: 0 })
-    expect(
-      providers.openai.normalizeUsage({
-        input_tokens: Number.NaN,
-        output_tokens: 2,
-        input_tokens_details: { cached_tokens: -4, cache_write_tokens: Number.POSITIVE_INFINITY },
-      }),
-    ).toMatchObject({ inputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0 })
-    expect(
-      providers["oa-compat"].normalizeUsage({
-        prompt_tokens: -10,
-        completion_tokens: 2,
-        prompt_tokens_details: { cached_tokens: 5, cache_write_tokens: 8 },
-      }),
-    ).toMatchObject({ inputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0 })
-  })
-
-  test("overwrites authenticated managed identity and omits anonymous hostile identity", async () => {
-    const hostile = { model: "gpt-5.6", safety_identifier: "raw-user", user: "raw-client" }
-    const authenticated = await sanitizeSafety(hostile, "wrk_private", "test-secret")
-    expect(authenticated.safety_identifier).toMatch(/^sc_[A-Za-z0-9_-]{43}$/)
-    expect(authenticated.safety_identifier).not.toContain("wrk_private")
-    expect(authenticated.user).toBeUndefined()
-    expect(await sanitizeSafety(hostile, undefined, "test-secret")).toEqual({ model: "gpt-5.6" })
-  })
-
-  test("scopes managed identity to the authenticated user instead of workspace", async () => {
-    const body = { model: "gpt-5.6" }
-    const first = await sanitizeSafety(body, "usr_first", "test-secret")
-    const repeat = await sanitizeSafety(body, "usr_first", "test-secret")
-    const second = await sanitizeSafety(body, "usr_second", "test-secret")
-    expect(first.safety_identifier).toBe(repeat.safety_identifier)
-    expect(first.safety_identifier).not.toBe(second.safety_identifier)
   })
 
   test("charges Gemini thinking tokens at the output rate", () => {

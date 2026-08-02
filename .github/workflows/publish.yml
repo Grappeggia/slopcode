@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'teamslop/slopcode'
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v5
         with:
@@ -69,7 +69,7 @@ jobs:
           args=(bun run --cwd packages/script lineage verify --tag "v$VERSION" --source "$SOURCE" --require-previous-if-any --remote origin --branch dev)
           if [ -n "$PREVIOUS" ]; then args+=(--previous-tag "$PREVIOUS"); fi
           "${args[@]}"
-          release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"v$VERSION\") | .id")
+          release=$(gh release view "v$VERSION" --json id --jq .id --repo "$GITHUB_REPOSITORY")
           test -n "$release"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
@@ -266,7 +266,7 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.version.outputs.version != ''
     permissions:
-      contents: write
+      contents: read
       id-token: write # npm trusted publishing
     steps:
       - uses: actions/checkout@v5
@@ -341,16 +341,22 @@ jobs:
         run: |
           rm -rf packages/slopcode/dist
           mkdir -p packages/slopcode/dist
-          for name in slopcode-cli-dist.tar.gz release-manifest.json; do
-            asset=$(gh api --paginate "repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}/assets" --jq ".[] | select(.name == \"$name\") | .id")
-            test -n "$asset"
-            gh api -H "Accept: application/octet-stream" "repos/${{ needs.version.outputs.repo }}/releases/assets/$asset" > "packages/slopcode/dist/$name"
+          for attempt in $(seq 1 30); do
+            if gh release download "${{ needs.version.outputs.tag }}" --pattern "slopcode-cli-dist.tar.gz" --pattern "release-manifest.json" --dir packages/slopcode/dist --repo "${{ needs.version.outputs.repo }}"; then
+              bun ./packages/slopcode/script/artifact-manifest.ts verify --dir packages/slopcode/dist --source "${{ inputs.source_sha }}" --version "${{ inputs.version }}" --artifact slopcode-cli-dist.tar.gz
+              tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
+              rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
+              exit 0
+            fi
+            rm -f packages/slopcode/dist/slopcode-cli-dist.tar.gz packages/slopcode/dist/release-manifest.json
+            if [ "$attempt" -eq 30 ]; then
+              echo "Timed out waiting for slopcode-cli-dist.tar.gz on release ${{ needs.version.outputs.tag }}" >&2
+              exit 1
+            fi
+            sleep 10
           done
-          bun ./packages/slopcode/script/artifact-manifest.ts verify --dir packages/slopcode/dist --source "${{ inputs.source_sha }}" --version "${{ inputs.version }}" --artifact slopcode-cli-dist.tar.gz
-          tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
-          rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
 
       - name: Install package repository tooling
         run: |
@@ -359,22 +365,14 @@ jobs:
 
       - name: Recheck draft release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          draft=$(gh api 'repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}' --jq .draft)
+          draft=$(gh release view '${{ needs.version.outputs.tag }}' --json isDraft --jq .isDraft --repo '${{ needs.version.outputs.repo }}')
           test "$draft" = "true" || test "$draft" = "false"
           echo "SLOPCODE_RELEASE_DRAFT=$draft" >> "$GITHUB_ENV"
 
-      - name: Gate clean publication source
-        run: |
-          bun -e 'import { gatePublication } from "@slopcode-ai/script/release"; await gatePublication({ version: process.env.VERSION, source: process.env.SOURCE, previous: process.env.PREVIOUS || undefined, cwd: process.cwd(), remote: "origin", branch: "dev" })'
-        env:
-          VERSION: ${{ inputs.version }}
-          SOURCE: ${{ inputs.source_sha }}
-          PREVIOUS: ${{ inputs.previous_tag }}
-
       - name: Publish release
-        run: bun ./packages/slopcode/script/publish.ts
+        run: ./script/publish.ts
         env:
           SLOPCODE_PUBLISH_ONLY: true
           # Prebuilt release assets downloaded above; npm uses GitHub OIDC trusted publishing.
@@ -440,18 +438,5 @@ jobs:
           SLOPCODE_SOURCE_SHA: ${{ inputs.source_sha }}
           SLOPCODE_PREVIOUS_TAG: ${{ inputs.previous_tag }}
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
-          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           NPM_CONFIG_PROVENANCE: true
-
-      - name: Finalize GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          endpoint='repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}'
-          draft=$(gh api "$endpoint" --jq .draft)
-          if [ "$draft" = "true" ]; then
-            gh api --method PATCH "$endpoint" -F draft=false
-          else
-            test "$draft" = "false"
-          fi

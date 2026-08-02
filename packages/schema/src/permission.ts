@@ -22,18 +22,11 @@ export const Source = Schema.Union([
 ]).annotate({ identifier: "PermissionV2.Source" })
 export type Source = typeof Source.Type
 
-export const Grant = Schema.Struct({
-  resources: Schema.Array(Schema.String),
-  scopes: Schema.Array(Schema.Literals(["session", "global"])),
-}).annotate({ identifier: "PermissionV2.Grant" })
-export type Grant = typeof Grant.Type
-
 const RequestFields = {
   sessionID: SessionID,
   action: Schema.String,
   resources: Schema.Array(Schema.String),
   save: Schema.Array(Schema.String).pipe(optional),
-  grant: Grant.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
   source: Source.pipe(optional),
 }
@@ -44,9 +37,7 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionV2.Request" })
 export interface Request extends Schema.Schema.Type<typeof Request> {}
 
-export const Reply = Schema.Literals(["once", "session", "global", "always", "project", "reject"]).annotate({
-  identifier: "PermissionV2.Reply",
-})
+export const Reply = Schema.Literals(["once", "always", "reject"]).annotate({ identifier: "PermissionV2.Reply" })
 export type Reply = typeof Reply.Type
 
 const Asked = define({ type: "permission.v2.asked", schema: Request.fields })

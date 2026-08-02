@@ -26,12 +26,10 @@ import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
-import { Account } from "@/account/account"
-import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 
-const zenURL = (connection: string) => `https://console.slopcode.ai/proxy/connections/${connection}/v1`
+const zenURL = (connection: string) => `https://slopcode.dev/proxy/connections/${connection}/v1`
 
 const replayOpenAIOAuth = {
   type: "oauth",
@@ -305,8 +303,6 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(recordedClient),
       Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: true })),
-      Layer.provide(Account.defaultLayer),
-      Layer.provide(SafetyIdentity.defaultLayer),
     ),
   )
 }
@@ -315,7 +311,7 @@ const writeConfig = (directory: string, scenario: RecordedScenario, model: Model
   Effect.promise(() =>
     Bun.write(
       path.join(directory, "slopcode.json"),
-      JSON.stringify({ $schema: "https://slopcode.ai/config.json", ...scenario.config(model) }),
+      JSON.stringify({ $schema: "https://slopcode.dev/config.json", ...scenario.config(model) }),
     ),
   )
 

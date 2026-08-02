@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer, Schema, Stream } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
@@ -16,17 +16,14 @@ import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionMessageUpdater } from "@slopcode-ai/core/session/message-updater"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
-import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
-import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
-const status = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(events))
 const it = testEffect(Layer.mergeAll(database, events, projector))
 const sessionID = SessionV2.ID.make("ses_projector_test")
 const created = DateTime.makeUnsafe(0)
@@ -47,96 +44,6 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
-  it.effect("replays stored Tool.Called V1 events as function calls", () =>
-    Effect.gen(function* () {
-      const { db } = yield* Database.Service
-      yield* db
-        .insert(ProjectTable)
-        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionTable)
-        .values({
-          id: sessionID,
-          project_id: Project.ID.global,
-          slug: "v1-tool-call",
-          directory: "/project",
-          title: "v1-tool-call",
-          version: "test",
-        })
-        .run()
-        .pipe(Effect.orDie)
-      const events = yield* EventV2.Service
-      const assistantMessageID = SessionMessage.ID.make("msg_v1_tool_call")
-
-      yield* events.replayAll([
-        {
-          id: EventV2.ID.make("evt_v1_tool_step"),
-          aggregateID: sessionID,
-          seq: 0,
-          type: EventV2.versionedType(SessionEvent.Step.Started.type, 1),
-          data: {
-            sessionID,
-            timestamp: 0,
-            assistantMessageID,
-            agent: "build",
-            model,
-          },
-        },
-        {
-          id: EventV2.ID.make("evt_v1_tool_input"),
-          aggregateID: sessionID,
-          seq: 1,
-          type: EventV2.versionedType(SessionEvent.Tool.Input.Started.type, 1),
-          data: {
-            sessionID,
-            timestamp: 0,
-            assistantMessageID,
-            callID: "call-v1",
-            name: "echo",
-          },
-        },
-        {
-          id: EventV2.ID.make("evt_v1_tool_called"),
-          aggregateID: sessionID,
-          seq: 2,
-          type: EventV2.versionedType(SessionEvent.Tool.Called.type, 1),
-          data: {
-            sessionID,
-            timestamp: 0,
-            assistantMessageID,
-            callID: "call-v1",
-            tool: "echo",
-            input: { text: "stored" },
-            provider: { executed: false },
-          },
-        },
-      ])
-
-      const row = yield* db
-        .select()
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.id, assistantMessageID))
-        .get()
-        .pipe(Effect.orDie)
-      expect(row).toBeDefined()
-      expect(
-        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type }),
-      ).toMatchObject({
-        type: "assistant",
-        content: [
-          {
-            type: "tool",
-            id: "call-v1",
-            name: "echo",
-            state: { status: "running", input: { text: "stored" } },
-          },
-        ],
-      })
-    }),
-  )
-
   it.effect("orders projected messages and context by durable aggregate sequence", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -206,13 +113,11 @@ describe("SessionProjector", () => {
     }).pipe(
       Effect.provide(
         SessionV2.layer.pipe(
-          Layer.provide(status),
           Layer.provide(events),
           Layer.provide(database),
           Layer.provide(Project.defaultLayer),
           Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
           Layer.provide(SessionExecution.noopLayer),
-          Layer.provide(locationServices),
         ),
       ),
     ),
@@ -310,13 +215,9 @@ describe("SessionProjector", () => {
       })
       yield* events.publish(SessionEvent.Shell.Ended, {
         sessionID,
-        messageID: SessionMessage.ID.make("msg_shell_projected"),
         timestamp: DateTime.makeUnsafe(1),
         callID: "shell-1",
         output: "/project",
-        status: "completed",
-        exitCode: 0,
-        truncated: false,
       })
       const compactionID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Compaction.Started, {
@@ -376,9 +277,6 @@ describe("SessionProjector", () => {
       ])
       expect(messages.find((message) => message.type === "shell")).toMatchObject({
         output: "/project",
-        status: "completed",
-        exitCode: 0,
-        truncated: false,
         time: { completed: DateTime.makeUnsafe(1) },
       })
       expect(messages.find((message) => message.type === "compaction")).toMatchObject({
@@ -393,147 +291,6 @@ describe("SessionProjector", () => {
         time_updated: DateTime.toEpochMillis(created),
       })
     }),
-  )
-
-  it.effect("replays legacy shell history through projection and the public event stream", () =>
-    Effect.gen(function* () {
-      const { db } = yield* Database.Service
-      yield* db
-        .insert(ProjectTable)
-        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionTable)
-        .values({
-          id: sessionID,
-          project_id: Project.ID.global,
-          slug: "legacy-shell",
-          directory: "/project",
-          title: "legacy-shell",
-          version: "test",
-        })
-        .run()
-        .pipe(Effect.orDie)
-      const id = SessionMessage.ID.make("msg_legacy_shell")
-      const events = yield* EventV2.Service
-      yield* events.replayAll([
-        {
-          id: EventV2.ID.make("evt_legacy_shell_started"),
-          aggregateID: sessionID,
-          seq: 0,
-          type: EventV2.versionedType(SessionEvent.Shell.Started.type, 1),
-          data: { sessionID, messageID: id, timestamp: 0, callID: "legacy-call", command: "pwd" },
-        },
-        {
-          id: EventV2.ID.make("evt_legacy_shell_ended"),
-          aggregateID: sessionID,
-          seq: 1,
-          type: EventV2.versionedType(SessionEvent.Shell.Ended.type, 1),
-          data: { sessionID, timestamp: 1, callID: "legacy-call", output: "/project" },
-        },
-      ])
-      yield* events.publish(SessionEvent.Synthetic, {
-        sessionID,
-        messageID: SessionMessage.ID.make("msg_after_legacy_shell"),
-        timestamp: DateTime.makeUnsafe(2),
-        text: "after legacy shell",
-      })
-
-      const row = yield* db
-        .select()
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.id, id))
-        .get()
-        .pipe(Effect.orDie)
-      expect(
-        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type }),
-      ).toMatchObject({
-        type: "shell",
-        command: "pwd",
-        output: "/project",
-        time: { completed: DateTime.makeUnsafe(1) },
-      })
-      expect(row!.data).not.toHaveProperty("status")
-      expect(
-        Array.from(yield* (yield* SessionV2.Service).events({ sessionID }).pipe(Stream.take(2), Stream.runCollect)).map(
-          (item) => item.event.type,
-        ),
-      ).toEqual(["session.next.shell.started", "session.next.shell.ended"])
-    }).pipe(
-      Effect.provide(
-        SessionV2.layer.pipe(
-          Layer.provide(status),
-          Layer.provide(events),
-          Layer.provide(database),
-          Layer.provide(Project.defaultLayer),
-          Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-          Layer.provide(SessionExecution.noopLayer),
-          Layer.provide(locationServices),
-        ),
-      ),
-    ),
-  )
-
-  it.effect("exposes continuation readiness through the canonical session event stream", () =>
-    Effect.gen(function* () {
-      const db = (yield* Database.Service).db
-      const events = yield* EventV2.Service
-      const id = SessionV2.ID.make("ses_projector_continuation_stream")
-      const root = SessionMessage.ID.make("msg_projector_continuation_stream")
-      yield* db
-        .insert(ProjectTable)
-        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionTable)
-        .values({
-          id,
-          project_id: Project.ID.global,
-          slug: id,
-          directory: "/project",
-          title: "stream",
-          version: "test",
-          runtime: "v2",
-          runtime_state: "draining",
-          runtime_epoch: 1,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* events.publish(SessionEvent.Execution.ContinuationReady, {
-        sessionID: id,
-        timestamp: DateTime.makeUnsafe(1),
-        owner: "v2",
-        epoch: 1,
-        activityID: root,
-        rootID: root,
-        activity: "prompt",
-        phase: "tool",
-        requestAttempt: 1,
-        providerAttempt: 1,
-        fingerprint: "f".repeat(64),
-        recovery: "continue-provider",
-      })
-      const streamed = Array.from(
-        yield* (yield* SessionV2.Service).events({ sessionID: id }).pipe(Stream.take(1), Stream.runCollect),
-      )
-      expect(streamed.map((item) => item.event.type)).toEqual(["session.next.execution.continuation.ready"])
-    }).pipe(
-      Effect.provide(
-        SessionV2.layer.pipe(
-          Layer.provide(status),
-          Layer.provide(events),
-          Layer.provide(database),
-          Layer.provide(Project.defaultLayer),
-          Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-          Layer.provide(SessionExecution.noopLayer),
-          Layer.provide(locationServices),
-        ),
-      ),
-    ),
   )
 
   it.effect("rejects distinct creator events that reuse one projected message ID", () =>

@@ -3,7 +3,6 @@ import { LLMEvent, ToolFailure } from "@slopcode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor, type LLMClientShape } from "@slopcode-ai/llm/route"
 import { jsonSchema, tool, type ModelMessage, type Tool } from "ai"
 import { Effect, Fiber, Layer, Stream } from "effect"
-import * as TestClock from "effect/testing/TestClock"
 import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
 import type { Provider } from "@/provider/provider"
@@ -127,7 +126,6 @@ const openAIResponses = {
 const prepareNativeRequest = (input: NativeRequestInput) => LLMClient.prepare(LLMNative.request(input))
 
 const expectOpenAIResponsesRequest = (input: {
-  readonly model?: Provider.Model
   readonly history: NativeRequestInput["messages"]
   readonly providerOptions?: NativeRequestInput["providerOptions"]
   readonly maxOutputTokens?: NativeRequestInput["maxOutputTokens"]
@@ -137,7 +135,7 @@ const expectOpenAIResponsesRequest = (input: {
   Effect.gen(function* () {
     expect(
       yield* prepareNativeRequest({
-        model: input.model ?? baseModel,
+        model: baseModel,
         apiKey: "test-openai-key",
         messages: input.history,
         providerOptions: input.providerOptions,
@@ -522,265 +520,6 @@ describe("session.llm-native.request", () => {
     }),
   )
 
-  it.effect("enforces hint-only explicit caching on native Responses", () =>
-    Effect.gen(function* () {
-      const model = {
-        ...baseModel,
-        id: ModelV2.ID.make("gpt-5.6"),
-        api: { ...baseModel.api, id: "gpt-5.6" },
-      }
-      const cases = [
-        { hint: true, option: false, cached: true },
-        { hint: false, option: true, cached: false },
-        { hint: true, option: true, cached: true },
-      ]
-      yield* Effect.forEach(cases, (item) =>
-        Effect.gen(function* () {
-          const prepared = yield* prepareNativeRequest({
-            model,
-            apiKey: "test-openai-key",
-            messages: [
-              {
-                role: "system",
-                content: item.hint
-                  ? [
-                      {
-                        type: "text",
-                        text: "stable system",
-                        cache: { type: "ephemeral", ttlSeconds: 1800 },
-                      },
-                    ]
-                  : "stable system",
-              } as unknown as ModelMessage,
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text: "stable context",
-                    ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
-                  },
-                  {
-                    type: "text",
-                    text: "more stable context",
-                    ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
-                  },
-                ],
-              } as unknown as ModelMessage,
-            ],
-            providerOptions: {
-              openai: {
-                safetyIdentifier: "sc_safe",
-                ...(item.option ? { promptCacheOptions: { mode: "explicit", ttl: "30m" } } : {}),
-              },
-            },
-          })
-          const body = prepared.body as Record<string, unknown>
-          expect(body.prompt_cache_options).toEqual(item.cached ? { mode: "explicit", ttl: "30m" } : undefined)
-          expect(JSON.stringify(body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 3 : 0)
-          const system = (body.input as Array<{ role?: string; content?: unknown }>).find(
-            (entry) => entry.role === "system",
-          )
-          expect(system?.content).toEqual(
-            item.cached
-              ? [
-                  {
-                    type: "input_text",
-                    text: "stable system",
-                    prompt_cache_breakpoint: { mode: "explicit" },
-                  },
-                ]
-              : "stable system",
-          )
-          const user = (body.input as Array<{ role?: string; content?: unknown }>).find(
-            (entry) => entry.role === "user",
-          )
-          expect(user?.content).toEqual(
-            item.cached
-              ? [
-                  {
-                    type: "input_text",
-                    text: "stable context",
-                    prompt_cache_breakpoint: { mode: "explicit" },
-                  },
-                  {
-                    type: "input_text",
-                    text: "more stable context",
-                    prompt_cache_breakpoint: { mode: "explicit" },
-                  },
-                ]
-              : [
-                  { type: "input_text", text: "stable context" },
-                  { type: "input_text", text: "more stable context" },
-                ],
-          )
-        }),
-      )
-    }),
-  )
-
-  it.effect("reuses resolved custom fetch and the exact safe body across native retries", () =>
-    Effect.gen(function* () {
-      const client = yield* LLMClient.Service
-      const bodies: string[] = []
-      const headers: Headers[] = []
-      let attempts = 0
-      let release!: () => void
-      const first = new Promise<void>((resolve) => (release = resolve))
-      const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = input instanceof Request ? input : new Request(input, init)
-        attempts++
-        bodies.push(await request.clone().text())
-        headers.push(request.headers)
-        if (attempts === 1) {
-          release()
-          throw new TypeError("proxy transport unavailable")
-        }
-        return responsesStream([
-          {
-            type: "response.completed",
-            response: { usage: { input_tokens: 1, output_tokens: 0 }, incomplete_details: null },
-          },
-        ])
-      }
-      const result = LLMNativeRuntime.stream({
-        model: {
-          ...baseModel,
-          id: ModelV2.ID.make("gpt-5.6"),
-          api: { ...baseModel.api, id: "gpt-5.6" },
-          options: { fetch: customFetch },
-        },
-        provider: {
-          ...providerInfo,
-          options: {
-            ...providerInfo.options,
-            fetch: async () => {
-              throw new Error("model fetch must take precedence")
-            },
-          },
-        },
-        auth: undefined,
-        llmClient: client,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "stable context",
-                cache: { type: "ephemeral", ttlSeconds: 1800 },
-              },
-            ],
-          } as unknown as ModelMessage,
-        ],
-        tools: {},
-        providerOptions: {
-          safetyIdentifier: "sc_safe",
-          promptCacheOptions: { mode: "explicit", ttl: "30m" },
-        },
-        headers: { "x-slopcode-openai-cache-breakpoints": "forged" },
-        retries: 1,
-        abort: new AbortController().signal,
-      })
-      if (result.type === "unsupported") throw new Error(result.reason)
-      const fiber = yield* result.stream.pipe(Stream.runDrain, Effect.forkScoped)
-      yield* Effect.promise(() => first)
-      yield* TestClock.adjust(10_000)
-      yield* Fiber.join(fiber)
-
-      expect(attempts).toBe(2)
-      expect(bodies[1]).toBe(bodies[0])
-      expect(headers.every((value) => !value.has("x-slopcode-openai-cache-breakpoints"))).toBe(true)
-      const expected = yield* prepareNativeRequest({
-        model: {
-          ...baseModel,
-          id: ModelV2.ID.make("gpt-5.6"),
-          api: { ...baseModel.api, id: "gpt-5.6" },
-        },
-        apiKey: "test-openai-key",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "stable context",
-                cache: { type: "ephemeral", ttlSeconds: 1800 },
-              },
-            ],
-          } as unknown as ModelMessage,
-        ],
-        providerOptions: {
-          openai: {
-            safetyIdentifier: "sc_safe",
-            promptCacheOptions: { mode: "explicit", ttl: "30m" },
-          },
-        },
-      })
-      expect(JSON.parse(bodies[0])).toEqual(JSON.parse(JSON.stringify(expected.body)))
-      expect(JSON.parse(bodies[0])).toMatchObject({
-        model: "gpt-5.6",
-        safety_identifier: "sc_safe",
-        prompt_cache_options: { mode: "explicit", ttl: "30m" },
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "stable context",
-                prompt_cache_breakpoint: { mode: "explicit" },
-              },
-            ],
-          },
-        ],
-      })
-    }),
-  )
-
-  it.effect("aborts custom native fetch without retrying", () =>
-    Effect.gen(function* () {
-      const client = yield* LLMClient.Service
-      let attempts = 0
-      let release!: () => void
-      const started = new Promise<void>((resolve) => (release = resolve))
-      let aborted = false
-      const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = input instanceof Request ? input : new Request(input, init)
-        attempts++
-        release()
-        return new Promise<Response>((_resolve, reject) => {
-          request.signal.addEventListener(
-            "abort",
-            () => {
-              aborted = true
-              reject(request.signal.reason ?? new DOMException("Aborted", "AbortError"))
-            },
-            { once: true },
-          )
-        })
-      }
-      const result = LLMNativeRuntime.stream({
-        model: { ...baseModel, options: { fetch: customFetch } },
-        provider: providerInfo,
-        auth: undefined,
-        llmClient: client,
-        messages: [storedSession.user("hello")],
-        tools: {},
-        headers: {},
-        retries: 2,
-        abort: new AbortController().signal,
-      })
-      if (result.type === "unsupported") throw new Error(result.reason)
-      const fiber = yield* result.stream.pipe(Stream.runDrain, Effect.forkScoped)
-      yield* Effect.promise(() => started)
-      yield* Fiber.interrupt(fiber)
-
-      expect(aborted).toBe(true)
-      expect(attempts).toBe(1)
-    }),
-  )
-
   it.effect("native tool wrapper raises ToolFailure when the source tool has no execute handler", () =>
     Effect.gen(function* () {
       // The AI SDK Tool shape allows execute to be omitted (e.g., client-side / MCP tools).
@@ -869,7 +608,6 @@ describe("session.llm-native.request", () => {
         input: [openAIResponses.user("hello")],
         max_output_tokens: 512,
         store: false,
-        include: ["reasoning.encrypted_content"],
         stream: true,
       },
     }),
@@ -897,38 +635,6 @@ describe("session.llm-native.request", () => {
           openAIResponses.user("Summarize it."),
         ],
         store: false,
-        include: ["reasoning.encrypted_content"],
-      },
-    }),
-  )
-
-  it.effect("filters malformed persisted replay ids without removing visible text", () =>
-    expectOpenAIResponsesRequest({
-      history: [
-        storedSession.assistant([
-          storedSession.openaiReasoning("discarded reasoning", {
-            storedAs: "providerOptions",
-            itemId: "malformed",
-            encryptedContent: "encrypted-state",
-          }),
-          storedSession.text("Visible answer."),
-        ]),
-      ],
-      providerOptions: { openai: { store: false } },
-      expectedBody: {
-        input: [openAIResponses.assistant("Visible answer.")],
-        include: ["reasoning.encrypted_content"],
-        store: false,
-      },
-    }),
-  )
-
-  it.effect("never emits sequential cutoff on the public native route", () =>
-    expectOpenAIResponsesRequest({
-      history: [storedSession.user("hello")],
-      providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
-      expectedBody: {
-        input: [openAIResponses.user("hello")],
       },
     }),
   )

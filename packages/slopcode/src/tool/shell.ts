@@ -80,7 +80,7 @@ type Chunk = {
   size: number
 }
 
-function parts(node: Node, source: string) {
+function parts(node: Node) {
   const out: Part[] = []
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i)
@@ -89,7 +89,7 @@ function parts(node: Node, source: string) {
       for (let j = 0; j < child.childCount; j++) {
         const item = child.child(j)
         if (!item || item.type === "command_argument_sep" || item.type === "redirection") continue
-        out.push({ type: item.type, text: source.slice(item.startIndex, item.endIndex) })
+        out.push({ type: item.type, text: item.text })
       }
       continue
     }
@@ -103,14 +103,13 @@ function parts(node: Node, source: string) {
     ) {
       continue
     }
-    out.push({ type: child.type, text: source.slice(child.startIndex, child.endIndex) })
+    out.push({ type: child.type, text: child.text })
   }
   return out
 }
 
-function source(node: Node, command: string) {
-  const item = node.parent?.type === "redirected_statement" ? node.parent : node
-  return command.slice(item.startIndex, item.endIndex).trim()
+function source(node: Node) {
+  return (node.parent?.type === "redirected_statement" ? node.parent.text : node.text).trim()
 }
 
 function commands(node: Node) {
@@ -145,10 +144,10 @@ function auto(key: string, cwd: string, shell: string) {
 }
 
 function expand(text: string, cwd: string, shell: string) {
-  const out = unquote(ShellParser.expandEnv(text, (key) => envValue(key) || "")).replace(
-    /\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi,
-    (_, key: string) => auto(key, cwd, shell) || "",
-  )
+  const out = unquote(text)
+    .replace(/\$\{env:([^}]+)\}/gi, (_, key: string) => envValue(key) || "")
+    .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (_, key: string) => envValue(key) || "")
+    .replace(/\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi, (_, key: string) => auto(key, cwd, shell) || "")
   return home(out)
 }
 
@@ -347,7 +346,6 @@ export const ShellTool = Tool.define(
 
     const collect = Effect.fn("ShellTool.collect")(function* (
       root: Node,
-      sourceText: string,
       cwd: string,
       ps: boolean,
       shell: string,
@@ -361,7 +359,7 @@ export const ShellTool = Tool.define(
       const shellKind = ShellID.toKind(Shell.name(shell))
 
       for (const node of commands(root)) {
-        const command = parts(node, sourceText)
+        const command = parts(node)
         const tokens = command.map((item) => item.text)
         const cmd = ps || shellKind === "cmd" ? tokens[0]?.toLowerCase() : tokens[0]
 
@@ -378,7 +376,7 @@ export const ShellTool = Tool.define(
         }
 
         if (tokens.length && (!cmd || !CWD.has(cmd))) {
-          scan.patterns.add(source(node, sourceText))
+          scan.patterns.add(source(node))
           scan.always.add(BashArity.prefix(tokens).join(" ") + " *")
         }
       }
@@ -603,7 +601,7 @@ export const ShellTool = Tool.define(
                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
                     Effect.sync(() => tree.delete()),
                   )
-                  const scan = yield* collect(tree.rootNode, params.command, cwd, ps, shell, boundary)
+                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, boundary)
                   if (!containsPath(cwd, boundary)) scan.dirs.add(cwd)
                   yield* ask(ctx, scan, params)
                 }),

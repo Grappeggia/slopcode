@@ -17,6 +17,7 @@ import {
 import {
   browseSshRemoteFolder,
   buildAgentCommand,
+  buildAgentInteractiveCommand,
   buildAgentVersionCommand,
   buildSshBrowseCommand,
   discoverRemoteCommands,
@@ -27,6 +28,7 @@ import {
   runAgentVersion,
   runAgentPrompt,
 } from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
+import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import { workspaceProxyURL } from "../../src/server/shared/workspace-routing"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
@@ -231,7 +233,38 @@ describe("remote runtime HttpApi", () => {
       expect(typeof body.version).toBe("string")
       expect(body.version.length).toBeGreaterThan(0)
       expect(body.commands).toContainEqual(expect.objectContaining({ name: "help" }))
+      expect(body.commands).toContainEqual(expect.objectContaining({ name: "approvals" }))
+      expect(body.commands).toContainEqual(expect.objectContaining({ name: "sandbox" }))
       expect(JSON.stringify(body)).not.toContain("template")
+    } finally {
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+    }
+  })
+
+  test("opens a ticket-scoped interactive session with a fixed agent executable", async () => {
+    if (process.platform === "win32") return
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    await using bin = await tmpdir({ config: { formatter: false, lsp: false } })
+    await writeFile(path.join(bin.path, "codex"), "#!/bin/sh\nsleep 10\n", { mode: 0o755 })
+    const previous = process.env.PATH
+    process.env.PATH = `${bin.path}${path.delimiter}${previous ?? ""}`
+    try {
+      const response = await request(
+        RemoteRuntimePaths.session,
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ agent: "codex-cli" }) },
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      const ptyID = body.ptyID
+      expect(body).toMatchObject({ directory: tmp.path, ptyID: expect.stringMatching(/^pty_/) })
+      expect(body.ticket).toEqual(expect.any(String))
+      expect(body.expires_in).toBeGreaterThan(0)
+
+      const removed = await request(`${PtyPaths.remove.replace(":ptyID", ptyID)}`, tmp.path, {}, { method: "DELETE" })
+      expect(removed.status).toBe(200)
     } finally {
       if (previous === undefined) delete process.env.PATH
       else process.env.PATH = previous
@@ -392,15 +425,19 @@ describe("remote agent runtime", () => {
 
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     const commands = path.join(tmp.path, ".claude", "commands")
+    const skills = path.join(tmp.path, ".claude", "skills", "security-review")
     await mkdir(commands, { recursive: true })
+    await mkdir(skills, { recursive: true })
     await writeFile(path.join(commands, "review.md"), "---\ndescription: Review it\nsubtask: true\n---\nsecret")
+    await writeFile(path.join(skills, "SKILL.md"), "---\ndescription: Review security\n---\nsecret skill")
     await writeFile(path.join(commands, "bad.md"), "---\nsubtask: no\n---\nsecret")
     await writeFile(
       path.join(commands, "large.md"),
       `---\ndescription: ${"x".repeat(MAX_REMOTE_AGENT_COMMAND_DESCRIPTION_LENGTH + 1)}\n---\nsecret`,
     )
     const discovered = await discoverRemoteCommands("claude-code", tmp.path)
-    expect(discovered).toEqual([{ name: "review", description: "Review it", subtask: true }])
+    expect(discovered).toContainEqual({ name: "review", description: "Review it", subtask: true })
+    expect(discovered).toContainEqual({ name: "security-review", description: "Review security" })
     expect(JSON.stringify(discovered)).not.toContain("secret")
   })
 
@@ -411,6 +448,10 @@ describe("remote agent runtime", () => {
     await writeFile(
       path.join(commands, "deploy.md"),
       "---\ndescription: Deploy safely\nmodel: openai/gpt-5\n---\nrun deploy",
+    )
+    await writeFile(
+      path.join(tmp.path, "opencode.jsonc"),
+      '{\n  "command": {\n    "check": {\n      "description": "Check the project",\n      "agent": "plan",\n      "template": "secret config template"\n    }\n  }\n}',
     )
     const process = Layer.mock(AppProcess.Service)({
       run: (command) => {
@@ -426,6 +467,8 @@ describe("remote agent runtime", () => {
     expect(result.agent).toBe("opencode-cli")
     expect(result.version).toBe("opencode 2.0.0")
     expect(result.commands).toContainEqual({ name: "deploy", description: "Deploy safely", model: "openai/gpt-5" })
+    expect(result.commands).toContainEqual({ name: "check", description: "Check the project", agent: "plan" })
+    expect(JSON.stringify(result.commands)).not.toContain("secret config template")
     expect(result.commands.every((command) => !Object.hasOwn(command, "template"))).toBe(true)
   })
 
@@ -464,6 +507,39 @@ describe("remote agent runtime", () => {
       args: ["-p", "--model", "sonnet", "--permission-mode", "acceptEdits", "--", prompt],
     })
     expect(buildAgentCommand("claude-code", prompt, { profile: "default" })).toBeUndefined()
+  })
+
+  test("builds interactive argv without turning the PTY into a shell", () => {
+    expect(
+      buildAgentInteractiveCommand("codex-cli", {
+        model: "gpt-5",
+        profile: "safe-profile",
+        sandbox: "workspace-write",
+        approval: "on-request",
+      }),
+    ).toEqual({
+      executable: "codex",
+      args: [
+        "--model",
+        "gpt-5",
+        "--profile",
+        "safe-profile",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "on-request",
+      ],
+    })
+    expect(buildAgentInteractiveCommand("opencode-cli", { model: "openai/gpt-5", profile: "build" })).toEqual({
+      executable: "opencode",
+      args: ["--model", "openai/gpt-5", "--agent", "build"],
+    })
+    expect(buildAgentInteractiveCommand("claude-code", { model: "sonnet", permissionMode: "plan" })).toEqual({
+      executable: "claude",
+      args: ["--model", "sonnet", "--permission-mode", "plan"],
+    })
+    expect(buildAgentInteractiveCommand("claude-code", { profile: "default" })).toBeUndefined()
+    expect(buildAgentInteractiveCommand("opencode-cli", { permissionMode: "plan" })).toBeUndefined()
   })
 
   test("runs selected executables with cwd and no client-controlled shell options", async () => {

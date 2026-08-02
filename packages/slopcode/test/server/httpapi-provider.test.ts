@@ -260,24 +260,6 @@ function setEnvScoped(key: string, value: string) {
 }
 
 describe("provider HttpApi", () => {
-  it.instance(
-    "serves safe OpenAI disconnected and API key usage states",
-    Effect.gen(function* () {
-      const directory = (yield* TestInstance).directory
-      const headers = { "x-slopcode-directory": directory }
-      yield* setEnvScoped("SLOPCODE_AUTH_CONTENT", "{}")
-      const disconnected = yield* request("/provider/openai/usage", { headers })
-      expect(disconnected.status).toBe(200)
-      expect(yield* disconnected.json).toEqual({ status: "disconnected" })
-
-      process.env.SLOPCODE_AUTH_CONTENT = JSON.stringify({ openai: { type: "api", key: "never-return-this" } })
-      const api = yield* request("/provider/openai/usage", { headers })
-      expect(api.status).toBe(200)
-      expect(yield* api.json).toEqual({ status: "api_key" })
-    }),
-    projectOptions,
-  )
-
   it.instance.skip(
     "returns public v2 provider not found errors",
     Effect.gen(function* () {

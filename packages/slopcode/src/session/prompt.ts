@@ -43,7 +43,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Deferred, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -58,79 +58,16 @@ import { AgentAttachment, FileAttachment, Prompt, Source } from "@slopcode-ai/co
 import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
-import { EventTable } from "@slopcode-ai/core/event/sql"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@slopcode-ai/llm"
-import { EventV2 } from "@slopcode-ai/core/event"
-import { createHash } from "crypto"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
-const PromptRequested = EventV2.define({
-  type: "internal.v1.prompt.requested",
-  sync: { aggregate: "sessionID", version: 1 },
-  schema: {
-    sessionID: SessionID,
-    messageID: MessageID,
-    identity: Schema.String,
-  },
-})
-const PromptPrepared = EventV2.define({
-  type: "internal.v1.prompt.prepared",
-  sync: { aggregate: "sessionID", version: 1 },
-  schema: {
-    sessionID: SessionID,
-    messageID: MessageID,
-    identity: Schema.String,
-    manifest: Schema.String,
-  },
-})
-const PromptCompleted = EventV2.define({
-  type: "internal.v1.prompt.completed",
-  sync: { aggregate: "sessionID", version: 1 },
-  schema: {
-    sessionID: SessionID,
-    messageID: MessageID,
-    identity: Schema.String,
-    manifest: Schema.String,
-  },
-})
-const PromptFailed = EventV2.define({
-  type: "internal.v1.prompt.failed",
-  sync: { aggregate: "sessionID", version: 1 },
-  schema: {
-    sessionID: SessionID,
-    messageID: MessageID,
-    identity: Schema.String,
-    reason: Schema.Literals(["preparation", "persistence", "unknown"]),
-  },
-})
-
-export class AdmissionFailed extends Schema.TaggedErrorClass<AdmissionFailed>()("SessionPrompt.AdmissionFailed", {
-  sessionID: SessionID,
-  messageID: MessageID,
-  reason: Schema.Literals(["preparation", "persistence", "unknown"]),
-}) {}
-
-type AdmissionOutcome =
-  | { readonly success: true; readonly message: SessionV1.WithParts }
-  | { readonly success: false; readonly reason: AdmissionFailed["reason"] }
-type AdmissionOwner = { readonly identity: string; readonly terminal: Deferred.Deferred<AdmissionOutcome> }
-export type Admitted = { readonly message: SessionV1.WithParts; readonly resume: boolean }
-const registry = new WeakMap<object, Map<EventV2.ID, AdmissionOwner>>()
-
-function active(database: object) {
-  const existing = registry.get(database)
-  if (existing) return existing
-  const created = new Map<EventV2.ID, AdmissionOwner>()
-  registry.set(database, created)
-  return created
-}
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -149,21 +86,11 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 }
 
 export interface Interface {
-  readonly cancel: <E = never>(
-    sessionID: SessionID,
-    coordinate?: (cancel: Effect.Effect<void>) => Effect.Effect<void, E>,
-  ) => Effect.Effect<void, E>
-  readonly prompt: <E = never>(
-    input: PromptInput,
-    guard?: Effect.Effect<void, E>,
-  ) => Effect.Effect<SessionV1.WithParts, Image.Error | AdmissionFailed | E>
-  readonly admit: <E = never>(
-    input: PromptInput,
-    guard?: Effect.Effect<void, E>,
-  ) => Effect.Effect<Admitted, Image.Error | AdmissionFailed | E>
+  readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
-  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error | AdmissionFailed>
+  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
 
@@ -201,7 +128,6 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    const admissions = active(db)
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -210,21 +136,9 @@ export const layer = Layer.effect(
       } satisfies TaskPromptOps
     })
 
-    const cancel = Effect.fn("SessionPrompt.cancel")(function* <E = never>(
-      sessionID: SessionID,
-      coordinate?: (take: Effect.Effect<void>) => Effect.Effect<void, E>,
-    ) {
+    const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
-      const result: { cleanup: Effect.Effect<void> } = { cleanup: Effect.void }
-      const take = state.take(sessionID).pipe(
-        Effect.tap((cleanup) =>
-          Effect.sync(() => {
-            result.cleanup = cleanup
-          }),
-        ),
-        Effect.asVoid,
-      )
-      yield* (coordinate ? coordinate(take) : take).pipe(Effect.ensuring(Effect.suspend(() => result.cleanup)))
+      yield* state.cancel(sessionID)
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -337,9 +251,7 @@ export const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
-      const taskModel = task.model
-        ? yield* getModel(task.model.providerID, task.model.modelID, sessionID, false)
-        : model
+      const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
         role: "assistant",
@@ -390,6 +302,7 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
+        yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
         throw error
       }
 
@@ -615,7 +528,7 @@ export const layer = Layer.effect(
               }
               const completed = Date.now()
               if (flags.experimentalEventSystem) {
-                yield* events.publish(SessionEvent.Shell.EndedV1, {
+                yield* events.publish(SessionEvent.Shell.Ended, {
                   sessionID: input.sessionID,
                   timestamp: DateTime.makeUnsafe(completed),
                   callID: part.callID,
@@ -686,16 +599,18 @@ export const layer = Layer.effect(
       providerID: ProviderV2.ID,
       modelID: ModelV2.ID,
       sessionID: SessionID,
-      report = true,
     ) {
       const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) return exit.value
       const err = Cause.squash(exit.cause)
       if (Provider.ModelNotFoundError.isInstance(err)) {
         const hint = err.suggestions?.length ? ` Did you mean: ${err.suggestions.join(", ")}?` : ""
-        const error = new NamedError.Unknown({ message: `Model not found: ${err.providerID}/${err.modelID}.${hint}` })
-        if (report) yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-        return yield* Effect.die(error)
+        yield* events.publish(Session.Event.Error, {
+          sessionID,
+          error: new NamedError.Unknown({
+            message: `Model not found: ${err.providerID}/${err.modelID}.${hint}`,
+          }).toObject(),
+        })
       }
       return yield* Effect.die(err)
     })
@@ -721,16 +636,14 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
-      input: PromptInput,
-      prepared: (message: SessionV1.WithParts) => Effect.Effect<void> = () => Effect.void,
-    ) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
+        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
 
@@ -766,12 +679,38 @@ export const layer = Layer.effect(
         format: input.format,
       }
 
+      if (current?.agent !== info.agent) {
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          agent: info.agent,
+        })
+      }
+      if (
+        current?.model?.providerID !== info.model.providerID ||
+        current.model.id !== info.model.modelID ||
+        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
+      ) {
+        yield* events.publish(SessionEvent.ModelSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          model: {
+            id: ModelV2.ID.make(info.model.modelID),
+            providerID: ProviderV2.ID.make(info.model.providerID),
+            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
+          },
+        })
+      }
+
+      yield* Effect.addFinalizer(() => instruction.clear(info.id))
+
       type Draft<T> = T extends SessionV1.Part ? Omit<T, "id"> & { id?: string } : never
       const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
         ...part,
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
-      const followups: Effect.Effect<unknown>[] = []
 
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
@@ -938,12 +877,10 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read file", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  followups.push(
-                    events.publish(Session.Event.Error, {
-                      sessionID: input.sessionID,
-                      error: new NamedError.Unknown({ message }).toObject(),
-                    }),
-                  )
+                  yield* events.publish(Session.Event.Error, {
+                    sessionID: input.sessionID,
+                    error: new NamedError.Unknown({ message }).toObject(),
+                  })
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -962,12 +899,10 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read directory", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  followups.push(
-                    events.publish(Session.Event.Error, {
-                      sessionID: input.sessionID,
-                      error: new NamedError.Unknown({ message }).toObject(),
-                    }),
-                  )
+                  yield* events.publish(Session.Event.Error, {
+                    sessionID: input.sessionID,
+                    error: new NamedError.Unknown({ message }).toObject(),
+                  })
                   return [
                     {
                       messageID: info.id,
@@ -1094,34 +1029,7 @@ export const layer = Layer.effect(
         })
       }
 
-      yield* prepared({ info, parts })
       yield* sessions.updateMessage(info)
-      yield* Effect.addFinalizer(() => instruction.clear(info.id))
-      if (current?.agent !== info.agent) {
-        yield* events.publish(SessionEvent.AgentSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          agent: info.agent,
-        })
-      }
-      if (
-        current?.model?.providerID !== info.model.providerID ||
-        current.model.id !== info.model.modelID ||
-        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
-      ) {
-        yield* events.publish(SessionEvent.ModelSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          model: {
-            id: ModelV2.ID.make(info.model.modelID),
-            providerID: ProviderV2.ID.make(info.model.providerID),
-            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
-          },
-        })
-      }
-      yield* Effect.forEach(followups, (effect) => effect, { discard: true })
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
         (result, part) => {
@@ -1197,179 +1105,24 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const record = Effect.fnUntraced(function* (id: EventV2.ID) {
-      return yield* db.select().from(EventTable).where(eq(EventTable.id, id)).get().pipe(Effect.orDie)
-    })
+    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
+      "SessionPrompt.prompt",
+    )(function* (input: PromptInput) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      yield* revert.cleanup(session)
+      const message = yield* createUserMessage(input)
+      yield* sessions.touch(input.sessionID)
 
-    const complete = Effect.fnUntraced(function* (sessionID: SessionID, messageID: MessageID, manifest: string) {
-      const message = yield* sessions.findMessage(sessionID, (item) => item.info.id === messageID).pipe(Effect.orDie)
-      if (Option.isNone(message)) return
-      if (messageManifest(message.value) !== manifest) return
-      return message.value
-    })
-
-    const admit: Interface["admit"] = Effect.fn("SessionPrompt.admit")(function* <E = never>(
-      input: PromptInput,
-      guard: Effect.Effect<void, E> = Effect.void,
-    ) {
-      const messageID = input.messageID ?? MessageID.ascending()
-      const request = { ...input, messageID }
-      const key = JSON.stringify([input.sessionID, messageID])
-      const identity = promptIdentity(request)
-      const requestedID = lifecycleID(key, "requested")
-      const active = admissions.get(requestedID)
-      if (active) {
-        if (active.identity !== identity) return yield* Effect.die(`Conflicting prompt admission ${messageID}`)
-        const terminal = yield* Deferred.await(active.terminal)
-        if (terminal.success) return { message: terminal.message, resume: input.noReply !== true }
-        return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: terminal.reason })
+      const permissions: PermissionV1.Rule[] = []
+      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+      }
+      if (permissions.length > 0) {
+        session.permission = permissions
+        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
-      const owner = { identity, terminal: Deferred.makeUnsafe<AdmissionOutcome>() }
-      admissions.set(requestedID, owner)
-      const admitted = yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const preparedID = lifecycleID(key, "prepared")
-          const terminalID = lifecycleID(key, "terminal")
-          const data = { sessionID: input.sessionID, messageID, identity }
-          const settle = (outcome: AdmissionOutcome) =>
-            Effect.sync(() => {
-              Deferred.doneUnsafe(owner.terminal, Effect.succeed(outcome))
-              if (admissions.get(requestedID) === owner) admissions.delete(requestedID)
-            })
-          const fail = Effect.fnUntraced(function* (reason: AdmissionFailed["reason"]) {
-            yield* events.publish(PromptFailed, { ...data, reason }, { id: terminalID, idempotent: true })
-            yield* settle({ success: false, reason })
-            return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason })
-          })
-          const recover = Effect.fnUntraced(function* () {
-            const terminal = yield* record(terminalID)
-            if (terminal?.type === "internal.v1.prompt.failed.1") {
-              const reason = terminal.data.reason
-              const safe =
-                terminal.data.identity === identity &&
-                (reason === "preparation" || reason === "persistence" || reason === "unknown")
-                  ? reason
-                  : "unknown"
-              yield* settle({ success: false, reason: safe })
-              return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: safe })
-            }
-            if (terminal?.type === "internal.v1.prompt.completed.1") {
-              const manifest = terminal.data.manifest
-              if (terminal.data.identity === identity && typeof manifest === "string") {
-                const message = yield* complete(input.sessionID, messageID, manifest)
-                if (message) {
-                  yield* settle({ success: true, message })
-                  return message
-                }
-              }
-              yield* settle({ success: false, reason: "unknown" })
-              return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: "unknown" })
-            }
-            const prepared = yield* record(preparedID)
-            if (
-              prepared?.type === "internal.v1.prompt.prepared.1" &&
-              prepared.data.identity === identity &&
-              typeof prepared.data.manifest === "string"
-            ) {
-              const message = yield* complete(input.sessionID, messageID, prepared.data.manifest)
-              if (message) {
-                yield* events.publish(
-                  PromptCompleted,
-                  { ...data, manifest: prepared.data.manifest },
-                  { id: terminalID, idempotent: true },
-                )
-                yield* settle({ success: true, message })
-                return message
-              }
-            }
-            return yield* fail("unknown")
-          })
-
-          const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-          if (input.agent && !(yield* agents.get(input.agent))) {
-            const available = (yield* agents.list()).filter((agent) => !agent.hidden).map((agent) => agent.name)
-            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            throw new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-          }
-          let requested = false
-          yield* events.publish(PromptRequested, data, {
-            id: requestedID,
-            idempotent: true,
-            guard: () => guard.pipe(Effect.orDie),
-            commit: () =>
-              Effect.sync(() => {
-                requested = true
-              }),
-          })
-          if (!requested) return { message: yield* recover(), resume: input.noReply !== true }
-
-          const state: { completed: boolean; reason: AdmissionFailed["reason"]; manifest?: string } = {
-            completed: false,
-            reason: "preparation",
-          }
-          const result = yield* restore(
-            Effect.gen(function* () {
-              const message = yield* createUserMessage(request, (prepared) => {
-                state.manifest = messageManifest(prepared)
-                state.reason = "persistence"
-                return events
-                  .publish(PromptPrepared, { ...data, manifest: state.manifest }, { id: preparedID, idempotent: true })
-                  .pipe(Effect.asVoid)
-              })
-              yield* revert.cleanup(session, message.info.id)
-              yield* sessions.touch(input.sessionID)
-
-              const permissions: PermissionV1.Rule[] = []
-              for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-                permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-              }
-              if (permissions.length > 0) {
-                session.permission = permissions
-                yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
-              }
-
-              if (!state.manifest) return yield* Effect.die("Prompt preparation did not produce a manifest")
-              yield* events.publish(
-                PromptCompleted,
-                { ...data, manifest: state.manifest },
-                {
-                  id: terminalID,
-                  idempotent: true,
-                  commit: () =>
-                    Effect.sync(() => {
-                      state.completed = true
-                    }),
-                },
-              )
-              yield* settle({ success: true, message })
-              return message
-            }),
-          ).pipe(Effect.exit)
-          if (Exit.isFailure(result)) {
-            if (state.completed) return { message: yield* recover(), resume: input.noReply !== true }
-            return yield* fail(state.reason)
-          }
-          return { message: result.value, resume: input.noReply !== true }
-        }),
-      ).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (admissions.get(requestedID) !== owner) return
-            Deferred.doneUnsafe(owner.terminal, Effect.succeed({ success: false, reason: "unknown" }))
-            admissions.delete(requestedID)
-          }),
-        ),
-      )
-      return admitted
-    })
-
-    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(function* <E = never>(
-      input: PromptInput,
-      guard: Effect.Effect<void, E> = Effect.void,
-    ) {
-      const admitted = yield* admit(input, guard)
-      if (!admitted.resume) return admitted.message
+      if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })
 
@@ -1383,11 +1136,7 @@ export const layer = Layer.effect(
 
     const assertV1 = Effect.fn("SessionPrompt.assertRuntime")(function* (sessionID: SessionID, epoch?: number) {
       const row = yield* db
-        .select({
-          runtime: SessionTable.runtime,
-          runtime_epoch: SessionTable.runtime_epoch,
-          runtime_state: SessionTable.runtime_state,
-        })
+        .select({ runtime: SessionTable.runtime, runtime_epoch: SessionTable.runtime_epoch })
         .from(SessionTable)
         .where(eq(SessionTable.id, sessionID))
         .get()
@@ -1399,7 +1148,6 @@ export const layer = Layer.effect(
             sessionID,
             expectedOwner: "v1",
             actualOwner: row.runtime,
-            actualState: row.runtime_state,
             expectedEpoch: epoch,
             actualEpoch: row.runtime_epoch,
           }),
@@ -1470,7 +1218,7 @@ export const layer = Layer.effect(
             history: msgs,
           }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID, false)
+        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
         const task = tasks.pop()
 
         if (task?.type === "subtask") {
@@ -1504,6 +1252,7 @@ export const layer = Layer.effect(
           const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
           const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
           const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+          yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
           throw error
         }
         const maxSteps = agent.steps ?? Infinity
@@ -1563,10 +1312,6 @@ export const layer = Layer.effect(
             bypassAgentCheck,
             messages: msgs,
             promptOps,
-            policy: () =>
-              Effect.all([agents.get(agent.name), sessions.get(session.id).pipe(Effect.orDie)]).pipe(
-                Effect.map(([agent, session]) => Permission.merge(agent.permission, session.permission ?? [])),
-              ),
           }).pipe(
             Effect.provideService(Plugin.Service, plugin),
             Effect.provideService(Permission.Service, permission),
@@ -1691,28 +1436,12 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      const work = Effect.gen(function* () {
-        const row = yield* assertV1(input.sessionID)
-        return yield* runLoop(input.sessionID, row.runtime_epoch)
-      }).pipe(
-        Effect.tapCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) return Effect.void
-          const failure = Cause.squash(cause)
-          const data =
-            typeof failure === "object" && failure !== null && "data" in failure && typeof failure.data === "object"
-              ? failure.data
-              : undefined
-          const message =
-            data && data !== null && "message" in data && typeof data.message === "string"
-              ? data.message
-              : failure instanceof Error && failure.message
-                ? failure.message
-                : Cause.pretty(cause)
-          const error = new NamedError.Unknown({ message }).toObject()
-          return events.publish(Session.Event.Error, { sessionID: input.sessionID, error })
-        }),
+      const row = yield* assertV1(input.sessionID)
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        runLoop(input.sessionID, row.runtime_epoch),
       )
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), work)
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1851,7 +1580,6 @@ export const layer = Layer.effect(
 
     return Service.of({
       cancel,
-      admit,
       prompt,
       loop,
       shell,
@@ -1924,42 +1652,6 @@ export const PromptInput = Schema.Struct({
   ),
 })
 export type PromptInput = Schema.Schema.Type<typeof PromptInput>
-
-function promptIdentity(input: PromptInput) {
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        agent: input.agent,
-        format: input.format,
-        model: input.model,
-        noReply: input.noReply,
-        parts: input.parts,
-        system: input.system,
-        tools: input.tools,
-        variant: input.variant,
-      }),
-    )
-    .digest("hex")
-}
-
-function messageManifest(message: SessionV1.WithParts) {
-  return createHash("sha256").update(stableStringify(message)).digest("hex")
-}
-
-function lifecycleID(key: string, phase: "requested" | "prepared" | "terminal") {
-  return EventV2.ID.fromExternal({ namespace: `slopcode.v1.prompt.${phase}`, key })
-}
-
-function stableStringify(value: unknown): string {
-  if (value === undefined) return "null"
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
-  if (!value || typeof value !== "object") return JSON.stringify(value)
-  return `{${Object.entries(value)
-    .filter(([, item]) => item !== undefined)
-    .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
-    .join(",")}}`
-}
 
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,

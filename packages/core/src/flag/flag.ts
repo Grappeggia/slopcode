@@ -54,14 +54,8 @@ export const Flag = {
   get SLOPCODE_DISABLE_PROJECT_CONFIG() {
     return truthy("SLOPCODE_DISABLE_PROJECT_CONFIG")
   },
-  get SLOPCODE_DISABLE_AUTOCOMPLETE() {
-    return truthy("SLOPCODE_DISABLE_AUTOCOMPLETE")
-  },
   get SLOPCODE_EXPERIMENTAL_REFERENCES() {
     return enabledByExperimental("SLOPCODE_EXPERIMENTAL_REFERENCES")
-  },
-  get SLOPCODE_EXPERIMENTAL_OXFMT() {
-    return enabledByExperimental("SLOPCODE_EXPERIMENTAL_OXFMT")
   },
   get SLOPCODE_TUI_CONFIG() {
     return process.env["SLOPCODE_TUI_CONFIG"]

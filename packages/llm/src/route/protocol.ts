@@ -1,8 +1,6 @@
 import { Schema, type Effect } from "effect"
 import type { LLMError, LLMEvent, LLMRequest, ProtocolID } from "../schema"
 
-export type ProtocolCapability = "code-mode" | "responses-lite" | "custom-tools" | "sequential-cutoff"
-
 /**
  * The semantic API contract of one model server family.
  *
@@ -38,8 +36,6 @@ export type ProtocolCapability = "code-mode" | "responses-lite" | "custom-tools"
 export interface Protocol<Body, Frame, Event, State> {
   /** Stable id for the wire protocol implementation. */
   readonly id: ProtocolID
-  /** Semantic capabilities explicitly implemented by this protocol. */
-  readonly capabilities?: ReadonlyArray<ProtocolCapability>
   /** Request side: schema for the provider-native body and how to build it. */
   readonly body: ProtocolBody<Body>
   /** Response side: streaming state machine. */

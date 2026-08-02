@@ -57,7 +57,7 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 45
+        timeout-minutes: 20
         run: GITHUB_ACTIONS=false bun turbo test
         env:
           SLOPCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}

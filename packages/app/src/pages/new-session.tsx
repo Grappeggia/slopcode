@@ -1,5 +1,4 @@
-import { createEffect, createMemo, onMount, untrack } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createEffect, createMemo, createSignal, onMount, untrack } from "solid-js"
 import { useSearchParams } from "@solidjs/router"
 import { NewSessionDesignView } from "@/components/session"
 import { useComments } from "@/context/comments"
@@ -7,6 +6,10 @@ import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
+import {
+  normalizeNewSessionWorktree,
+  resolveNewSessionWorktree,
+} from "./new-session/new-session-workspace-controller"
 
 /**
  * The `/new-session` draft page. Unlike `session.tsx`, this only renders the prompt
@@ -24,16 +27,19 @@ export default function NewSessionPage() {
 
   const composer = createSessionComposerState()
 
-  const [store, setStore] = createStore({
-    worktree: "main",
-  })
+  const [selectedWorktree, setSelectedWorktree] = createSignal<string>()
 
   const newSessionWorktree = createMemo(() => {
-    if (store.worktree === "create") return "create"
-    const project = sync.project
-    if (project && sdk.directory !== project.worktree) return sdk.directory
-    return "main"
+    return resolveNewSessionWorktree({
+      selected: selectedWorktree(),
+      directory: sdk.directory,
+      projectWorktree: sync.project?.worktree,
+    })
   })
+
+  const setNewSessionWorktree = (value: string) => {
+    setSelectedWorktree(normalizeNewSessionWorktree(value, sdk.directory, sync.project?.worktree))
+  }
 
   createEffect(() => {
     if (!prompt.ready()) return
@@ -64,7 +70,8 @@ export default function NewSessionPage() {
                   inputRef = el
                 }}
                 newSessionWorktree={newSessionWorktree()}
-                onNewSessionWorktreeReset={() => setStore("worktree", "main")}
+                onNewSessionWorktreeChange={setNewSessionWorktree}
+                onNewSessionWorktreeReset={() => setSelectedWorktree()}
                 onSubmit={() => comments.clear()}
                 onResponseSubmit={() => {}}
                 setPromptDockRef={() => {}}

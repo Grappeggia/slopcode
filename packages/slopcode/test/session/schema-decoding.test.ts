@@ -240,7 +240,7 @@ describe("SessionStatus.Info", () => {
         title: "Free limit reached",
         message: "Subscribe to SlopCode Go.",
         label: "subscribe",
-        link: "https://slopcode.ai/go",
+        link: "https://slopcode.dev/go",
       },
       next: 500,
     }

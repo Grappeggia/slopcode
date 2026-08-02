@@ -15,7 +15,7 @@ import {
   buttonText,
 } from "../styles"
 
-const CONSOLE_URL = "https://slopcode.ai/"
+const CONSOLE_URL = "https://slopcode.dev/"
 
 interface InviteEmailProps {
   inviter: string

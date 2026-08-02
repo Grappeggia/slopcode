@@ -9,7 +9,6 @@ import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
-import { permissionRespond, type PermissionDecision } from "./session-permission"
 
 export const todoState = (input: {
   count: number
@@ -73,13 +72,14 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     return store.responding === perm.id
   })
 
-  const decide = (response: PermissionDecision) => {
+  const decide = (response: "once" | "always" | "reject") => {
     const perm = permissionRequest()
     if (!perm) return
     if (store.responding === perm.id) return
 
     setStore("responding", perm.id)
-    permissionRespond(sdk.client, perm, response, sdk.directory)
+    sdk.client.permission
+      .respond({ sessionID: perm.sessionID, permissionID: perm.id, response })
       .catch((err: unknown) => {
         const description = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description })

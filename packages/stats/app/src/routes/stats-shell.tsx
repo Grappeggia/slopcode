@@ -1,4 +1,4 @@
-import opencodeWordmarkDark from "../asset/logo-ornate-dark.svg"
+import slopcodeWordmarkDark from "../asset/logo-ornate-dark.svg"
 import { query } from "@solidjs/router"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useI18n } from "../context/i18n"
@@ -8,12 +8,12 @@ import { route, type Locale } from "../lib/language"
 export type HeaderLink = { href: string; label: string }
 
 export const githubLink = {
-  href: "https://github.com/anomalyco/opencode",
-  apiHref: "https://api.github.com/repos/anomalyco/opencode",
-  fallbackStars: "150K",
+  href: "https://github.com/teamslop/slopcode",
+  apiHref: "https://api.github.com/repos/teamslop/slopcode",
+  fallbackStars: "2",
 }
 export const themePreferences = ["dark", "light", "system"] as const
-export const themeStorageKey = "opencode:stats-theme"
+export const themeStorageKey = "slopcode:stats-theme"
 export type ThemePreference = (typeof themePreferences)[number]
 
 const compactNumberFormatter = new Intl.NumberFormat("en", {
@@ -132,8 +132,8 @@ export function Header(props: { githubStars: string; links?: readonly HeaderLink
             <strong>{i18n.t("header.github")}</strong>
             <span>[{props.githubStars}]</span>
           </a>
-          <a data-slot="header-button" data-variant="contrast" href="https://opencode.ai/">
-            <strong>{i18n.t("header.tryOpenCode")}</strong>
+          <a data-slot="header-button" data-variant="contrast" href="https://slopcode.dev/">
+            <strong>{i18n.t("header.trySlopCode")}</strong>
           </a>
           <button
             data-slot="menu-button"
@@ -183,8 +183,11 @@ export function Header(props: { githubStars: string; links?: readonly HeaderLink
 function DataWordmark() {
   return (
     <svg data-slot="stats-wordmark" width="66" height="20" viewBox="0 0 66 20" fill="none" aria-hidden="true">
-      <path opacity="0.2" d="M12 16H4V8H12V16Z" fill="currentColor" />
-      <path d="M12 4H4V16H12V4ZM16 20H0V0H16V20Z" fill="currentColor" />
+      <path opacity="0.2" d="M10 11H6V13H10V11Z" fill="currentColor" />
+      <path
+        d="M12 3H4V5H12V3ZM6 5H4V7H6V5ZM12 7H4V9H12V7ZM12 9H10V11H12V9ZM12 11H4V13H12V11Z"
+        fill="currentColor"
+      />
       <path
         d="M63.3543 16L62.5119 12.8711H58.6437L57.8013 16H55.7383L59.2454 4H61.9618L65.4689 16H63.3543ZM61.0678 7.851L60.6896 5.94269H60.4489L60.0707 7.851L59.1595 11.1347H61.9962L61.0678 7.851Z"
         fill="currentColor"
@@ -202,12 +205,15 @@ function DataWordmark() {
   )
 }
 
-function OpenCodeMark() {
+function SlopcodeMark() {
   return (
-    <svg data-slot="opencode-mark" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+    <svg data-slot="slopcode-mark" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
       <path d="M40 40H0V0H40V40Z" fill="var(--stats-logo-bg)" />
-      <path d="M26 29H14V17H26V29Z" fill="var(--stats-logo-fill)" />
-      <path d="M26 11H14V29H26V11ZM32 35H8V5H32V35Z" fill="var(--stats-logo-stroke)" />
+      <path d="M25 22.5H15V27.5H25V22.5Z" fill="var(--stats-logo-fill)" />
+      <path
+        d="M30 7.5H10V12.5H30V7.5ZM15 12.5H10V17.5H15V12.5ZM30 17.5H10V22.5H30V17.5ZM30 22.5H25V27.5H30V22.5ZM30 27.5H10V32.5H30V27.5Z"
+        fill="var(--stats-logo-stroke)"
+      />
     </svg>
   )
 }
@@ -231,23 +237,22 @@ export function Footer(props: {
     { href: "#geo-breakdown", label: i18n.t("nav.geoBreakdown") },
   ]
   const legal = [
-    { href: "https://opencode.ai/legal/terms-of-service", label: i18n.t("footer.terms") },
-    { href: "https://opencode.ai/legal/privacy-policy", label: i18n.t("footer.privacy") },
+    { href: "https://slopcode.dev/legal/terms-of-service", label: i18n.t("footer.terms") },
+    { href: "https://slopcode.dev/legal/privacy-policy", label: i18n.t("footer.privacy") },
   ]
   const connect = [
-    { href: "mailto:hello@opencode.ai", label: i18n.t("footer.contact") },
-    { href: "https://opencode.ai/discord", label: i18n.t("footer.community") },
-    { href: "https://x.com/opencode", label: "X" },
+    { href: "mailto:hello@slopcode.dev", label: i18n.t("footer.contact") },
+    { href: "https://slopcode.dev/discord", label: i18n.t("footer.community") },
+    { href: "https://x.com/slopcode", label: "X" },
     { href: githubLink.href, label: i18n.t("header.github") },
-    { href: "https://www.youtube.com/@anomaly-co", label: i18n.t("footer.youtube") },
   ]
 
   return (
     <footer data-component="footer">
       <SectionBridge label={i18n.t("nav.geoBreakdown").toUpperCase()} href="#geo-breakdown" />
       <div data-slot="footer-grid">
-        <a data-slot="footer-mark" href="https://opencode.ai" aria-label={i18n.t("footer.homeAria")}>
-          <OpenCodeMark />
+        <a data-slot="footer-mark" href="https://slopcode.dev" aria-label={i18n.t("footer.homeAria")}>
+          <SlopcodeMark />
         </a>
         <FooterColumn title={i18n.t("footer.modelData")} links={modelStats} localHref={localHref} />
         <FooterColumn title={i18n.t("footer.legal")} links={legal} localHref={localHref} />
@@ -428,7 +433,7 @@ function SubscribeModal(props: { onClose: () => void }) {
       <div data-slot="modal-scrim" aria-hidden="true" onClick={props.onClose} />
       <div data-slot="modal-panel">
         <div data-slot="modal-brand">
-          <img data-slot="modal-logo" src={opencodeWordmarkDark} alt="OpenCode" />
+          <img data-slot="modal-logo" src={slopcodeWordmarkDark} alt="SlopCode" />
           <button
             data-slot="modal-close"
             type="button"

@@ -1,0 +1,176 @@
+diff --git a/dist/index.js b/dist/index.js
+index 8af2f91bfe962691c9105ec63e30e6b060676d24..172b42b167754dccff05ec4a8526bcf3b35b8dca 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -8,7 +8,7 @@ import os from 'os';
+  */
+ // IMPORTANT: The bundled client ID below is from gitlab-vscode-extension and is registered
+ // with redirect URI: vscode://gitlab.gitlab-workflow/authentication
+-// This will NOT work with OpenCode's local HTTP callback server.
++// This will NOT work with SlopCode's local HTTP callback server.
+ // To fix: Set GITLAB_OAUTH_CLIENT_ID environment variable with your own client ID.
+ // See OAUTH_SETUP.md for instructions on registering a new OAuth application.
+ const BUNDLED_CLIENT_ID = process.env.GITLAB_OAUTH_CLIENT_ID ||
+@@ -54,7 +54,7 @@ export function validateInstanceUrl(value) {
+ function debugLog(message, data) {
+     try {
+         const homeDir = os.homedir();
+-        const logDir = path.join(homeDir, '.local', 'share', 'opencode', 'log');
++        const logDir = path.join(homeDir, '.local', 'share', 'slopcode', 'log');
+         // Ensure log directory exists
+         if (!fs.existsSync(logDir)) {
+             fs.mkdirSync(logDir, { recursive: true });
+@@ -71,22 +71,32 @@ function debugLog(message, data) {
+     }
+ }
+ /**
+- * Get OpenCode auth file path
++ * Get SlopCode auth file path
+  */
+-function getAuthPath() {
++function getAuthPath(app = 'slopcode') {
+     const homeDir = os.homedir();
+     const xdgDataHome = process.env.XDG_DATA_HOME;
+     if (xdgDataHome) {
+-        return path.join(xdgDataHome, 'opencode', 'auth.json');
++        return path.join(xdgDataHome, app, 'auth.json');
+     }
+     if (process.platform !== 'win32') {
+-        return path.join(homeDir, '.local', 'share', 'opencode', 'auth.json');
++        return path.join(homeDir, '.local', 'share', app, 'auth.json');
+     }
+-    return path.join(homeDir, '.opencode', 'auth.json');
++    return path.join(homeDir, `.${app}`, 'auth.json');
++}
++function getLegacyAuthPath() {
++    return getAuthPath('opencode');
++}
++function readAuthData(authPath) {
++    const source = fs.existsSync(authPath) ? authPath : getLegacyAuthPath();
++    if (!fs.existsSync(source)) {
++        return {};
++    }
++    return JSON.parse(fs.readFileSync(source, 'utf-8'));
+ }
+ /**
+- * Save OAuth auth data to OpenCode's auth.json
+- * Workaround for OpenCode not saving the enterpriseUrl field
++ * Save OAuth auth data to SlopCode's auth.json
++ * Workaround for SlopCode not saving the enterpriseUrl field
+  */
+ async function saveOAuthData(access, refresh, expires, enterpriseUrl) {
+     const authPath = getAuthPath();
+@@ -96,11 +106,7 @@ async function saveOAuthData(access, refresh, expires, enterpriseUrl) {
+         fs.mkdirSync(authDir, { recursive: true });
+     }
+     // Read existing auth data
+-    let authData = {};
+-    if (fs.existsSync(authPath)) {
+-        const content = fs.readFileSync(authPath, 'utf-8');
+-        authData = JSON.parse(content);
+-    }
++    const authData = readAuthData(authPath);
+     // Update GitLab auth
+     authData.gitlab = {
+         type: 'oauth',
+@@ -114,8 +120,8 @@ async function saveOAuthData(access, refresh, expires, enterpriseUrl) {
+     fs.chmodSync(authPath, 0o600);
+ }
+ /**
+- * Save PAT auth data to OpenCode's auth.json
+- * Workaround for OpenCode not saving the enterpriseUrl field for API keys
++ * Save PAT auth data to SlopCode's auth.json
++ * Workaround for SlopCode not saving the enterpriseUrl field for API keys
+  */
+ async function savePATData(key, enterpriseUrl) {
+     const authPath = getAuthPath();
+@@ -125,11 +131,7 @@ async function savePATData(key, enterpriseUrl) {
+         fs.mkdirSync(authDir, { recursive: true });
+     }
+     // Read existing auth data
+-    let authData = {};
+-    if (fs.existsSync(authPath)) {
+-        const content = fs.readFileSync(authPath, 'utf-8');
+-        authData = JSON.parse(content);
+-    }
++    const authData = readAuthData(authPath);
+     // Update GitLab auth with PAT and enterpriseUrl
+     authData.gitlab = {
+         type: 'api',
+@@ -152,16 +154,18 @@ async function savePATData(key, enterpriseUrl) {
+ function persistPatInstanceUrl(instanceUrl) {
+     try {
+         const authPath = getAuthPath();
+-        if (!fs.existsSync(authPath)) {
++        const source = fs.existsSync(authPath) ? authPath : getLegacyAuthPath();
++        if (!fs.existsSync(source)) {
+             return;
+         }
+-        const authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
++        const authData = JSON.parse(fs.readFileSync(source, 'utf-8'));
+         const gitlab = authData.gitlab;
+         if (!gitlab || gitlab.type !== 'api') {
+             return;
+         }
+         const metadata = { ...(gitlab.metadata ?? {}), instanceUrl };
+         authData.gitlab = { ...gitlab, metadata };
++        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+         fs.writeFileSync(authPath, JSON.stringify(authData, null, 2));
+         fs.chmodSync(authPath, 0o600);
+     }
+@@ -266,7 +270,7 @@ async function refreshTokenIfNeeded(authData, auth, fallbackUrl) {
+     throw new Error('Failed to get refreshed auth data after token refresh');
+ }
+ /**
+- * OpenCode GitLab Auth Plugin
++ * SlopCode GitLab Auth Plugin
+  */
+ export const gitlabAuthPlugin = async (_input) => {
+     const authHook = {
+@@ -306,8 +310,8 @@ export const gitlabAuthPlugin = async (_input) => {
+             // For API key, return the key and instance URL.
+             if (authData.type === 'api') {
+                 // Instance URL precedence:
+-                // 1. metadata.instanceUrl — written by opencode when the PAT auth flow
+-                //    collects the instance URL prompt (opencode's `api` auth schema only
++                // 1. metadata.instanceUrl — written by SlopCode when the PAT auth flow
++                //    collects the instance URL prompt (SlopCode's `api` auth schema only
+                 //    persists `key` + `metadata`, not a top-level enterpriseUrl).
+                 // 2. enterpriseUrl — written by this plugin's savePATData workaround.
+                 // 3. env var / gitlab.com default.
+@@ -415,7 +419,7 @@ export const gitlabAuthPlugin = async (_input) => {
+                                 // Calculate expiry
+                                 const expiresAt = Date.now() + tokens.expires_in * 1000;
+                                 debugLog('Tokens received', { expiresAt: new Date(expiresAt).toISOString() });
+-                                // Save auth data (workaround for OpenCode not saving enterpriseUrl)
++                                // Save auth data (workaround for SlopCode not saving enterpriseUrl)
+                                 debugLog('Saving auth data...');
+                                 await saveOAuthData(tokens.access_token, tokens.refresh_token, expiresAt, normalizedUrl);
+                                 debugLog('Auth data saved successfully');
+@@ -426,7 +430,7 @@ export const gitlabAuthPlugin = async (_input) => {
+                                     refresh: tokens.refresh_token,
+                                     expires: expiresAt,
+                                     // Persist the instance URL so the provider can target the
+-                                    // correct GitLab instance. opencode's OAuth schema includes
++                                    // correct GitLab instance. SlopCode's OAuth schema includes
+                                     // enterpriseUrl, so this is written to auth.json.
+                                     enterpriseUrl: normalizedUrl,
+                                 };
+@@ -486,7 +490,7 @@ export const gitlabAuthPlugin = async (_input) => {
+                         if (!response.ok) {
+                             return { type: 'failed' };
+                         }
+-                        // Save PAT auth data with enterpriseUrl (workaround for OpenCode not saving it)
++                        // Save PAT auth data with enterpriseUrl (workaround for SlopCode not saving it)
+                         debugLog('Saving PAT auth data...');
+                         await savePATData(token, normalizedUrl);
+                         debugLog('PAT auth data saved successfully');
+@@ -494,7 +498,7 @@ export const gitlabAuthPlugin = async (_input) => {
+                             type: 'success',
+                             key: token,
+                             provider: normalizedUrl,
+-                            // Persist the instance URL in metadata (opencode's `api` auth
++                            // Persist the instance URL in metadata (SlopCode's `api` auth
+                             // schema stores only key + metadata, not a top-level field).
+                             metadata: { instanceUrl: normalizedUrl },
+                         };

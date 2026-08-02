@@ -9,7 +9,6 @@ import type { PromptInfo } from "./history"
 export type StashEntry = {
   input: string
   parts: PromptInfo["parts"]
-  mode: "normal" | "shell"
   timestamp: number
 }
 
@@ -21,8 +20,7 @@ export function parsePromptStash(text: string) {
     .filter(Boolean)
     .map((line) => {
       try {
-        const entry = JSON.parse(line) as Omit<StashEntry, "mode"> & { mode?: StashEntry["mode"] }
-        return { ...entry, mode: entry.mode === "shell" ? "shell" : "normal" }
+        return JSON.parse(line) as StashEntry
       } catch {
         return undefined
       }

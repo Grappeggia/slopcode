@@ -21,11 +21,11 @@ import type { FileNode } from "@slopcode-ai/sdk/v2"
 
 const MAX_DEPTH = 128
 
-function pathToFileUrl(filepath: string): string {
+export function pathToFileUrl(filepath: string): string {
   return `file://${encodeFilePath(filepath)}`
 }
 
-type Kind = "add" | "del" | "mix"
+export type Kind = "add" | "del" | "mix"
 
 type Filter = {
   files: Set<string>
@@ -99,7 +99,7 @@ const buildDragImage = (target: HTMLElement) => {
   return image
 }
 
-const withFileDragImage = (event: DragEvent) => {
+export const withFileDragImage = (event: DragEvent) => {
   const image = buildDragImage(event.currentTarget as HTMLElement)
   if (!image) return
   document.body.appendChild(image)

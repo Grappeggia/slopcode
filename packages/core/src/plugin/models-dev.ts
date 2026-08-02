@@ -9,14 +9,6 @@ import { PluginV2 } from "../plugin"
 import { ProviderV2 } from "../provider"
 import { State } from "../state"
 
-const managed = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-
-function packageName(providerID: ProviderV2.ID, model: ModelsDev.Model, provider: ModelsDev.Provider) {
-  if ((providerID === ProviderV2.ID.slopcode || providerID === ProviderV2.ID.slopcodeGo) && managed.has(model.id))
-    return "@ai-sdk/openai"
-  return model.provider?.npm ?? provider.npm
-}
-
 function released(date: string) {
   const time = Date.parse(date)
   return DateTime.makeUnsafe(Number.isFinite(time) ? time : 0)
@@ -144,17 +136,16 @@ export const ModelsDevPlugin = PluginV2.define({
         })
         for (const model of Object.values(item.models)) {
           const modelID = ModelV2.ID.make(model.id)
-          const npm = packageName(providerID, model, item)
-          const override = model.provider?.npm !== undefined || npm !== item.npm
+          const packageName = model.provider?.npm ?? item.npm
           catalog.model.update(providerID, modelID, (draft) => {
             draft.name = model.name
             draft.family = model.family ? ModelV2.Family.make(model.family) : undefined
-            draft.api = override
+            draft.api = model.provider?.npm
               ? {
                   id: draft.api.id,
                   type: "aisdk",
-                  package: npm!,
-                  url: model.provider?.api,
+                  package: model.provider.npm,
+                  url: model.provider.api,
                 }
               : {
                   id: draft.api.id,
@@ -169,9 +160,9 @@ export const ModelsDevPlugin = PluginV2.define({
             }
             draft.request = {
               headers: {},
-              ...defaults(model, npm),
+              ...defaults(model, packageName),
             }
-            draft.variants = variants(model, npm)
+            draft.variants = variants(model, packageName)
             draft.time.released = released(model.release_date)
             draft.cost = cost(model.cost)
             draft.status = model.status ?? "active"
@@ -187,16 +178,16 @@ export const ModelsDevPlugin = PluginV2.define({
             ? model.experimental?.modes?.fast
             : undefined
           if (!fast) continue
-          const request = ModelRequest.normalizeAiSdkOptions(npm, fast.provider?.body ?? {})
+          const request = ModelRequest.normalizeAiSdkOptions(packageName, fast.provider?.body ?? {})
           catalog.model.update(providerID, ModelV2.ID.make(`${model.id}-fast`), (draft) => {
             draft.name = `${model.name} Fast`
             draft.family = model.family ? ModelV2.Family.make(model.family) : undefined
-            draft.api = override
+            draft.api = model.provider?.npm
               ? {
                   id: modelID,
                   type: "aisdk",
-                  package: npm!,
-                  url: model.provider?.api,
+                  package: model.provider.npm,
+                  url: model.provider.api,
                 }
               : {
                   id: modelID,
@@ -210,10 +201,10 @@ export const ModelsDevPlugin = PluginV2.define({
               output: [...(model.modalities?.output ?? [])],
             }
             draft.request = ModelRequest.merge(
-              { headers: {}, ...defaults(model, npm) },
+              { headers: {}, ...defaults(model, packageName) },
               { headers: { ...(fast.provider?.headers ?? {}) }, ...request },
             )
-            draft.variants = variants(model, npm)
+            draft.variants = variants(model, packageName)
             draft.time.released = released(model.release_date)
             draft.cost = cost(fast.cost ?? model.cost)
             draft.status = model.status ?? "active"

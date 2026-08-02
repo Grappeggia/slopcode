@@ -199,15 +199,12 @@ describe("mcp HttpApi", () => {
         for (const input of [
           { method: "POST", route: "/mcp/missing/auth" },
           { method: "POST", route: "/mcp/missing/auth/authenticate" },
-          { method: "POST", route: "/mcp/missing/auth/callback", body: JSON.stringify({ code: "code" }) },
           { method: "DELETE", route: "/mcp/missing/auth" },
           { method: "POST", route: "/mcp/missing/connect" },
           { method: "POST", route: "/mcp/missing/disconnect" },
         ]) {
           const response = yield* request(handler, input.route, tmp.directory, {
             method: input.method,
-            headers: input.body ? { "content-type": "application/json" } : undefined,
-            body: input.body,
           })
 
           expect(response.status).toBe(404)
@@ -217,6 +214,20 @@ describe("mcp HttpApi", () => {
             message: "MCP server not found: missing",
           })
         }
+
+        const callback = yield* request(handler, "/mcp/missing/auth/callback", tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ state: "invalid-state", code: "code" }),
+        })
+        expect(callback.status).toBe(400)
+
+        const missingState = yield* request(handler, "/mcp/missing/auth/callback", tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code: "code" }),
+        })
+        expect(missingState.status).toBe(400)
       }),
     { config: { mcp: {} } },
   )

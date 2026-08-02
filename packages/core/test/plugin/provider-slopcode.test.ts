@@ -192,7 +192,7 @@ describe("SlopcodePlugin", () => {
     ),
   )
 
-  it.effect("defaults SlopCode to gpt-5.5 fast when available", () =>
+  it.effect("defaults SlopCode to GPT-5.6 Sol Fast when available", () =>
     withEnv({ SLOPCODE_API_KEY: "secret" }, () =>
       Effect.gen(function* () {
         const plugin = yield* PluginV2.Service
@@ -207,22 +207,12 @@ describe("SlopcodePlugin", () => {
             draft.enabled = item.enabled
             draft.env = [...item.env]
           })
-          catalog.model.update(item.id, ModelV2.ID.make("gpt-5.5"), (draft) => {
-            draft.variants = [
-              {
-                id: ModelV2.VariantID.make("fast"),
-                headers: {},
-                body: {},
-                generation: {},
-                options: { serviceTier: "priority" },
-              },
-            ]
-          })
+          catalog.model.update(item.id, ModelV2.ID.make("gpt-5.6-sol-fast"), () => {})
         })
 
         const selected = Option.getOrUndefined(yield* catalog.model.default())
-        expect(selected?.id).toBe(ModelV2.ID.make("gpt-5.5"))
-        expect(selected?.request.variant).toBe(ModelV2.VariantID.make("fast"))
+        expect(selected?.id).toBe(ModelV2.ID.make("gpt-5.6-sol-fast"))
+        expect(selected?.request.variant).toBeUndefined()
       }),
     ),
   )

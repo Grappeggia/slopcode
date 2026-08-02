@@ -28,7 +28,7 @@ import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from 
 import { createRefreshQueue } from "./global-sync/queue"
 import { directoryKey } from "./global-sync/utils"
 import { PathKey } from "@/utils/path-key"
-import { createDirSyncContext, createOptimisticRegistry, optimisticKey } from "./directory-sync"
+import { createDirSyncContext } from "./directory-sync"
 import { createSimpleContext, NormalizedProviderListResponse } from "@slopcode-ai/ui/context"
 import { createRefCountMap } from "@/utils/refcount"
 import { useGlobal } from "./global"
@@ -94,8 +94,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   const booting = new Map<string, Promise<void>>()
   const sessionLoads = new Map<string, Promise<void>>()
   const sessionMeta = new Map<string, { limit: number }>()
-  const optimistic = createOptimisticRegistry()
-  onCleanup(optimistic.clear)
 
   const sdkFor = (directory: string) => {
     const key = directoryKey(directory)
@@ -452,23 +450,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
   }
 
-  const removeOptimistic = (directory: string, sessionID: string, messageID: string) => {
-    const key = optimisticKey(directory, sessionID)
-    const list = optimistic.state.get(key)
-    list?.delete(messageID)
-    if (list?.size === 0) optimistic.state.delete(key)
-    const [, setStore] = children.child(directory, { bootstrap: false })
-    batch(() => {
-      setStore("message", sessionID, (messages) => messages?.filter((message) => message.id !== messageID))
-      setStore("part", (parts) => {
-        if (!(messageID in parts)) return parts
-        const next = { ...parts }
-        delete next[messageID]
-        return next
-      })
-    })
-  }
-
   const updateConfigMutation = useMutation(() => ({
     mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),
     onSuccess: () => {
@@ -483,10 +464,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   }))
 
   return {
-    optimistic: {
-      state: optimistic.state,
-      remove: removeOptimistic,
-    },
     data: globalStore,
     set,
     get ready() {

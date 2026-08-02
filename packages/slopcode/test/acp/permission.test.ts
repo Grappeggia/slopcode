@@ -12,8 +12,6 @@ import { ACPSession } from "@/acp/session"
 
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
 type PermissionReplyParams = Parameters<SlopcodeClient["permission"]["reply"]>[0]
-type PermissionBatchReplyParams = Parameters<SlopcodeClient["permission"]["replyBatch"]>[0]
-type PermissionBatchReplyResult = { data?: boolean; error?: unknown }
 type SessionUpdateParams = Parameters<AgentSideConnection["sessionUpdate"]>[0]
 
 const pollUntil = async (
@@ -38,12 +36,8 @@ function makeSessionService() {
 function createHarness(
   requestPermission: (params: RequestPermissionRequest) => Promise<RequestPermissionResponse> = () =>
     Promise.resolve({ outcome: { outcome: "selected", optionId: "once" } }),
-  replyBatch: (params: PermissionBatchReplyParams) => Promise<PermissionBatchReplyResult> = () =>
-    Promise.resolve({ data: true }),
-  vcs: "git" | "folder" | "missing" | "failure" = "git",
 ) {
   const replies: PermissionReplyParams[] = []
-  const batches: PermissionBatchReplyParams[] = []
   const requests: RequestPermissionRequest[] = []
   const updates: SessionUpdateParams[] = []
   const session = makeSessionService()
@@ -53,22 +47,9 @@ function createHarness(
         replies.push(params)
         return Promise.resolve({ data: true })
       },
-      replyBatch: (params: PermissionBatchReplyParams) => {
-        batches.push(params)
-        return replyBatch(params)
-      },
     },
     session: {
       message: () => Promise.resolve({ data: undefined }),
-    },
-    project: {
-      current: () => {
-        if (vcs === "failure") return Promise.reject(new Error("project lookup failed"))
-        if (vcs === "missing") return Promise.resolve({ data: undefined })
-        return Promise.resolve({
-          data: { id: "project", worktree: "/workspace", vcs: vcs === "git" ? "git" : undefined },
-        })
-      },
     },
   } as unknown as SlopcodeClient
   const connection = {
@@ -83,7 +64,7 @@ function createHarness(
   } satisfies Pick<AgentSideConnection, "requestPermission" | "sessionUpdate">
   const subscription = new ACPEvent.Subscription({ sdk, connection, session })
 
-  return { batches, connection, replies, requests, sdk, session, subscription, updates }
+  return { connection, replies, requests, sdk, session, subscription, updates }
 }
 
 async function createSession(session: ACPSession.Interface, sessionId: string, cwd = "/workspace") {
@@ -114,11 +95,6 @@ function permissionAsked(
     permission?: string
     metadata?: Record<string, unknown>
     tool?: { messageID: string; callID: string }
-    always?: string[]
-    grant?: { resources: string[]; scopes: ("session" | "global")[] }
-    kind?: "forecast"
-    batchID?: string
-    batchSize?: number
   } = {},
 ) {
   return {
@@ -130,11 +106,7 @@ function permissionAsked(
       permission: input.permission ?? "bash",
       patterns: ["*"],
       metadata: input.metadata ?? { command: "printf hello" },
-      always: input.always ?? [],
-      grant: input.grant,
-      kind: input.kind,
-      batchID: input.batchID,
-      batchSize: input.batchSize,
+      always: [],
       ...(input.tool ? { tool: input.tool } : {}),
     },
   } as PermissionEvent
@@ -186,181 +158,11 @@ describe("acp permissions", () => {
       },
       options: [
         { optionId: "once", kind: "allow_once", name: "Allow once" },
+        { optionId: "always", kind: "allow_always", name: "Always allow" },
         { optionId: "reject", kind: "reject_once", name: "Reject" },
       ],
     })
     expect(harness.replies).toEqual([{ requestID: "perm_1", reply: "once", directory: "/workspace" }])
-  })
-
-  it("rejects an Always response when no resources can be persisted", async () => {
-    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "selected", optionId: "always" } }))
-    await createSession(harness.session, "ses_a")
-
-    void harness.subscription.handle(permissionAsked("ses_a", "perm_empty"))
-    await pollUntil(() => harness.replies.length === 1, "empty permission was never replied")
-
-    expect(harness.requests[0].options.map((option) => option.optionId)).toEqual(["once", "reject"])
-    expect(harness.replies).toEqual([{ requestID: "perm_empty", reply: "reject", directory: "/workspace" }])
-  })
-
-  it("offers and maps session and project choices without compatibility scopes", async () => {
-    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "selected", optionId: "always" } }))
-    await createSession(harness.session, "ses_a")
-
-    void harness.subscription.handle(
-      permissionAsked("ses_a", "perm_persist", {
-        always: ["git status"],
-      }),
-    )
-    await pollUntil(() => harness.replies.length === 1, "persistable permission was never replied")
-
-    expect(harness.requests[0].options).toEqual([
-      { optionId: "once", kind: "allow_once", name: "Allow once" },
-      { optionId: "always", kind: "allow_always", name: "Allow for this session" },
-      { optionId: "project", kind: "allow_always", name: "Always allow these patterns for this project" },
-      { optionId: "reject", kind: "reject_once", name: "Reject" },
-    ])
-    expect(harness.replies).toEqual([{ requestID: "perm_persist", reply: "always", directory: "/workspace" }])
-  })
-
-  it("requires exact-pattern confirmation before a folder grant", async () => {
-    let call = 0
-    const harness = createHarness(
-      () => Promise.resolve({ outcome: { outcome: "selected", optionId: call++ === 0 ? "project" : "confirm" } }),
-      undefined,
-      "folder",
-    )
-    await createSession(harness.session, "ses_a")
-
-    harness.subscription.handle(
-      permissionAsked("ses_a", "perm_global", {
-        always: ["echo *"],
-      }),
-    )
-    await pollUntil(() => harness.replies.length === 1, "global permission was never replied")
-
-    expect(harness.requests).toHaveLength(2)
-    expect(harness.requests[0].options[2]).toMatchObject({
-      optionId: "project",
-      name: "Always allow these patterns for this folder",
-    })
-    expect(harness.requests[1]).toMatchObject({
-      toolCall: {
-        title: "Always allow these patterns for this folder?",
-        rawInput: {
-          lifetime: "Survives restarts until revoked.",
-          exactPatterns: ["echo *"],
-        },
-      },
-      options: [
-        { optionId: "confirm", kind: "allow_always", name: "Confirm" },
-        { optionId: "cancel", kind: "reject_once", name: "Cancel" },
-      ],
-    })
-    expect(harness.replies[0]).toMatchObject({ reply: "project" })
-  })
-
-  for (const metadata of ["missing", "failure"] as const) {
-    it(`does not offer or submit durable approval when project metadata is ${metadata}`, async () => {
-      const harness = createHarness(
-        () => Promise.resolve({ outcome: { outcome: "selected", optionId: "project" } }),
-        undefined,
-        metadata,
-      )
-      await createSession(harness.session, "ses_a")
-
-      harness.subscription.handle(permissionAsked("ses_a", `perm_${metadata}`, { always: ["git status"] }))
-      await pollUntil(() => harness.replies.length === 1, `${metadata} permission was never replied`)
-
-      expect(harness.requests).toHaveLength(1)
-      expect(harness.requests[0].options.map((option) => option.optionId)).toEqual(["once", "always", "reject"])
-      expect(harness.replies[0]).toMatchObject({ reply: "reject" })
-    })
-  }
-
-  it("collects every forecast item and replies to the batch atomically", async () => {
-    const harness = createHarness()
-    await createSession(harness.session, "ses_a")
-    const base = {
-      grant: { resources: ["git status"], scopes: ["session", "global"] as ("session" | "global")[] },
-      kind: "forecast" as const,
-      batchID: "pmb_acp",
-      batchSize: 2,
-    }
-
-    harness.subscription.handle(permissionAsked("ses_a", "per_one", base))
-    harness.subscription.handle(permissionAsked("ses_a", "per_two", base))
-    await pollUntil(() => harness.batches.length === 1, "forecast batch was never replied")
-
-    expect(harness.batches[0]).toMatchObject({
-      batchID: "pmb_acp",
-      requestIDs: ["per_one", "per_two"],
-      reply: "once",
-    })
-    expect(harness.replies).toEqual([])
-  })
-
-  it("retains failed forecast batches for retry on SDK errors and throws", async () => {
-    let call = 0
-    const harness = createHarness(undefined, () => {
-      call++
-      if (call === 1) return Promise.resolve({ error: { name: "BatchError", data: { message: "failed" } } })
-      if (call === 2) return Promise.reject(new Error("transport failed"))
-      return Promise.resolve({ data: true })
-    })
-    await createSession(harness.session, "ses_a")
-    const first = permissionAsked("ses_a", "per_retry_one", {
-      kind: "forecast",
-      batchID: "pmb_retry",
-      batchSize: 2,
-    })
-    const second = permissionAsked("ses_a", "per_retry_two", {
-      kind: "forecast",
-      batchID: "pmb_retry",
-      batchSize: 2,
-    })
-
-    harness.subscription.handle(first)
-    harness.subscription.handle(second)
-    await pollUntil(() => harness.batches.length === 1, "failed batch was never attempted")
-    await pollUntil(() => {
-      harness.subscription.handle(second)
-      return harness.batches.length === 2
-    }, "SDK error did not leave the batch retryable")
-    await pollUntil(() => {
-      harness.subscription.handle(first)
-      return harness.batches.length === 3
-    }, "thrown error did not leave the batch retryable")
-
-    expect(harness.batches).toEqual([
-      expect.objectContaining({ batchID: "pmb_retry", requestIDs: ["per_retry_one", "per_retry_two"] }),
-      expect.objectContaining({ batchID: "pmb_retry", requestIDs: ["per_retry_one", "per_retry_two"] }),
-      expect.objectContaining({ batchID: "pmb_retry", requestIDs: ["per_retry_one", "per_retry_two"] }),
-    ])
-  })
-
-  it("rejects a forecast batch instead of flattening mixed selected scopes", async () => {
-    const harness = createHarness((params) =>
-      Promise.resolve({
-        outcome: {
-          outcome: "selected",
-          optionId: params.toolCall.toolCallId === "per_mixed_one" ? "always" : "once",
-        },
-      }),
-    )
-    await createSession(harness.session, "ses_a")
-    const batch = {
-      always: ["git status"],
-      kind: "forecast" as const,
-      batchID: "pmb_mixed",
-      batchSize: 2,
-    }
-
-    harness.subscription.handle(permissionAsked("ses_a", "per_mixed_one", batch))
-    harness.subscription.handle(permissionAsked("ses_a", "per_mixed_two", batch))
-    await pollUntil(() => harness.batches.length === 1, "mixed forecast batch was never replied")
-
-    expect(harness.batches[0]).toMatchObject({ batchID: "pmb_mixed", requestIDs: [], reply: "reject" })
   })
 
   it("forwards external_directory metadata and locations to requestPermission", async () => {
@@ -454,7 +256,7 @@ describe("acp permissions", () => {
     await createSession(harness.session, "ses_a")
 
     harness.subscription.handle(permissionAsked("ses_a", "perm_1"))
-    harness.subscription.handle(permissionAsked("ses_a", "perm_2", { always: ["*"] }))
+    harness.subscription.handle(permissionAsked("ses_a", "perm_2"))
 
     await pollUntil(() => harness.requests.length === 1, "first permission was never requested")
     expect(harness.requests.map((request) => request.toolCall.toolCallId)).toEqual(["perm_1"])

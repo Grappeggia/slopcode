@@ -507,12 +507,11 @@ export function removePersisted(
   target: { storage?: string; legacyStorageNames?: string[]; key: string },
   platform?: Platform,
 ) {
-  const isDesktop = platform?.platform === "desktop" && !!platform.storage
-
-  if (isDesktop) {
-    void platform.storage?.(target.storage)?.removeItem(target.key)
-    for (const storage of target.legacyStorageNames ?? []) {
-      void platform.storage?.(storage)?.removeItem(target.key)
+  if (platform && platform.platform !== "web" && platform.storage) {
+    const storage = platform.storage
+    void storage(target.storage)?.removeItem(target.key)
+    for (const name of target.legacyStorageNames ?? []) {
+      void storage(name)?.removeItem(target.key)
     }
     return
   }
@@ -538,16 +537,16 @@ export function persisted<T>(
   const defaults = snapshot(store[0])
   const legacy = config.legacy ?? []
 
-  const isDesktop = platform.platform === "desktop" && !!platform.storage
+  const isNativeStorage = platform.platform !== "web" && !!platform.storage
 
   const currentStorage = (() => {
-    if (isDesktop) return platform.storage?.(config.storage)
+    if (isNativeStorage) return platform.storage?.(config.storage)
     if (!config.storage) return localStorageDirect()
     return localStorageWithPrefix(config.storage)
   })()
 
   const legacyStorage = (() => {
-    if (!isDesktop) return localStorageDirect()
+    if (!isNativeStorage) return localStorageDirect()
     if (!config.storage) return platform.storage?.()
     return platform.storage?.(LEGACY_STORAGE)
   })()
@@ -555,7 +554,7 @@ export function persisted<T>(
   const legacyStorageNames = config.legacyStorageNames ?? []
 
   const storage = (() => {
-    if (!isDesktop) {
+    if (!isNativeStorage) {
       const current = currentStorage as SyncStorage
       const legacyStore = legacyStorage as SyncStorage
       const legacyStores = legacyStorageNames.map(localStorageWithPrefix)

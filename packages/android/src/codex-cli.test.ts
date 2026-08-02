@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
+  createRemoteAgentSession,
   parseRemoteAgentResult,
+  parseRemoteAgentCommand,
   promptClaudeCode,
   promptCodexCli,
   promptOpencodeCli,
   promptRemoteAgent,
+  remoteAgentTerminalUrl,
 } from "./codex-cli"
 
 const input = {
@@ -17,6 +20,60 @@ const input = {
 }
 
 describe("Android remote agent session", () => {
+  test("opens a fixed interactive PTY session for the selected agent", async () => {
+    let request: { url: string; init?: RequestInit } | undefined
+    const session = await createRemoteAgentSession(
+      { ...input, agent: "claude-code", config: { model: "sonnet", permissionMode: "plan" } },
+      async (url, init) => {
+        request = { url: String(url), init }
+        return Response.json({
+          ptyID: "pty_remote_1",
+          directory: "/Users/marcos/Projects/slopcode",
+          ticket: "ticket-1",
+          expires_in: 60,
+        })
+      },
+    )
+
+    expect(session).toEqual({
+      ptyID: "pty_remote_1",
+      directory: input.directory,
+      ticket: "ticket-1",
+      expiresIn: 60,
+    })
+    const endpoint = new URL(request!.url)
+    expect(endpoint.pathname).toBe("/remote/agent/session")
+    expect(endpoint.searchParams.get("workspace")).toBe(input.workspaceID)
+    expect(endpoint.searchParams.get("path")).toBe(input.directory)
+    expect(request?.init?.method).toBe("POST")
+    expect(JSON.parse(String(request?.init?.body))).toEqual({
+      agent: "claude-code",
+      config: { model: "sonnet", permissionMode: "plan" },
+    })
+  })
+
+  test("builds ticket-scoped websocket URLs and parses slash command arguments", () => {
+    expect(
+      remoteAgentTerminalUrl("https://desktop.example.test/", input.workspaceID, {
+        ptyID: "pty_remote_1",
+        directory: input.directory,
+        ticket: "ticket-1",
+      }),
+    ).toBe(
+      "wss://desktop.example.test/pty/pty_remote_1/connect?workspace=wrk_remote_mac&directory=%2FUsers%2Fmarcos%2FProjects%2Fslopcode&cursor=-1&ticket=ticket-1",
+    )
+    expect(parseRemoteAgentCommand("/review changed files")).toEqual({ name: "review", args: "changed files" })
+    expect(parseRemoteAgentCommand("/help")).toEqual({ name: "help", args: "" })
+    expect(parseRemoteAgentCommand("/review changed\nfiles")).toBeUndefined()
+    expect(
+      remoteAgentTerminalUrl("https://desktop.example.test", input.workspaceID, {
+        ptyID: "pty_remote_1",
+        directory: input.directory,
+        ticket: "ticket-1",
+      }, { username: input.username, password: input.password }),
+    ).toContain("auth_token=c2xvcGNvZGU6ZGVza3RvcC1zZWNyZXQ%3D")
+  })
+
   test("posts the exact Codex payload and workspace query", async () => {
     let request: { url: string; init?: RequestInit } | undefined
     const result = await promptCodexCli(input, async (url, init) => {

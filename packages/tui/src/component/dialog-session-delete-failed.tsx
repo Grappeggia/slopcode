@@ -1,13 +1,9 @@
-import { CliRenderEvents, TextAttributes } from "@opentui/core"
-import { useRenderer } from "@opentui/solid"
+import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { createStore } from "solid-js/store"
-import { For, Show, onCleanup } from "solid-js"
+import { For } from "solid-js"
 import { useBindings } from "../keymap"
-import { DialogConfirm } from "../ui/dialog-confirm"
-import { useToast } from "../ui/toast"
-import { errorMessage } from "../util/error"
 
 export function DialogSessionDeleteFailed(props: {
   session: string
@@ -17,27 +13,9 @@ export function DialogSessionDeleteFailed(props: {
   onDone?: () => void
 }) {
   const dialog = useDialog()
-  const owner = dialog.stack.at(-1)
-  const renderer = useRenderer()
-  const toast = useToast()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
-    active: "restore" as "delete" | "restore",
-    confirming: false,
-    reviewed: false,
-  })
-  let pending = false
-  let disposed = false
-  let waiting = false
-  const expose = () => {
-    if (!waiting) return
-    waiting = false
-    setStore("reviewed", true)
-  }
-  renderer.on(CliRenderEvents.FRAME, expose)
-  onCleanup(() => {
-    disposed = true
-    renderer.off(CliRenderEvents.FRAME, expose)
+    active: "delete" as "delete" | "restore",
   })
 
   const options = [
@@ -55,47 +33,16 @@ export function DialogSessionDeleteFailed(props: {
     },
   ]
 
-  async function run(active: "delete" | "restore") {
-    if (pending) return
-    const option = options.find((item) => item.id === active)
-    if (!option) return
-    pending = true
-    const result = await Promise.resolve()
-      .then(() => option.run?.())
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      )
-    if (disposed || dialog.stack.at(-1) !== owner) return
-    pending = false
-    if ("error" in result) {
-      toast.show({
-        variant: "error",
-        title: "Failed to recover session",
-        message: errorMessage(result.error),
-      })
-      return
-    }
-    if (result.value === false) return
+  async function confirm() {
+    const result = await options.find((item) => item.id === store.active)?.run?.()
+    if (result === false) return
     props.onDone?.()
     if (!props.onDone) dialog.clear()
   }
 
-  function confirm(active = store.active) {
-    if (pending) return
-    if (active === "delete") {
-      waiting = true
-      setStore("reviewed", false)
-      setStore("confirming", true)
-      return
-    }
-    void run(active)
-  }
-
   useBindings(() => ({
-    enabled: !store.confirming,
     bindings: [
-      { key: "return", desc: "Confirm recovery option", group: "Dialog", cmd: () => confirm() },
+      { key: "return", desc: "Confirm recovery option", group: "Dialog", cmd: () => void confirm() },
       { key: "left", desc: "Delete broken session", group: "Dialog", cmd: () => setStore("active", "delete") },
       { key: "up", desc: "Delete broken session", group: "Dialog", cmd: () => setStore("active", "delete") },
       { key: "right", desc: "Restore broken session", group: "Dialog", cmd: () => setStore("active", "restore") },
@@ -104,71 +51,49 @@ export function DialogSessionDeleteFailed(props: {
   }))
 
   return (
-    <Show
-      when={store.confirming}
-      fallback={
-        <box paddingLeft={2} paddingRight={2} gap={1}>
-          <box flexDirection="row" justifyContent="space-between">
-            <text attributes={TextAttributes.BOLD} fg={theme.text}>
-              Failed to Delete Session
-            </text>
-            <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-              esc
-            </text>
-          </box>
-          <text fg={theme.textMuted} wrapMode="word">
-            {`The session "${props.session}" could not be deleted because the workspace "${props.workspace}" is not available.`}
-          </text>
-          <text fg={theme.textMuted} wrapMode="word">
-            Choose how you want to recover this broken workspace session.
-          </text>
-          <box flexDirection="column" paddingBottom={1} gap={1}>
-            <For each={options}>
-              {(item) => (
-                <box
-                  flexDirection="column"
-                  paddingLeft={1}
-                  paddingRight={1}
-                  paddingTop={1}
-                  paddingBottom={1}
-                  backgroundColor={item.id === store.active ? theme.primary : undefined}
-                  onMouseUp={() => {
-                    setStore("active", item.id)
-                    confirm(item.id)
-                  }}
-                >
-                  <text
-                    attributes={TextAttributes.BOLD}
-                    fg={item.id === store.active ? theme.selectedListItemText : theme.text}
-                  >
-                    {item.title}
-                  </text>
-                  <text fg={item.id === store.active ? theme.selectedListItemText : theme.textMuted} wrapMode="word">
-                    {item.description}
-                  </text>
-                </box>
-              )}
-            </For>
-          </box>
-        </box>
-      }
-    >
-      <DialogConfirm
-        title="Delete Workspace"
-        message={`Delete workspace "${props.workspace}"? All sessions attached to it will be deleted.`}
-        close={false}
-        initial="cancel"
-        enabled={store.reviewed}
-        onConfirm={() => {
-          setStore("confirming", false)
-          setStore("reviewed", false)
-          void run("delete")
-        }}
-        onCancel={() => {
-          setStore("confirming", false)
-          setStore("reviewed", false)
-        }}
-      />
-    </Show>
+    <box paddingLeft={2} paddingRight={2} gap={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          Failed to Delete Session
+        </text>
+        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+          esc
+        </text>
+      </box>
+      <text fg={theme.textMuted} wrapMode="word">
+        {`The session "${props.session}" could not be deleted because the workspace "${props.workspace}" is not available.`}
+      </text>
+      <text fg={theme.textMuted} wrapMode="word">
+        Choose how you want to recover this broken workspace session.
+      </text>
+      <box flexDirection="column" paddingBottom={1} gap={1}>
+        <For each={options}>
+          {(item) => (
+            <box
+              flexDirection="column"
+              paddingLeft={1}
+              paddingRight={1}
+              paddingTop={1}
+              paddingBottom={1}
+              backgroundColor={item.id === store.active ? theme.primary : undefined}
+              onMouseUp={() => {
+                setStore("active", item.id)
+                void confirm()
+              }}
+            >
+              <text
+                attributes={TextAttributes.BOLD}
+                fg={item.id === store.active ? theme.selectedListItemText : theme.text}
+              >
+                {item.title}
+              </text>
+              <text fg={item.id === store.active ? theme.selectedListItemText : theme.textMuted} wrapMode="word">
+                {item.description}
+              </text>
+            </box>
+          )}
+        </For>
+      </box>
+    </box>
   )
 }

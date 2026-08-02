@@ -1,5 +1,5 @@
 {
-  "$schema": "https://slopcode.ai/theme.json",
+  "$schema": "https://slopcode.dev/theme.json",
   "defs": {
     "purple-800": "#3442a6",
     "purple-700": "#465bd1",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://slopcode.dev/config.json",
-  "model": "slopcode/deepseek-v4-flash-free",
+  "model": "slopcode/gpt-5.6-sol-fast",
   "provider": {
     "slopcode": {
       "options": {},

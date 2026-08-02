@@ -126,13 +126,11 @@ describe("AgentV2", () => {
       }
       expect((yield* agent.get(AgentV2.ID.make("build")))?.model).toEqual({
         providerID: "slopcode",
-        id: "gpt-5.5",
-        variant: "fast",
+        id: "gpt-5.6-sol-fast",
       })
       expect((yield* agent.get(AgentV2.ID.make("plan")))?.model).toEqual({
         providerID: "slopcode",
-        id: "gpt-5.5",
-        variant: "fast",
+        id: "gpt-5.6-sol-fast",
       })
     }),
   )

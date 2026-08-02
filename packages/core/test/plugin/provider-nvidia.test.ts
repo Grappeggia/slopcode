@@ -35,7 +35,7 @@ describe("NvidiaPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://slopcode.ai/",
+        "HTTP-Referer": "https://slopcode.dev/",
         "X-Title": "slopcode",
         "X-BILLING-INVOKE-ORIGIN": "SlopCode",
       })
@@ -60,7 +60,7 @@ describe("NvidiaPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
-        "HTTP-Referer": "https://slopcode.ai/",
+        "HTTP-Referer": "https://slopcode.dev/",
         "X-Title": "slopcode",
         "X-BILLING-INVOKE-ORIGIN": "SlopCode",
       })
@@ -87,7 +87,7 @@ describe("NvidiaPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
-        "HTTP-Referer": "https://slopcode.ai/",
+        "HTTP-Referer": "https://slopcode.dev/",
         "X-Title": "slopcode",
         "X-BILLING-INVOKE-ORIGIN": "CustomOrigin",
       })

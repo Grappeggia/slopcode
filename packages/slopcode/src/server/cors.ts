@@ -1,6 +1,6 @@
 import { Context } from "effect"
 
-const slopcodeOrigin = /^https:\/\/([a-z0-9-]+\.)*slopcode\.ai$/
+const slopcodeOrigin = /^https:\/\/([a-z0-9-]+\.)*slopcode\.dev$/
 
 export type CorsOptions = { readonly cors?: ReadonlyArray<string> }
 
@@ -13,6 +13,7 @@ export function isAllowedCorsOrigin(input: string | undefined, opts?: CorsOption
   if (input.startsWith("http://localhost:")) return true
   if (input.startsWith("http://127.0.0.1:")) return true
   if (input === "oc://renderer") return true
+  if (input === "https://appassets.androidplatform.net") return true
   if (input === "tauri://localhost" || input === "http://tauri.localhost" || input === "https://tauri.localhost")
     return true
   if (slopcodeOrigin.test(input)) return true

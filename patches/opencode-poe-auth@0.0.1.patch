@@ -1,0 +1,22 @@
+diff --git a/dist/poe-auth-plugin.js b/dist/poe-auth-plugin.js
+index 8f4859b29220d966b5338ea9a2d3b004e1101984..c91eb69c458e5807870952207a86e491a3a3889e 100644
+--- a/dist/poe-auth-plugin.js
++++ b/dist/poe-auth-plugin.js
+@@ -12,7 +12,7 @@ async function authorize() {
+         clientId: CLIENT_ID,
+         landingPage: {
+             title: "Connected to Poe",
+-            body: "You can close this tab and return to OpenCode."
++            body: "You can close this tab and return to SlopCode."
+         },
+         openBrowser: async (url) => {
+             await open(url);
+@@ -47,7 +47,7 @@ export async function PoeAuthPlugin(_input) {
+                     return {};
+                 }
+                 if (auth.expires < Date.now()) {
+-                    throw new Error("Poe API key expired. Run `opencode providers login` again.");
++                    throw new Error("Poe API key expired. Run `slopcode providers login` again.");
+                 }
+                 return { apiKey: auth.access };
+             },

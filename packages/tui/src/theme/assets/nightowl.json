@@ -1,5 +1,5 @@
 {
-  "$schema": "https://slopcode.ai/theme.json",
+  "$schema": "https://slopcode.dev/theme.json",
   "defs": {
     "nightOwlBg": "#011627",
     "nightOwlFg": "#d6deeb",

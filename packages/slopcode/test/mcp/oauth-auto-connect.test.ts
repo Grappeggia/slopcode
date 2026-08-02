@@ -185,7 +185,7 @@ mcpTest.instance("state() generates a new state when none is saved", () =>
     const provider = new McpOAuthProvider(identity, "https://example.com/mcp", {}, { onRedirect: async () => {} }, auth)
 
     const entryBefore = yield* McpAuth.use.get(identity, "https://example.com/mcp")
-    expect(entryBefore?.oauthState).toBeUndefined()
+    expect(entryBefore?.flows).toBeUndefined()
 
     // state() should generate and return a new state, not throw
     const state = yield* Effect.promise(() => provider.state())
@@ -194,7 +194,7 @@ mcpTest.instance("state() generates a new state when none is saved", () =>
 
     // The generated state should be persisted
     const entryAfter = yield* McpAuth.use.get(identity, "https://example.com/mcp")
-    expect(entryAfter?.oauthState).toBe(state)
+    expect(entryAfter?.flows?.[state]?.state).toBe(state)
   }),
 )
 
@@ -206,7 +206,7 @@ mcpTest.instance("state() returns existing state when one is saved", () =>
 
     // Pre-save a state
     const existingState = "pre-saved-state-value"
-    yield* McpAuth.use.updateOAuthState(identity, "https://example.com/mcp", existingState)
+    yield* Effect.promise(() => provider.saveState(existingState))
 
     // state() should return the existing state
     const state = yield* Effect.promise(() => provider.state())

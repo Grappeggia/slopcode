@@ -66,7 +66,6 @@ import { usePromptRef } from "../../context/prompt"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
-import { permissionQueue } from "./permission-batch"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
@@ -241,11 +240,8 @@ export function Session() {
   )
   const permissions = createMemo(() => {
     if (session()?.parentID) return []
-    return children()
-      .flatMap((x) => sync.data.permission[x.id] ?? [])
-      .toSorted((a, b) => a.id.localeCompare(b.id))
+    return children().flatMap((x) => sync.data.permission[x.id] ?? [])
   })
-  const shownPermissions = createMemo(() => permissionQueue(permissions()))
   const questions = createMemo(() => {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
@@ -1416,8 +1412,8 @@ export function Session() {
                 </Show>
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
-                    requests={shownPermissions()}
-                    directory={sync.session.get(shownPermissions()[0].sessionID)?.directory}
+                    request={permissions()[0]}
+                    directory={sync.session.get(permissions()[0].sessionID)?.directory}
                   />
                 </Show>
                 <Show when={permissions().length === 0 && questions().length > 0}>
@@ -1678,7 +1674,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
         >
-          <text fg={theme.textMuted}>{errorMessage(props.message.error)}</text>
+          <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
         </box>
       </Show>
       <Switch>

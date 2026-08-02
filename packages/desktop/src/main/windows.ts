@@ -380,7 +380,12 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
   })
   win.webContents.on("render-process-gone", (_event, details) => {
     sampler.stopAndFlush()
-    writeLog("window", "renderer process gone", { window: name, currentURL: safeWindowURL(win), details }, "error")
+    writeLog(
+      "window",
+      "renderer process gone",
+      { window: name, currentURL: safeWindowURL(win), details },
+      "error",
+    )
     void show(
       "SlopCode window terminated unexpectedly",
       [`Window: ${name}`, `Reason: ${details.reason}`, `Code: ${details.exitCode ?? "<unknown>"}`].join("\n"),

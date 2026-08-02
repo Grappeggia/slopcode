@@ -168,18 +168,13 @@ describe("instance HttpApi", () => {
           ),
         )
       const permissionID = PermissionV1.ID.ascending()
-      const projectPermissionID = PermissionV1.ID.ascending()
       const questionReplyID = QuestionID.ascending()
       const questionRejectID = QuestionID.ascending()
-      const [permission, projectPermission, questionReply, questionReject] = yield* Effect.all(
+      const [permission, questionReply, questionReject] = yield* Effect.all(
         [
           request(`/permission/${permissionID}/reply`, {
             method: "POST",
             body: JSON.stringify({ reply: "once" }),
-          }),
-          request(`/permission/${projectPermissionID}/reply`, {
-            method: "POST",
-            body: JSON.stringify({ reply: "project" }),
           }),
           request(`/question/${questionReplyID}/reply`, {
             method: "POST",
@@ -195,11 +190,6 @@ describe("instance HttpApi", () => {
         _tag: "PermissionNotFoundError",
         requestID: permissionID,
         message: `Permission request not found: ${permissionID}`,
-      })
-      expect(projectPermission.status).toBe(404)
-      expect(yield* Effect.promise(() => projectPermission.json())).toMatchObject({
-        _tag: "PermissionNotFoundError",
-        requestID: projectPermissionID,
       })
       expect(questionReply.status).toBe(404)
       expect(yield* Effect.promise(() => questionReply.json())).toEqual({

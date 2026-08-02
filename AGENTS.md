@@ -119,14 +119,14 @@ const table = sqliteTable("session", {
 - Test actual implementation, do not duplicate logic into tests
 - Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/slopcode`.
 
-## OpenCode Go & Free Models
+## SlopCode Go & Free Models
 
-The codebase supports two OpenCode model tiers:
+The codebase supports two SlopCode model tiers:
 
-| Tier     | Provider ID   | API Endpoint                         | Needs Auth?                          |
-| -------- | ------------- | ------------------------------------ | ------------------------------------ |
-| **Free** | `slopcode`    | `https://www.slopcode.dev/zen/v1`    | No (auto-injects `apiKey: "public"`) |
-| **Go**   | `slopcode-go` | `https://www.slopcode.dev/zen/go/v1` | Yes (`SLOPCODE_API_KEY`)             |
+| Tier     | Provider ID   | API Endpoint                    | Needs Auth?                          |
+| -------- | ------------- | ------------------------------- | ------------------------------------ |
+| **Free** | `slopcode`    | `https://slopcode.dev/zen/v1`    | No (auto-injects `apiKey: "public"`) |
+| **Go**   | `slopcode-go` | `https://slopcode.dev/zen/go/v1` | Yes (`SLOPCODE_API_KEY`)             |
 
 **Free models** (`big-pickle`, `glm-4.7-free`, etc.) appear automatically without any key. The `SlopcodePlugin` (`packages/core/src/plugin/provider/slopcode.ts`) strips paid models and sets `apiKey: "public"` when no key is present.
 

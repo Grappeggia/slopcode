@@ -1,10 +1,9 @@
-import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk, normalizeInputUsage } from "./provider"
+import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk } from "./provider"
 
 type Usage = {
   input_tokens?: number
   input_tokens_details?: {
     cached_tokens?: number
-    cache_write_tokens?: number
   }
   output_tokens?: number
   output_tokens_details?: {
@@ -46,19 +45,16 @@ export const openaiHelper: ProviderHelper = () => ({
   },
   extractUsage: (response: any) => response.usage ?? response.response?.usage,
   normalizeUsage: (usage: Usage) => {
-    const input = normalizeInputUsage(
-      usage.input_tokens,
-      usage.input_tokens_details?.cached_tokens,
-      usage.input_tokens_details?.cache_write_tokens,
-    )
+    const inputTokens = usage.input_tokens ?? 0
     const reasoningTokens = usage.output_tokens_details?.reasoning_tokens ?? undefined
     const outputTokens = Math.max(0, (usage.output_tokens ?? 0) - (reasoningTokens ?? 0))
+    const cacheReadTokens = usage.input_tokens_details?.cached_tokens ?? undefined
     return {
-      inputTokens: input.inputTokens,
+      inputTokens: inputTokens - (cacheReadTokens ?? 0),
       outputTokens,
       reasoningTokens,
-      cacheReadTokens: input.cacheReadTokens,
-      cacheWrite5mTokens: input.cacheWriteTokens,
+      cacheReadTokens,
+      cacheWrite5mTokens: undefined,
       cacheWrite1hTokens: undefined,
     }
   },

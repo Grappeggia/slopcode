@@ -11,27 +11,29 @@ export function WordmarkV2(props: Pick<ComponentProps<"svg">, "class">) {
       viewBox="0 0 720.002 129.001"
       fill="none"
       preserveAspectRatio="none"
+      role="img"
+      aria-label="SlopCode"
       classList={{ [props.class ?? ""]: !!props.class }}
     >
       <g opacity="0.16" filter={`url(#${filter})`} mask={`url(#${mask})`}>
         <path
           opacity="0.7"
-          d="M55.3846 36.8583H18.4615V92.144H55.3846V36.8583ZM73.8462 110.573H0V18.4297H73.8462V110.573Z"
+          d="M73.8462 18.4297H0V73.7154H55.3846V92.144H0V110.573H73.8462V55.2868H18.4615V36.8583H73.8462V18.4297Z"
           fill="currentColor"
         />
         <path
           opacity="0.7"
-          d="M110.774 92.144H147.697V36.8583H110.774V92.144ZM166.159 110.573H110.774V129.001H92.3125V18.4297H166.159V110.573Z"
+          d="M110.774 92.144H166.159V110.573H92.3125V18.4297H110.774V92.144Z"
           fill="currentColor"
         />
         <path
           opacity="0.7"
-          d="M258.463 73.7154H203.079V92.144H258.463V110.573H184.617V18.4297H258.463V73.7154ZM203.079 55.2868H240.002V36.8583H203.079V55.2868Z"
+          d="M240.002 36.8583H203.079V92.144H240.002V36.8583ZM258.463 110.573H184.617V18.4297H258.463V110.573Z"
           fill="currentColor"
         />
         <path
           opacity="0.7"
-          d="M332.306 36.8583H295.383V110.573H276.922V18.4297H332.306V36.8583ZM350.768 110.573H332.306V36.8583H350.768V110.573Z"
+          d="M295.383 92.144H332.306V36.8583H295.383V92.144ZM350.768 110.573H295.383V129.001H276.922V18.4297H350.768V110.573Z"
           fill="currentColor"
         />
         <path

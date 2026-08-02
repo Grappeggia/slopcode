@@ -283,18 +283,14 @@ function sameView(a: FooterView, b: FooterView) {
     return false
   }
 
-  if (a.type === "question" && b.type === "question") return a.request === b.request
-  if (a.type === "permission" && b.type === "permission") {
-    return a.requests.length === b.requests.length && a.requests.every((item, index) => item === b.requests[index])
-  }
-  return false
+  return a.request === b.request
 }
 
 function blockerOrder(order: Map<string, number>, id: string) {
   return order.get(id) ?? Number.MAX_SAFE_INTEGER
 }
 
-function byOrder<T extends { id: string }>(left: T[], right: T[], order: Map<string, number>) {
+function firstByOrder<T extends { id: string }>(left: T[], right: T[], order: Map<string, number>) {
   return [...left, ...right].sort((a, b) => {
     const next = blockerOrder(order, a.id) - blockerOrder(order, b.id)
     if (next !== 0) {
@@ -302,13 +298,13 @@ function byOrder<T extends { id: string }>(left: T[], right: T[], order: Map<str
     }
 
     return a.id.localeCompare(b.id)
-  })
+  })[0]
 }
 
 function pickView(data: SessionData, subagent: SubagentData, order: Map<string, number>): FooterView {
   return pickBlockerView({
-    permissions: byOrder(data.permissions, listSubagentPermissions(subagent), order),
-    question: byOrder(data.questions, listSubagentQuestions(subagent), order)[0],
+    permission: firstByOrder(data.permissions, listSubagentPermissions(subagent), order),
+    question: firstByOrder(data.questions, listSubagentQuestions(subagent), order),
   })
 }
 
@@ -543,13 +539,12 @@ function createLayer(input: StreamInput) {
             return agent
           }
 
-          const list = yield* Effect.tryPromise({
-            try: () =>
-              input.sdk.app.agents(input.directory ? { directory: input.directory } : undefined, {
-                throwOnError: true,
-              }),
-            catch: (error) => error,
-          }).pipe(Effect.map((item) => item.data ?? []))
+          const list = yield* Effect.promise(() =>
+            input.sdk.app.agents(input.directory ? { directory: input.directory } : undefined, { throwOnError: true }),
+          ).pipe(
+            Effect.map((item) => item.data ?? []),
+            Effect.orElseSucceed(() => []),
+          )
           const next = list.find((item) => item.mode !== "subagent" && item.hidden !== true)?.name
           if (next) {
             return next
@@ -805,10 +800,7 @@ function createLayer(input: StreamInput) {
         })
 
         const idle = Effect.fn("RunStreamTransport.idle")((fallback: boolean) =>
-          Effect.tryPromise({
-            try: () => input.sdk.session.status(undefined, { throwOnError: true }),
-            catch: (error) => error,
-          }).pipe(
+          Effect.promise(() => input.sdk.session.status()).pipe(
             Effect.map((out) => {
               const item = out.data?.[input.sessionID]
               return !item || item.type === "idle"
@@ -1250,19 +1242,17 @@ function createLayer(input: StreamInput) {
                     resolveShellAgent(next.agent)
                       .pipe(
                         Effect.flatMap((agent) =>
-                          Effect.tryPromise({
-                            try: () =>
-                              input.sdk.session.shell(
-                                {
-                                  sessionID: input.sessionID,
-                                  agent,
-                                  model: next.model,
-                                  command: next.prompt.text,
-                                },
-                                { signal: turn.signal, throwOnError: true },
-                              ),
-                            catch: (error) => error,
-                          }),
+                          Effect.promise(() =>
+                            input.sdk.session.shell(
+                              {
+                                sessionID: input.sessionID,
+                                agent,
+                                model: next.model,
+                                command: next.prompt.text,
+                              },
+                              { signal: turn.signal, throwOnError: true },
+                            ),
+                          ),
                         ),
                       )
                       .pipe(
@@ -1287,28 +1277,26 @@ function createLayer(input: StreamInput) {
                     input.trace?.write("send.command", { sessionID: input.sessionID, command: command.name })
                   }).pipe(
                     Effect.andThen(
-                      Effect.tryPromise({
-                        try: () =>
-                          input.sdk.session.command(
-                            {
-                              sessionID: input.sessionID,
-                              messageID: next.prompt.messageID,
-                              agent: next.agent,
-                              model: next.model ? `${next.model.providerID}/${next.model.modelID}` : undefined,
-                              variant: next.variant,
-                              command: command.name,
-                              arguments: command.arguments,
-                              parts: [
-                                ...(next.includeFiles ? next.files : []),
-                                ...next.prompt.parts.filter(
-                                  (item): item is Extract<RunPromptPart, { type: "file" }> => item.type === "file",
-                                ),
-                              ],
-                            },
-                            { signal: turn.signal, throwOnError: true },
-                          ),
-                        catch: (error) => error,
-                      }).pipe(
+                      Effect.promise(() =>
+                        input.sdk.session.command(
+                          {
+                            sessionID: input.sessionID,
+                            messageID: next.prompt.messageID,
+                            agent: next.agent,
+                            model: next.model ? `${next.model.providerID}/${next.model.modelID}` : undefined,
+                            variant: next.variant,
+                            command: command.name,
+                            arguments: command.arguments,
+                            parts: [
+                              ...(next.includeFiles ? next.files : []),
+                              ...next.prompt.parts.filter(
+                                (item): item is Extract<RunPromptPart, { type: "file" }> => item.type === "file",
+                              ),
+                            ],
+                          },
+                          { signal: turn.signal },
+                        ),
+                      ).pipe(
                         Effect.tap(() =>
                           Effect.sync(() => {
                             input.trace?.write("send.command.ok", {
@@ -1330,14 +1318,11 @@ function createLayer(input: StreamInput) {
                     input.trace?.write("send.prompt", req)
                   }).pipe(
                     Effect.andThen(
-                      Effect.tryPromise({
-                        try: () =>
-                          input.sdk.session.promptAsync(req, {
-                            signal: turn.signal,
-                            throwOnError: true,
-                          }),
-                        catch: (error) => error,
-                      }),
+                      Effect.promise(() =>
+                        input.sdk.session.promptAsync(req, {
+                          signal: turn.signal,
+                        }),
+                      ),
                     ),
                     Effect.tap(() =>
                       Effect.sync(() => {
@@ -1347,7 +1332,6 @@ function createLayer(input: StreamInput) {
                         item.armed = true
                       }),
                     ),
-                    Effect.asVoid,
                   )
 
           yield* send.pipe(

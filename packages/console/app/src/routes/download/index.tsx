@@ -118,10 +118,10 @@ export default function Download() {
             <div data-component="section-content">
               <button
                 data-component="cli-row"
-                onClick={handleCopyClick("curl -fsSL https://slopcode.ai/install | bash")}
+                onClick={handleCopyClick("curl -fsSL https://slopcode.dev/install | bash")}
               >
                 <code>
-                  curl -fsSL https://<strong>slopcode.ai/install</strong> | bash
+                  curl -fsSL https://<strong>slopcode.dev/install</strong> | bash
                 </code>
                 <CopyStatus />
               </button>

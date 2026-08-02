@@ -49,6 +49,16 @@ describe("McpOAuthProvider.redirectUrl", () => {
     const provider = makeProvider({ redirectUri: "http://127.0.0.1:8080/oauth/callback" })
     expect(provider.redirectUrl).toBe("http://127.0.0.1:8080/oauth/callback")
   })
+
+  test("rejects callback URIs the loopback HTTP listener cannot serve", () => {
+    for (const redirectUri of [
+      "https://127.0.0.1/callback",
+      "http://example.com/callback",
+      "http://0.0.0.0/callback",
+    ]) {
+      expect(() => makeProvider({ redirectUri }).redirectUrl).toThrow("loopback HTTP")
+    }
+  })
 })
 
 describe("McpOAuthProvider.clientMetadata", () => {
@@ -99,8 +109,8 @@ describe("McpOAuthProvider credential isolation", () => {
       redirect_uris: [first.redirectUrl],
     })
     await first.saveTokens({ access_token: "access-a", token_type: "Bearer", refresh_token: "refresh-a" })
-    await first.saveCodeVerifier("verifier-a")
     await first.saveState("state-a")
+    await first.saveCodeVerifier("verifier-a")
 
     expect(await second.clientInformation()).toBeUndefined()
     expect(await second.tokens()).toBeUndefined()

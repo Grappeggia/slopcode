@@ -674,41 +674,21 @@ it.instance(
   { config: { small_model: "anthropic/not-a-real-model" } },
 )
 
-it.instance(
-  "getSmallModelForProvider respects a same-provider global override",
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const model = yield* Provider.use.getSmallModelForProvider(ProviderV2.ID.anthropic)
-    expect(String(model?.providerID)).toBe("anthropic")
-    expect(String(model?.id)).toBe("claude-sonnet-4-20250514")
-  }),
-  { config: { small_model: "anthropic/claude-sonnet-4-20250514" } },
-)
-
-it.instance(
-  "getSmallModelForProvider ignores a foreign global override and keeps provider heuristics",
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const model = yield* Provider.use.getSmallModelForProvider(ProviderV2.ID.anthropic)
-    expect(String(model?.providerID)).toBe("anthropic")
-    expect(String(model?.id)).toContain("haiku")
-  }),
-  { config: { small_model: "openai/gpt-5" } },
-)
-
 test("provider.sort prioritizes preferred models", () => {
   const models = [
     { id: "random-model", name: "Random" },
     { id: "claude-sonnet-4-latest", name: "Claude Sonnet 4" },
     { id: "gpt-5-turbo", name: "GPT-5 Turbo" },
     { id: "gpt-5.5-fast", name: "GPT-5.5 Fast" },
+    { id: "gpt-5.6-sol-fast", name: "GPT-5.6 Sol Fast" },
     { id: "other-model", name: "Other" },
   ] as any[]
 
   const sorted = Provider.sort(models)
-  expect(sorted[0].id).toBe("gpt-5.5-fast")
-  expect(sorted[1].id).toContain("sonnet-4")
-  expect(sorted[1].id).toContain("latest")
+  expect(sorted[0].id).toBe("gpt-5.6-sol-fast")
+  expect(sorted[1].id).toBe("gpt-5.5-fast")
+  expect(sorted[2].id).toContain("sonnet-4")
+  expect(sorted[2].id).toContain("latest")
   expect(sorted[sorted.length - 1].id).not.toContain("gpt-5")
   expect(sorted[sorted.length - 1].id).not.toContain("sonnet-4")
 })
@@ -1145,7 +1125,7 @@ it.instance(
   Effect.gen(function* () {
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("nvidia")].options.headers).toEqual({
-      "HTTP-Referer": "https://slopcode.ai/",
+      "HTTP-Referer": "https://slopcode.dev/",
       "X-Title": "slopcode",
       "X-BILLING-INVOKE-ORIGIN": "SlopCode",
     })
@@ -1158,7 +1138,7 @@ it.instance(
   Effect.gen(function* () {
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("nvidia")].options.headers).toEqual({
-      "HTTP-Referer": "https://slopcode.ai/",
+      "HTTP-Referer": "https://slopcode.dev/",
       "X-Title": "slopcode",
       "X-BILLING-INVOKE-ORIGIN": "SlopCode",
     })

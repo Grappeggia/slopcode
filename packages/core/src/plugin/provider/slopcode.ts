@@ -3,8 +3,7 @@ import { ModelV2 } from "../../model"
 import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
 
-const DEFAULT_MODEL = ModelV2.ID.make("gpt-5.5")
-const DEFAULT_VARIANT = ModelV2.VariantID.make("fast")
+const DEFAULT_MODEL = ModelV2.ID.make("gpt-5.6-sol-fast")
 
 export const SlopcodePlugin = PluginV2.define({
   id: PluginV2.ID.make("slopcode"),
@@ -40,11 +39,6 @@ export const SlopcodePlugin = PluginV2.define({
 
           const model = evt.model.get(id, DEFAULT_MODEL)
           if (id !== ProviderV2.ID.slopcode || !model?.enabled) continue
-          if (model.variants.some((variant) => variant.id === DEFAULT_VARIANT)) {
-            evt.model.update(id, DEFAULT_MODEL, (draft) => {
-              draft.request.variant ??= DEFAULT_VARIANT
-            })
-          }
           if (!evt.model.default.get()) evt.model.default.set(id, DEFAULT_MODEL)
         }
       }),

@@ -105,16 +105,6 @@ function writeTimelineCache(id: string, keys: readonly string[], handle: Virtual
   while (timelineCache.size > timelineCacheLimit) timelineCache.delete(timelineCache.keys().next().value!)
 }
 
-function reuseTimelineRows(previous: TimelineRow.TimelineRow[] | undefined, rows: TimelineRow.TimelineRow[]) {
-  if (!previous?.length) return rows
-  const byKey = new Map(previous.map((row) => [TimelineRow.key(row), row] as const))
-  return rows.map((row) => {
-    const existing = byKey.get(TimelineRow.key(row))
-    if (!existing) return row
-    return TimelineRow.equals(existing, row) ? existing : row
-  })
-}
-
 const taskDescription = (part: PartType, sessionID: string) => {
   if (part.type !== "tool" || part.tool !== "task") return
   const metadata = "metadata" in part.state ? part.state.metadata : undefined
@@ -417,7 +407,7 @@ export function MessageTimeline(props: {
             activeMessageID() === userMessage.id,
           )
 
-          return reuseTimelineRows(previous, rows)
+          return Timeline.reconcileRows(previous, rows)
         })
       },
     ),
@@ -426,7 +416,7 @@ export function MessageTimeline(props: {
   const timelineRows = createMemo((previous: TimelineRow.TimelineRow[] | undefined) => {
     const rows = messageRowMemos().flatMap((memo) => memo())
     if (rows.length === 0) return rows
-    return reuseTimelineRows(previous, [...rows, new TimelineRow.BottomSpacer()])
+    return Timeline.reconcileRows(previous, [...rows, new TimelineRow.BottomSpacer()])
   })
   const timelineRowKeys = createMemo(() => timelineRows().map(TimelineRow.key), [] as string[], { equals: sameKeys })
   const virtualCache = createMemo(() => readTimelineCache(sessionKey(), timelineRowKeys()))

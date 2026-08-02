@@ -31,15 +31,11 @@ import { createComponent, createSignal, type Accessor, type Setter } from "solid
 import { createStore, reconcile } from "solid-js/store"
 import { SlopcodeKeymapProvider } from "@slopcode-ai/tui/keymap"
 import { RUN_COMMAND_PANEL_ROWS, RUN_SUBAGENT_PANEL_ROWS } from "./footer.command"
-import { footerHeightPolicy, footerPanelMinimum } from "./footer.height"
 import { SUBAGENT_INSPECTOR_ROWS } from "./footer.subagent"
 import { PROMPT_MAX_ROWS, TEXTAREA_MIN_ROWS } from "./footer.prompt"
 import { RunFooterView } from "./footer.view"
-import type { PermissionScopeLabel } from "./permission.shared"
-import { questionSingle } from "./question.shared"
 import { RunScrollbackStream } from "./scrollback.surface"
 import { RUN_THEME_FALLBACK, resolveRunTheme, type RunTheme } from "./theme"
-import { footerWidthPolicy } from "./footer.width"
 import { modelInfo } from "./variant.shared"
 import type {
   FooterApi,
@@ -50,7 +46,6 @@ import type {
   FooterState,
   FooterSubagentState,
   FooterView,
-  PermissionBatchReply,
   PermissionReply,
   QuestionReject,
   QuestionReply,
@@ -74,7 +69,6 @@ type CycleResult = {
 
 type RunFooterOptions = {
   directory: string
-  permissionScope: PermissionScopeLabel
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
   resources: RunResource[]
@@ -93,7 +87,6 @@ type RunFooterOptions = {
   backgroundSubagents: boolean
   diffStyle: RunDiffStyle
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
-  onPermissionBatchReply: (input: PermissionBatchReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycleVariant?: () => CycleResult | void
@@ -184,7 +177,6 @@ export class RunFooter implements FooterApi {
   private flushError: unknown
   // Fixed portion of footer height above the textarea.
   private base: number
-  private terminal: { width: number; height: number }
   private rows = TEXTAREA_MIN_ROWS
   private agents: Accessor<RunAgent[]>
   private setAgents: Setter<RunAgent[]>
@@ -297,16 +289,13 @@ export class RunFooter implements FooterApi {
     this.queuedPrompts = queuedPrompts
     this.setQueuedPrompts = setQueuedPrompts
     this.base = Math.max(1, renderer.footerHeight - TEXTAREA_MIN_ROWS)
-    this.terminal = { width: renderer.terminalWidth, height: renderer.terminalHeight }
     this.scrollback = this.createScrollback(options.wrote ?? false)
 
     this.renderer.on(CliRenderEvents.DESTROY, this.handleDestroy)
-    this.renderer.on(CliRenderEvents.RESIZE, this.handleResize)
     this.renderer.on(CliRenderEvents.PALETTE, this.handlePalette)
     this.renderer.on(CliRenderEvents.THEME_MODE, this.handleThemeRefresh)
     this.renderer.prependInputHandler(this.handleThemeNotification)
     process.on("SIGUSR2", this.handleThemeSignal)
-    this.applyHeight()
 
     const footer = this
     void render(
@@ -316,7 +305,6 @@ export class RunFooter implements FooterApi {
           get children() {
             return createComponent(RunFooterView, {
               directory: options.directory,
-              permissionScope: options.permissionScope,
               state: footer.state,
               view: footer.view,
               subagent: footer.subagent,
@@ -337,7 +325,6 @@ export class RunFooter implements FooterApi {
               agent: options.agentLabel,
               onSubmit: footer.handlePrompt,
               onPermissionReply: footer.handlePermissionReply,
-              onPermissionBatchReply: footer.handlePermissionBatchReply,
               onQuestionReply: footer.handleQuestionReply,
               onQuestionReject: footer.handleQuestionReject,
               onCycle: footer.handleCycle,
@@ -704,12 +691,11 @@ export class RunFooter implements FooterApi {
     this.patch({ interrupt: 0, exit: 0 })
   }
 
-  // Resizes the footer to fit the current view without consuming the whole
-  // physical terminal when a smaller usable panel can preserve scrollback.
+  // Resizes the footer to fit the current view. Permission and question views
+  // get fixed extra rows; the prompt view scales with textarea line count.
   private applyHeight(): void {
-    const view = this.view()
-    const type = view.type
-    const preferred =
+    const type = this.view().type
+    const height =
       type === "permission"
         ? this.base + PERMISSION_ROWS
         : type === "question"
@@ -729,34 +715,10 @@ export class RunFooter implements FooterApi {
                       : this.promptRoute.type === "subagent"
                         ? this.base + SUBAGENT_INSPECTOR_ROWS
                         : this.base + Math.max(TEXTAREA_MIN_ROWS, Math.min(PROMPT_MAX_ROWS, this.rows))
-    const minimum =
-      type === "prompt" && this.promptRoute.type === "composer" && !this.autocomplete
-        ? this.base + TEXTAREA_MIN_ROWS
-        : footerPanelMinimum({
-            type: type === "permission" || type === "question" ? type : "panel",
-            narrow: footerWidthPolicy(this.renderer.terminalWidth).dialog.narrow,
-            single: type === "question" ? questionSingle(view.request) : undefined,
-          })
-    const height = footerHeightPolicy({
-      terminal: this.renderer.terminalHeight,
-      preferred,
-      minimum,
-    })
 
     if (height !== this.renderer.footerHeight) {
       this.renderer.footerHeight = height
     }
-  }
-
-  private handleResize = (): void => {
-    const width = this.renderer.terminalWidth
-    const height = this.renderer.terminalHeight
-    if (width === this.terminal.width && height === this.terminal.height) {
-      return
-    }
-
-    this.terminal = { width, height }
-    this.applyHeight()
   }
 
   private syncRows = (value: number): void => {
@@ -811,11 +773,6 @@ export class RunFooter implements FooterApi {
     }
 
     await this.options.onPermissionReply(input)
-  }
-
-  private handlePermissionBatchReply = async (input: PermissionBatchReply): Promise<void> => {
-    if (this.isClosed) return
-    await this.options.onPermissionBatchReply(input)
   }
 
   private handleQuestionReply = async (input: QuestionReply): Promise<void> => {
@@ -1136,7 +1093,6 @@ export class RunFooter implements FooterApi {
     this.clearExitTimer()
     this.clearNoticeTimer()
     this.renderer.off(CliRenderEvents.DESTROY, this.handleDestroy)
-    this.renderer.off(CliRenderEvents.RESIZE, this.handleResize)
     this.renderer.off(CliRenderEvents.PALETTE, this.handlePalette)
     this.renderer.off(CliRenderEvents.THEME_MODE, this.handleThemeRefresh)
     this.renderer.removeInputHandler(this.handleThemeNotification)

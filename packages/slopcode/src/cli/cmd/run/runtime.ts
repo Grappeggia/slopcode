@@ -12,7 +12,7 @@
 //   3. starts the stream transport (SDK event subscription), lazily for fresh
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
-import { createSlopcodeClient, type SlopcodeClient } from "@slopcode-ai/sdk/v2"
+import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
 import { Flag } from "@slopcode-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
@@ -20,29 +20,13 @@ import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./run
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
-import type {
-  LocalReplayAnchor,
-  LocalReplayRow,
-  PermissionBatchReply,
-  RunInput,
-  RunPrompt,
-  RunProvider,
-  StreamCommit,
-} from "./types"
+import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
 
 /** @internal Exported for testing */
 export { pickVariant, resolveVariant } from "./variant.shared"
 
 /** @internal Exported for testing */
 export { runPromptQueue } from "./runtime.queue"
-
-export async function sendPermissionBatch(
-  permission: { replyBatch: (input: PermissionBatchReply) => Promise<{ error?: unknown }> },
-  input: PermissionBatchReply,
-) {
-  const result = await permission.replyBatch(input)
-  if (result.error) throw result.error
-}
 
 type BootContext = Pick<
   RunInput,
@@ -171,15 +155,6 @@ function variantsFor(providers: RunProvider[], model: RunInput["model"]) {
 const RESIZE_DELAY = 250
 const LOCAL_REPLAY_ROW_LIMIT = 100
 
-export async function resolvePermissionScope(sdk: SlopcodeClient, directory: string) {
-  const project = await sdk.project
-    .current({ directory })
-    .then((result) => result.data)
-    .catch(() => undefined)
-  if (!project?.id) return undefined
-  return project.vcs === "git" ? ("project" as const) : ("folder" as const)
-}
-
 async function resolveExitTitle(
   ctx: BootContext,
   input: RunRuntimeInput,
@@ -218,13 +193,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           variant: undefined,
         })
   const savedTask = resolveSavedVariant(ctx.model)
-  const scopeTask = resolvePermissionScope(ctx.sdk, ctx.directory)
-  const [tuiConfig, session, savedVariant, permissionScope] = await Promise.all([
-    tuiConfigTask,
-    sessionTask,
-    savedTask,
-    scopeTask,
-  ])
+  const [tuiConfig, session, savedVariant] = await Promise.all([tuiConfigTask, sessionTask, savedTask])
   const state: RuntimeState = {
     shown: !session.first,
     aborting: false,
@@ -258,7 +227,6 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
 
   const shell = await (deps.createRuntimeLifecycle ?? createRuntimeLifecycle)({
     directory: ctx.directory,
-    permissionScope,
     findFiles: (query) =>
       ctx.sdk.find
         .files({ query, directory: ctx.directory })
@@ -282,25 +250,21 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       log?.write("send.permission.reply", next)
-      await ctx.sdk.permission.reply(next, { throwOnError: true })
-    },
-    onPermissionBatchReply: async (next) => {
-      log?.write("send.permission.batch", next)
-      await sendPermissionBatch(ctx.sdk.permission, next)
+      await ctx.sdk.permission.reply(next)
     },
     onQuestionReply: async (next) => {
       if (state.demo?.questionReply(next)) {
         return
       }
 
-      await ctx.sdk.question.reply(next, { throwOnError: true })
+      await ctx.sdk.question.reply(next)
     },
     onQuestionReject: async (next) => {
       if (state.demo?.questionReject(next)) {
         return
       }
 
-      await ctx.sdk.question.reject(next, { throwOnError: true })
+      await ctx.sdk.question.reject(next)
     },
     onCycleVariant: () => {
       if (!state.model || state.variants.length === 0) {

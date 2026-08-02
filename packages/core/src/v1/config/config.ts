@@ -6,7 +6,6 @@ import { ConfigExperimental } from "../../config/experimental"
 import { ConfigReference } from "../../config/reference"
 import { ConfigAgentV1 } from "./agent"
 import { ConfigAttachmentV1 } from "./attachment"
-import { ConfigAutocompleteV1 } from "./autocomplete"
 import { ConfigCommandV1 } from "./command"
 import { ConfigFormatterV1 } from "./formatter"
 import { ConfigLayoutV1 } from "./layout"
@@ -40,7 +39,7 @@ export const Info = Schema.Struct({
     description: "Server configuration for slopcode serve and web commands",
   }),
   command: Schema.optional(Schema.Record(Schema.String, ConfigCommandV1.Info)).annotate({
-    description: "Command configuration, see https://slopcode.ai/docs/commands",
+    description: "Command configuration, see https://slopcode.dev/docs/commands",
   }),
   skills: Schema.optional(ConfigSkillsV1.Info).annotate({ description: "Additional skill folder paths" }),
   references: Schema.optional(ConfigReference.Info).annotate({
@@ -115,7 +114,7 @@ export const Info = Schema.Struct({
       }),
       [Schema.Record(Schema.String, ConfigAgentV1.Info)],
     ),
-  ).annotate({ description: "Agent configuration, see https://slopcode.ai/docs/agents" }),
+  ).annotate({ description: "Agent configuration, see https://slopcode.dev/docs/agents" }),
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProviderV1.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),
@@ -138,9 +137,6 @@ export const Info = Schema.Struct({
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   attachment: Schema.optional(ConfigAttachmentV1.Info).annotate({
     description: "Attachment processing configuration, including image size limits and resizing behavior",
-  }),
-  autocomplete: Schema.optional(ConfigAutocompleteV1.Info).annotate({
-    description: "Opt-in model-powered prompt autocomplete for the TUI",
   }),
   enterprise: Schema.optional(
     Schema.Struct({ url: Schema.optional(Schema.String).annotate({ description: "Enterprise URL" }) }),

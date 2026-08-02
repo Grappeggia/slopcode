@@ -12,12 +12,6 @@ export const ID = Schema.String.check(Schema.isStartsWith("per")).pipe(
 )
 export type ID = typeof ID.Type
 
-export const BatchID = Schema.String.check(Schema.isStartsWith("pmb_")).pipe(
-  Schema.brand("PermissionBatchID"),
-  withStatics((schema) => ({ ascending: () => schema.make("pmb_" + Identifier.ascending()) })),
-)
-export type BatchID = typeof BatchID.Type
-
 export const Action = Schema.Literals(["allow", "deny", "ask"]).annotate({ identifier: "PermissionAction" })
 export type Action = typeof Action.Type
 
@@ -31,12 +25,6 @@ export type Rule = typeof Rule.Type
 export const Ruleset = Schema.Array(Rule).annotate({ identifier: "PermissionRuleset" })
 export type Ruleset = typeof Ruleset.Type
 
-export const Grant = Schema.Struct({
-  resources: Schema.Array(Schema.String),
-  scopes: Schema.Array(Schema.Literals(["session", "global"])),
-}).annotate({ identifier: "PermissionGrant" })
-export type Grant = typeof Grant.Type
-
 export const Request = Schema.Struct({
   id: ID,
   sessionID: SessionSchema.ID,
@@ -44,11 +32,6 @@ export const Request = Schema.Struct({
   patterns: Schema.Array(Schema.String),
   metadata: Schema.Record(Schema.String, Schema.Unknown),
   always: Schema.Array(Schema.String),
-  grant: Schema.optional(Grant),
-  kind: Schema.optional(Schema.Literal("forecast")),
-  batchID: Schema.optional(BatchID),
-  batchSize: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 16 }))),
-  reason: Schema.optional(Schema.String),
   tool: Schema.Struct({
     messageID: Schema.String,
     callID: Schema.String,
@@ -56,7 +39,7 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionRequest" })
 export type Request = typeof Request.Type
 
-export const Reply = Schema.Literals(["once", "session", "global", "always", "project", "reject"])
+export const Reply = Schema.Literals(["once", "always", "reject"])
 export type Reply = typeof Reply.Type
 
 export const ReplyBody = Schema.Struct({
@@ -84,18 +67,6 @@ export const ReplyInput = Schema.Struct({
 }).annotate({ identifier: "PermissionReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
 
-export const BatchReplyBody = Schema.Struct({
-  requestIDs: Schema.Array(ID).check(Schema.isMaxLength(16)),
-  reply: Reply,
-}).annotate({ identifier: "PermissionBatchReplyBody" })
-export type BatchReplyBody = typeof BatchReplyBody.Type
-
-export const BatchReplyInput = Schema.Struct({
-  batchID: BatchID,
-  ...BatchReplyBody.fields,
-}).annotate({ identifier: "PermissionBatchReplyInput" })
-export type BatchReplyInput = typeof BatchReplyInput.Type
-
 export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("PermissionRejectedError", {}) {
   override get message() {
     return "The user rejected permission to use this specific tool call."
@@ -120,11 +91,6 @@ export class DeniedError extends Schema.TaggedErrorClass<DeniedError>()("Permiss
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Permission.NotFoundError", {
   requestID: ID,
-}) {}
-
-export class BatchError extends Schema.TaggedErrorClass<BatchError>()("Permission.BatchError", {
-  batchID: BatchID,
-  message: Schema.String,
 }) {}
 
 export type Error = DeniedError | RejectedError | CorrectedError

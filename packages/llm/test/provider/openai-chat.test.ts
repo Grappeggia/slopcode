@@ -51,66 +51,6 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
-  it.effect("normalizes native cache writes without double counting input", () =>
-    Effect.gen(function* () {
-      const result = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              id: "chatcmpl_cache",
-              object: "chat.completion.chunk",
-              created: 0,
-              model: "gpt-5.6",
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              usage: {
-                prompt_tokens: 10,
-                completion_tokens: 2,
-                total_tokens: 12,
-                prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
-              },
-            }),
-          ),
-        ),
-      )
-      const usage = result.usage
-      expect(usage).toMatchObject({
-        inputTokens: 10,
-        nonCachedInputTokens: 3,
-        cacheReadInputTokens: 3,
-        cacheWriteInputTokens: 4,
-      })
-    }),
-  )
-
-  it.effect("clamps malformed Chat cache usage into one input partition", () =>
-    Effect.gen(function* () {
-      const result = yield* LLMClient.generate(request).pipe(
-        Effect.provide(
-          fixedResponse(
-            sseEvents({
-              id: "chatcmpl_bad_cache",
-              object: "chat.completion.chunk",
-              created: 0,
-              model: "gpt-5.6",
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              usage: {
-                prompt_tokens: -10,
-                completion_tokens: 1,
-                prompt_tokens_details: { cached_tokens: -3, cache_write_tokens: 99 },
-              },
-            }),
-          ),
-        ),
-      )
-      expect(result.usage).toMatchObject({
-        inputTokens: 0,
-        nonCachedInputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheWriteInputTokens: 0,
-      })
-    }),
-  )
-
   it.effect("lowers chronological system updates to escaped user wrappers in order", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
@@ -576,31 +516,6 @@ describe("OpenAI Chat route", () => {
           usage,
         },
       ])
-    }),
-  )
-
-  it.effect("preserves malformed recorded tool arguments without failing the stream", () =>
-    Effect.gen(function* () {
-      const body = sseEvents(
-        deltaChunk({
-          tool_calls: [{ index: 0, id: "call_bad", function: { name: "final_output", arguments: "{" } }],
-        }),
-        deltaChunk({}, "tool_calls"),
-      )
-      const response = yield* LLMClient.generate(
-        LLM.updateRequest(request, {
-          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
-          toolChoice: { type: "required" },
-        }),
-      ).pipe(Effect.provide(fixedResponse(body)))
-
-      expect(response.events).toContainEqual({
-        type: "tool-input-error",
-        id: "call_bad",
-        name: "final_output",
-        reason: "invalid-json",
-      })
-      expect(JSON.stringify(response.events)).not.toContain('arguments":"{"')
     }),
   )
 

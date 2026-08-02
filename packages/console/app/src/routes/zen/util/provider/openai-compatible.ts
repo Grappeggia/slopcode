@@ -1,4 +1,4 @@
-import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk, normalizeInputUsage } from "./provider"
+import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk } from "./provider"
 
 type Usage = {
   prompt_tokens?: number
@@ -14,7 +14,6 @@ type Usage = {
     cached_tokens?: number
     // used by alibaba
     cache_creation_input_tokens?: number
-    cache_write_tokens?: number
   }
   completion_tokens_details?: {
     reasoning_tokens?: number
@@ -61,29 +60,22 @@ export const oaCompatHelper: ProviderHelper = ({ adjustCacheUsage }) => ({
   },
   extractUsage: (response: any) => response.usage,
   normalizeUsage: (usage: Usage) => {
-    const inputTokens =
-      typeof usage.prompt_tokens === "number" && Number.isFinite(usage.prompt_tokens)
-        ? Math.max(0, usage.prompt_tokens)
-        : 0
+    let inputTokens = usage.prompt_tokens ?? 0
     const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens ?? undefined
     const outputTokens = Math.max(0, (usage.completion_tokens ?? 0) - (reasoningTokens ?? 0))
     let cacheReadTokens = usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? undefined
-    const cacheWriteTokens =
-      usage.prompt_tokens_details?.cache_write_tokens ??
-      usage.prompt_tokens_details?.cache_creation_input_tokens ??
-      undefined
+    const cacheWriteTokens = usage.prompt_tokens_details?.cache_creation_input_tokens ?? undefined
 
     if (adjustCacheUsage && !cacheReadTokens) {
       cacheReadTokens = Math.floor(inputTokens * 0.9)
     }
 
-    const input = normalizeInputUsage(inputTokens, cacheReadTokens, cacheWriteTokens)
     return {
-      inputTokens: input.inputTokens,
+      inputTokens: inputTokens - (cacheReadTokens ?? 0),
       outputTokens,
       reasoningTokens,
-      cacheReadTokens: input.cacheReadTokens,
-      cacheWrite5mTokens: input.cacheWriteTokens,
+      cacheReadTokens,
+      cacheWrite5mTokens: cacheWriteTokens,
       cacheWrite1hTokens: undefined,
     }
   },

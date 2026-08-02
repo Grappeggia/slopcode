@@ -6,8 +6,6 @@ import {
   extractAccountId,
   type IdTokenClaims,
 } from "../../src/plugin/openai/codex"
-import { Auth } from "../../src/auth"
-import { getUsage } from "../../src/plugin/openai/usage"
 
 function createTestJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
@@ -259,91 +257,6 @@ describe("plugin.codex", () => {
     expect(apiRequests).toEqual([
       { authorization: "Bearer access-new", accountId: "acc-123" },
       { authorization: "Bearer access-new", accountId: "acc-123" },
-    ])
-  })
-
-  test("deduplicates refreshes across Codex requests and usage", async () => {
-    let auth = new Auth.Oauth({
-      type: "oauth",
-      refresh: "refresh-shared",
-      access: "",
-      expires: 0,
-      accountId: "account-old",
-    })
-    const saved: Auth.Oauth[] = []
-    const updates: unknown[] = []
-    let resolveRefresh: (() => void) | undefined
-    const ready = new Promise<void>((resolve) => {
-      resolveRefresh = resolve
-    })
-    let refreshRequests = 0
-    const requests: { path: string; authorization: string | null; accountId: string | null }[] = []
-
-    using server = Bun.serve({
-      port: 0,
-      async fetch(request) {
-        const url = new URL(request.url)
-        if (url.pathname === "/oauth/token") {
-          refreshRequests++
-          await ready
-          return Response.json({ access_token: "access-shared", refresh_token: "refresh-next", expires_in: 3600 })
-        }
-        requests.push({
-          path: url.pathname,
-          authorization: request.headers.get("authorization"),
-          accountId: request.headers.get("ChatGPT-Account-Id"),
-        })
-        if (url.pathname === "/usage") return Response.json({ plan_type: "plus" })
-        if (url.pathname === "/backend-api/codex/responses") return Response.json({})
-        return new Response("unexpected request", { status: 500 })
-      },
-    })
-
-    const hooks = await CodexAuthPlugin(
-      {
-        client: {
-          auth: {
-            async set(input: unknown) {
-              updates.push(input)
-            },
-          },
-        } as never,
-        project: {} as never,
-        directory: "",
-        worktree: "",
-        experimental_workspace: { register() {} },
-        serverUrl: new URL("https://example.com"),
-        $: {} as never,
-      },
-      {
-        issuer: server.url.origin,
-        codexApiEndpoint: new URL("/backend-api/codex/responses", server.url).toString(),
-      },
-    )
-    const loaded = await hooks.auth!.loader!(async () => auth as never, {} as never)
-    const usage = getUsage(
-      auth,
-      async (next) => {
-        saved.push(next)
-        auth = next
-      },
-      { issuer: server.url.origin, endpoint: new URL("/usage", server.url).toString() },
-    )
-    await waitFor(() => refreshRequests === 1)
-    const model = loaded.fetch!("https://api.openai.com/v1/responses")
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    expect(refreshRequests).toBe(1)
-
-    resolveRefresh!()
-    expect((await usage).status).toBe("oauth")
-    expect((await model).status).toBe(200)
-    expect(refreshRequests).toBe(1)
-    expect(saved).toHaveLength(1)
-    expect(saved[0]).toMatchObject({ access: "access-shared", refresh: "refresh-next", accountId: "account-old" })
-    expect(updates).toHaveLength(1)
-    expect(requests).toEqual([
-      { path: "/usage", authorization: "Bearer access-shared", accountId: "account-old" },
-      { path: "/backend-api/codex/responses", authorization: "Bearer access-shared", accountId: "account-old" },
     ])
   })
 })

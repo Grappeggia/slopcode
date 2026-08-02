@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "61036206-7c7f-41e3-b811-6d09a1a7f6e4",
-  "prevIds": ["7afc312b-b356-49f1-91bc-bf4f91e58c09"],
+  "id": "1b0d7c3f-deff-4561-81f8-98419ca9a6b2",
+  "prevIds": ["24b5a4f2-8775-49a0-b812-bd1c064d1dfa"],
   "ddl": [
     {
       "name": "workspace",
@@ -62,10 +62,6 @@
     },
     {
       "name": "session_context_epoch",
-      "entityType": "tables"
-    },
-    {
-      "name": "session_execution_status",
       "entityType": "tables"
     },
     {
@@ -699,46 +695,6 @@
       "table": "permission"
     },
     {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": "'project'",
-      "generated": null,
-      "name": "scope",
-      "entityType": "columns",
-      "table": "permission"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": "'pattern'",
-      "generated": null,
-      "name": "match",
-      "entityType": "columns",
-      "table": "permission"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "session_id",
-      "entityType": "columns",
-      "table": "permission"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "directory_id",
-      "entityType": "columns",
-      "table": "permission"
-    },
-    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -1107,76 +1063,6 @@
       "name": "revision",
       "entityType": "columns",
       "table": "session_context_epoch"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "session_id",
-      "entityType": "columns",
-      "table": "session_execution_status"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "activity_id",
-      "entityType": "columns",
-      "table": "session_execution_status"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "root_id",
-      "entityType": "columns",
-      "table": "session_execution_status"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "owner",
-      "entityType": "columns",
-      "table": "session_execution_status"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "epoch",
-      "entityType": "columns",
-      "table": "session_execution_status"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "seq",
-      "entityType": "columns",
-      "table": "session_execution_status"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "data",
-      "entityType": "columns",
-      "table": "session_execution_status"
     },
     {
       "type": "text",
@@ -1824,17 +1710,6 @@
       "table": "permission"
     },
     {
-      "columns": ["session_id", "project_id"],
-      "tableTo": "session",
-      "columnsTo": ["id", "project_id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "nameExplicit": true,
-      "name": "permission_session_owner_fk",
-      "entityType": "fks",
-      "table": "permission"
-    },
-    {
       "columns": ["project_id"],
       "tableTo": "project",
       "columnsTo": ["id"],
@@ -1877,17 +1752,6 @@
       "name": "fk_session_context_epoch_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_context_epoch"
-    },
-    {
-      "columns": ["session_id"],
-      "tableTo": "session",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "nameExplicit": false,
-      "name": "fk_session_execution_status_session_id_session_id_fk",
-      "entityType": "fks",
-      "table": "session_execution_status"
     },
     {
       "columns": ["session_id"],
@@ -2057,13 +1921,6 @@
       "entityType": "pks"
     },
     {
-      "columns": ["session_id"],
-      "nameExplicit": false,
-      "name": "session_execution_status_pk",
-      "table": "session_execution_status",
-      "entityType": "pks"
-    },
-    {
       "columns": ["id"],
       "nameExplicit": false,
       "name": "session_input_pk",
@@ -2200,86 +2057,18 @@
           "isExpression": false
         },
         {
-          "value": "scope",
-          "isExpression": false
-        },
-        {
           "value": "action",
           "isExpression": false
         },
         {
           "value": "resource",
           "isExpression": false
-        },
-        {
-          "value": "match",
-          "isExpression": false
         }
       ],
       "isUnique": true,
-      "where": "\"permission\".\"session_id\" IS NULL AND \"permission\".\"directory_id\" IS NULL",
+      "where": null,
       "origin": "manual",
-      "name": "permission_project_scope_action_resource_match_idx",
-      "entityType": "indexes",
-      "table": "permission"
-    },
-    {
-      "columns": [
-        {
-          "value": "session_id",
-          "isExpression": false
-        },
-        {
-          "value": "scope",
-          "isExpression": false
-        },
-        {
-          "value": "action",
-          "isExpression": false
-        },
-        {
-          "value": "resource",
-          "isExpression": false
-        },
-        {
-          "value": "match",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": "\"permission\".\"session_id\" IS NOT NULL",
-      "origin": "manual",
-      "name": "permission_session_scope_action_resource_match_idx",
-      "entityType": "indexes",
-      "table": "permission"
-    },
-    {
-      "columns": [
-        {
-          "value": "directory_id",
-          "isExpression": false
-        },
-        {
-          "value": "scope",
-          "isExpression": false
-        },
-        {
-          "value": "action",
-          "isExpression": false
-        },
-        {
-          "value": "resource",
-          "isExpression": false
-        },
-        {
-          "value": "match",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": "\"permission\".\"directory_id\" IS NOT NULL",
-      "origin": "manual",
-      "name": "permission_directory_scope_action_resource_match_idx",
+      "name": "permission_project_action_resource_idx",
       "entityType": "indexes",
       "table": "permission"
     },
@@ -2336,28 +2125,6 @@
       "name": "part_session_idx",
       "entityType": "indexes",
       "table": "part"
-    },
-    {
-      "columns": [
-        {
-          "value": "owner",
-          "isExpression": false
-        },
-        {
-          "value": "epoch",
-          "isExpression": false
-        },
-        {
-          "value": "session_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "session_execution_status_owner_state_idx",
-      "entityType": "indexes",
-      "table": "session_execution_status"
     },
     {
       "columns": [
@@ -2514,24 +2281,6 @@
     {
       "columns": [
         {
-          "value": "id",
-          "isExpression": false
-        },
-        {
-          "value": "project_id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "origin": "manual",
-      "name": "session_id_project_idx",
-      "entityType": "indexes",
-      "table": "session"
-    },
-    {
-      "columns": [
-        {
           "value": "workspace_id",
           "isExpression": false
         }
@@ -2570,12 +2319,6 @@
       "name": "todo_session_idx",
       "entityType": "indexes",
       "table": "todo"
-    },
-    {
-      "value": "(\"scope\" = 'project' AND \"match\" = 'pattern' AND \"session_id\" IS NULL)\n        AND \"directory_id\" IS NULL\n        OR (\"scope\" = 'session' AND \"match\" = 'exact' AND \"session_id\" IS NOT NULL\n          AND \"directory_id\" IS NULL)\n        OR (\"scope\" = 'global' AND \"match\" = 'exact' AND \"session_id\" IS NULL\n          AND \"directory_id\" IS NULL AND \"project_id\" = 'global')\n        OR (\"scope\" = 'directory' AND \"match\" = 'pattern' AND \"session_id\" IS NULL\n          AND \"directory_id\" IS NOT NULL AND length(\"directory_id\") = 64\n          AND \"directory_id\" NOT GLOB '*[^0-9a-f]*' AND \"project_id\" = 'global')",
-      "name": "permission_scope_match_check",
-      "entityType": "checks",
-      "table": "permission"
     }
   ],
   "renames": []

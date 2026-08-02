@@ -50,9 +50,9 @@ const setup = async (prior = true) => {
   await git(repo, "config", "user.email", "release@example.com")
   await git(repo, "config", "user.name", "Release Test")
   await git(repo, "switch", "-c", "dev")
-  const base = await commit(repo, "version", "0.2.200")
-  if (prior) await git(repo, "tag", "v0.2.200")
-  await git(repo, "push", "-u", "origin", "dev", ...(prior ? ["v0.2.200"] : []))
+  const base = await commit(repo, "version", "1.0.0")
+  if (prior) await git(repo, "tag", "v1.0.0")
+  await git(repo, "push", "-u", "origin", "dev", ...(prior ? ["v1.0.0"] : []))
   return { dir, bare, repo, base }
 }
 
@@ -72,8 +72,8 @@ afterEach(async () => {
 describe("release state transitions", () => {
   test("refuses a dirty tree created after the release commit", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
     const hook = path.join(ctx.repo, ".git", "hooks", "post-commit")
     await Bun.write(hook, "#!/bin/sh\nprintf dirty > version\n")
     await Bun.$`chmod +x ${hook}`
@@ -81,7 +81,7 @@ describe("release state transitions", () => {
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => {},
         verify: async () => {},
@@ -90,18 +90,18 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("dirty after the release commit")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
   })
 
   test("refuses tracked source drift created by the build", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => void (await Bun.write(path.join(ctx.repo, "version"), "build drift")),
         verify: async () => {},
@@ -110,18 +110,18 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("modified tracked source")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
   })
 
   test("refuses a clean commit created by the build", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => void (await commit(ctx.repo, "build-commit")),
         verify: async () => {},
@@ -130,13 +130,13 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("Release build changed HEAD")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
   })
 
   test("refuses a pre-commit hook that changes the committed tree", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
     const hook = path.join(ctx.repo, ".git", "hooks", "pre-commit")
     await Bun.write(hook, "#!/bin/sh\nprintf hook > version\ngit add version\n")
     await Bun.$`chmod +x ${hook}`
@@ -144,7 +144,7 @@ describe("release state transitions", () => {
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => {},
         verify: async () => {},
@@ -153,13 +153,13 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("commit tree does not match")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
   })
 
   test("refuses a post-commit hook that creates an extra clean commit", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
     const hook = path.join(ctx.repo, ".git", "hooks", "post-commit")
     await Bun.write(
       hook,
@@ -170,7 +170,7 @@ describe("release state transitions", () => {
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => {},
         verify: async () => {},
@@ -179,18 +179,18 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("exactly one commit")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
   })
 
   test("refuses unexpected untracked source created during preparation", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => void (await Bun.write(path.join(ctx.repo, "unexpected.ts"), "export {}")),
         verify: async () => {},
@@ -199,7 +199,7 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("unexpected untracked source")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
   })
 
   test("does not mistake ignored build artifacts for source drift", async () => {
@@ -208,12 +208,12 @@ describe("release state transitions", () => {
     await git(ctx.repo, "add", ".gitignore")
     await git(ctx.repo, "commit", "-m", "ignore build artifact")
     await git(ctx.repo, "push", "origin", "dev")
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     const result = await prepareRelease({
       cwd: ctx.repo,
-      version: "0.2.211",
+      version: "1.1.0",
       lineage,
       build: async () => void (await Bun.write(path.join(ctx.repo, "artifact.tmp"), "ignored")),
       verify: async () => {},
@@ -222,39 +222,19 @@ describe("release state transitions", () => {
       upload: async () => {},
     })
 
-    expect(result.source).toBe(await git(ctx.repo, "rev-parse", "v0.2.211^{commit}"))
+    expect(result.source).toBe(await git(ctx.repo, "rev-parse", "v1.1.0^{commit}"))
     expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(result.source)
-  })
-
-  test("releases an exact version when the source tree is already prepared", async () => {
-    const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-
-    const result = await prepareRelease({
-      cwd: ctx.repo,
-      version: "0.2.211",
-      lineage,
-      build: async () => {},
-      verify: async () => {},
-      manifest: async () => {},
-      release: async () => {},
-      upload: async () => {},
-    })
-
-    expect(result.source).toBe(ctx.base)
-    expect(await git(ctx.repo, "rev-parse", "v0.2.211^{commit}")).toBe(ctx.base)
-    expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(ctx.base)
   })
 
   test("moves an existing release-state anchor during a subsequent release", async () => {
     const ctx = await setup()
     await git(ctx.repo, "push", "origin", `${ctx.base}:${releaseStateRef}`)
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     const result = await prepareRelease({
       cwd: ctx.repo,
-      version: "0.2.211",
+      version: "1.1.0",
       lineage,
       build: async () => {},
       verify: async () => {},
@@ -264,7 +244,7 @@ describe("release state transitions", () => {
     })
 
     expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(result.source)
-    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v0.2.211")).toStartWith(result.source)
+    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v1.1.0")).toStartWith(result.source)
   })
 
   test("lease failure keeps the losing release atomic and removes its local target tag", async () => {
@@ -275,16 +255,16 @@ describe("release state transitions", () => {
     const hook = path.join(ctx.repo, ".git", "hooks", "pre-push")
     await Bun.write(
       hook,
-      `#!/bin/sh\ngit -C "${other}" push --atomic origin "${divergent}:${releaseStateRef}" "${divergent}:refs/tags/v0.2.211"\n`,
+      `#!/bin/sh\ngit -C "${other}" push --atomic origin "${divergent}:${releaseStateRef}" "${divergent}:refs/tags/v1.1.0"\n`,
     )
     await Bun.$`chmod +x ${hook}`
-    const lineage = await gateRelease({ version: "0.2.212", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.212")
+    const lineage = await gateRelease({ version: "1.2.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.2.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.212",
+        version: "1.2.0",
         lineage,
         build: async () => {},
         verify: async () => {},
@@ -294,27 +274,27 @@ describe("release state transitions", () => {
       }),
     ).rejects.toThrow("Atomic release push failed")
 
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.212")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.2.0")).toBe("")
     expect(await git(ctx.repo, "ls-remote", "origin", "refs/heads/dev")).toStartWith(ctx.base)
-    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v0.2.212")).toBe("")
+    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v1.2.0")).toBe("")
     expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(divergent)
-    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v0.2.211")).toStartWith(divergent)
+    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v1.1.0")).toStartWith(divergent)
   })
 
   test("revalidates fresh remote release tags before creating or pushing the target tag", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.212", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.212")
+    const lineage = await gateRelease({ version: "1.2.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.2.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.212",
+        version: "1.2.0",
         lineage,
         build: async () => {
           const other = await peer(ctx)
           const divergent = await commit(other, "divergent-release")
-          await git(other, "push", "origin", `${divergent}:refs/tags/v0.2.211`)
+          await git(other, "push", "origin", `${divergent}:refs/tags/v1.1.0`)
         },
         verify: async () => {},
         manifest: async () => {},
@@ -322,20 +302,20 @@ describe("release state transitions", () => {
         upload: async () => {},
       }),
     ).rejects.toThrow("no longer the immediate semantic predecessor")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.212")).toBe("")
-    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v0.2.212")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.2.0")).toBe("")
+    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v1.2.0")).toBe("")
     expect(await git(ctx.repo, "ls-remote", "origin", "refs/heads/dev")).toStartWith(ctx.base)
   })
 
   test("resumes a local release commit after failure before tag creation", async () => {
     const ctx = await setup()
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => {},
         verify: async () => {},
@@ -347,17 +327,17 @@ describe("release state transitions", () => {
       }),
     ).rejects.toThrow("manifest failed")
     const source = await git(ctx.repo, "rev-parse", "HEAD")
-    expect(await git(ctx.repo, "tag", "--list", "v0.2.211")).toBe("")
+    expect(await git(ctx.repo, "tag", "--list", "v1.1.0")).toBe("")
 
     const resumed = await gateRelease({
-      version: "0.2.211",
+      version: "1.1.0",
       cwd: ctx.repo,
       resume: true,
       publication: async () => undefined,
     })
     const result = await prepareRelease({
       cwd: ctx.repo,
-      version: "0.2.211",
+      version: "1.1.0",
       lineage: resumed,
       resume: true,
       build: async () => {},
@@ -368,13 +348,13 @@ describe("release state transitions", () => {
     })
 
     expect(result.source).toBe(source)
-    expect(await git(ctx.repo, "rev-parse", "v0.2.211^{commit}")).toBe(source)
-    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v0.2.211")).toStartWith(source)
+    expect(await git(ctx.repo, "rev-parse", "v1.1.0^{commit}")).toBe(source)
+    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v1.1.0")).toStartWith(source)
     expect(await git(ctx.repo, "rev-list", "--count", "HEAD")).toBe("2")
 
     const options = {
       cwd: ctx.repo,
-      version: "0.2.211",
+      version: "1.1.0",
       lineage: resumed,
       resume: true,
       build: async () => {},
@@ -394,13 +374,13 @@ describe("release state transitions", () => {
   test("resumes after remote side effects without moving the commit or tag", async () => {
     const ctx = await setup()
     const events: string[] = []
-    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
-    await Bun.write(path.join(ctx.repo, "version"), "0.2.211")
+    const lineage = await gateRelease({ version: "1.1.0", cwd: ctx.repo, publication: async () => undefined })
+    await Bun.write(path.join(ctx.repo, "version"), "1.1.0")
 
     await expect(
       prepareRelease({
         cwd: ctx.repo,
-        version: "0.2.211",
+        version: "1.1.0",
         lineage,
         build: async () => void events.push("build"),
         verify: async () => void events.push("verify"),
@@ -415,20 +395,20 @@ describe("release state transitions", () => {
 
     const source = await git(ctx.repo, "rev-parse", "HEAD")
     expect(events).toEqual(["build", "verify", "manifest", "release", "upload"])
-    expect(await git(ctx.repo, "rev-parse", "v0.2.211^{commit}")).toBe(source)
-    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v0.2.211")).toStartWith(source)
+    expect(await git(ctx.repo, "rev-parse", "v1.1.0^{commit}")).toBe(source)
+    expect(await git(ctx.repo, "ls-remote", "origin", "refs/tags/v1.1.0")).toStartWith(source)
     expect(await git(ctx.repo, "rev-list", "--count", "HEAD")).toBe("2")
 
     events.length = 0
     const resumed = await gateRelease({
-      version: "0.2.211",
+      version: "1.1.0",
       cwd: ctx.repo,
       resume: true,
       publication: async () => undefined,
     })
     const result = await prepareRelease({
       cwd: ctx.repo,
-      version: "0.2.211",
+      version: "1.1.0",
       lineage: resumed,
       resume: true,
       build: async () => void events.push("build"),
@@ -439,7 +419,7 @@ describe("release state transitions", () => {
     })
 
     expect(result.source).toBe(source)
-    expect(result.previous).toBe("v0.2.200")
+    expect(result.previous).toBe("v1.0.0")
     expect(events).toEqual(["build", "verify", `manifest:${source}`, "reuse-release", "reupload-clobber"])
     expect(await git(ctx.repo, "rev-list", "--count", "HEAD")).toBe("2")
     expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(source)
@@ -447,20 +427,20 @@ describe("release state transitions", () => {
 
   test("refuses a published resume when the release-state anchor is missing", async () => {
     const ctx = await setup()
-    const source = await commit(ctx.repo, "published-without-state", "0.2.211")
-    await git(ctx.repo, "tag", "v0.2.211")
-    await git(ctx.repo, "push", "origin", "dev", "v0.2.211")
+    const source = await commit(ctx.repo, "published-without-state", "1.1.0")
+    await git(ctx.repo, "tag", "v1.1.0")
+    await git(ctx.repo, "push", "origin", "dev", "v1.1.0")
 
     await expect(
-      gateRelease({ version: "0.2.211", cwd: ctx.repo, resume: true, publication: async () => undefined }),
+      gateRelease({ version: "1.1.0", cwd: ctx.repo, resume: true, publication: async () => undefined }),
     ).rejects.toThrow(`requires ${releaseStateRef}`)
   })
 
   test("accepts workflow provenance after dev advances beyond the tag", async () => {
     const ctx = await setup()
-    const source = await commit(ctx.repo, "release", "0.2.211")
-    await git(ctx.repo, "tag", "v0.2.211")
-    await git(ctx.repo, "push", "origin", "dev", "v0.2.211")
+    const source = await commit(ctx.repo, "release", "1.1.0")
+    await git(ctx.repo, "tag", "v1.1.0")
+    await git(ctx.repo, "push", "origin", "dev", "v1.1.0")
     const other = await peer(ctx)
     await commit(other, "automation")
     await git(other, "push", "origin", "dev")
@@ -468,61 +448,61 @@ describe("release state transitions", () => {
     await expect(
       gateLineage({
         mode: "verify",
-        target: "v0.2.211",
+        target: "v1.1.0",
         source,
-        previous: "v0.2.200",
+        previous: "v1.0.0",
         cwd: ctx.repo,
       }),
-    ).resolves.toMatchObject({ source, target: "v0.2.211", previous: "v0.2.200" })
+    ).resolves.toMatchObject({ source, target: "v1.1.0", previous: "v1.0.0" })
   })
 
   test("rejects feature, dirty, mismatched-tag, and published-version resumes", async () => {
     const feature = await setup()
     await git(feature.repo, "switch", "-c", "feature")
     await expect(
-      gateRelease({ version: "0.2.211", cwd: feature.repo, publication: async () => undefined }),
+      gateRelease({ version: "1.1.0", cwd: feature.repo, publication: async () => undefined }),
     ).rejects.toThrow('branch "dev"')
 
     const dirty = await setup()
     await Bun.write(path.join(dirty.repo, "dirty"), "dirty")
     await expect(
-      gateRelease({ version: "0.2.211", cwd: dirty.repo, publication: async () => undefined }),
+      gateRelease({ version: "1.1.0", cwd: dirty.repo, publication: async () => undefined }),
     ).rejects.toThrow("worktree is dirty")
 
     const mismatch = await setup()
-    await git(mismatch.repo, "tag", "v0.2.211")
+    await git(mismatch.repo, "tag", "v1.1.0")
     const other = await peer(mismatch)
     const side = await commit(other, "other")
-    await git(other, "tag", "-f", "v0.2.211", side)
-    await git(other, "push", "origin", "v0.2.211")
+    await git(other, "tag", "-f", "v1.1.0", side)
+    await git(other, "push", "origin", "v1.1.0")
     await expect(
-      gateRelease({ version: "0.2.211", cwd: mismatch.repo, resume: true, publication: async () => undefined }),
+      gateRelease({ version: "1.1.0", cwd: mismatch.repo, resume: true, publication: async () => undefined }),
     ).rejects.toThrow("differs locally")
 
     const published = await setup()
     await expect(
       gateRelease({
-        version: "0.2.211",
+        version: "1.1.0",
         cwd: published.repo,
         resume: true,
-        publication: async () => ({ name: "slopcode", version: "0.2.211" }),
+        publication: async () => ({ name: "slopcode", version: "1.1.0" }),
       }),
     ).rejects.toThrow("foreign or unverifiable")
   })
 
   test("publication accepts only a clean detached verified source", async () => {
     const ctx = await setup()
-    const source = await commit(ctx.repo, "release", "0.2.211")
-    await git(ctx.repo, "tag", "v0.2.211")
-    await git(ctx.repo, "push", "origin", "dev", "v0.2.211")
+    const source = await commit(ctx.repo, "release", "1.1.0")
+    await git(ctx.repo, "tag", "v1.1.0")
+    await git(ctx.repo, "push", "origin", "dev", "v1.1.0")
     const options = {
-      version: "0.2.211",
+      version: "1.1.0",
       source,
-      previous: "v0.2.200",
+      previous: "v1.0.0",
       cwd: ctx.repo,
       publication: async () => ({
         name: "slopcode",
-        version: "0.2.211",
+        version: "1.1.0",
         gitHead: source,
         repository: { url: "git+https://github.com/teamslop/slopcode.git" },
         dist: {
@@ -536,20 +516,20 @@ describe("release state transitions", () => {
 
     await expect(gatePublication(options)).rejects.toThrow("clean detached checkout")
     await git(ctx.repo, "switch", "--detach", source)
-    await expect(gatePublication(options)).resolves.toMatchObject({ source, previous: "v0.2.200" })
+    await expect(gatePublication(options)).resolves.toMatchObject({ source, previous: "v1.0.0" })
     await Bun.write(path.join(ctx.repo, "dirty"), "dirty")
     await expect(gatePublication(options)).rejects.toThrow("clean detached checkout")
   })
 
   test("publication allows no predecessor only for the first release", async () => {
     const first = await setup(false)
-    const initial = await commit(first.repo, "first-release", "0.2.200")
-    await git(first.repo, "tag", "v0.2.200")
-    await git(first.repo, "push", "origin", "dev", "v0.2.200")
+    const initial = await commit(first.repo, "first-release", "1.0.0")
+    await git(first.repo, "tag", "v1.0.0")
+    await git(first.repo, "push", "origin", "dev", "v1.0.0")
     await git(first.repo, "switch", "--detach", initial)
     await expect(
       gatePublication({
-        version: "0.2.200",
+        version: "1.0.0",
         source: initial,
         cwd: first.repo,
         publication: async () => undefined,
@@ -557,13 +537,13 @@ describe("release state transitions", () => {
     ).resolves.toMatchObject({ previous: undefined })
 
     const later = await setup()
-    const source = await commit(later.repo, "later-release", "0.2.211")
-    await git(later.repo, "tag", "v0.2.211")
-    await git(later.repo, "push", "origin", "dev", "v0.2.211")
+    const source = await commit(later.repo, "later-release", "1.1.0")
+    await git(later.repo, "tag", "v1.1.0")
+    await git(later.repo, "push", "origin", "dev", "v1.1.0")
     await git(later.repo, "switch", "--detach", source)
     await expect(
       gatePublication({
-        version: "0.2.211",
+        version: "1.1.0",
         source,
         cwd: later.repo,
         publication: async () => undefined,
@@ -575,7 +555,7 @@ describe("release state transitions", () => {
     let registry = false
     await expect(
       gateRelease({
-        version: "v0.2.211",
+        version: "v1.1.0",
         cwd: "/does/not/exist",
         publication: async () => {
           registry = true
@@ -907,33 +887,16 @@ describe("workflow contracts", () => {
     const script = await Bun.file(path.join(root, "script/publish.ts")).text()
 
     expect(workflow.match(/install-flags: --frozen-lockfile/g)).toHaveLength(3)
-    const resume = script.slice(
-      script.indexOf("if (resume)"),
-      script.indexOf("} else {", script.indexOf("if (resume)")),
-    )
-    const fresh = script.slice(
-      script.indexOf("} else {", script.indexOf("if (resume)")),
-      script.indexOf("\n  }\n}", script.indexOf("if (resume)")),
-    )
-    expect(resume).toContain("bun install --frozen-lockfile")
-    expect(resume).not.toContain("--lockfile-only")
-    expect(fresh).toContain("bun install --lockfile-only --ignore-scripts")
-    expect(fresh.indexOf('pkg = pkg.replaceAll(/"version"')).toBeLessThan(
-      fresh.indexOf("bun install --lockfile-only --ignore-scripts"),
-    )
-    expect(fresh.indexOf("bun install --lockfile-only --ignore-scripts")).toBeLessThan(
-      fresh.indexOf("bun install --frozen-lockfile"),
-    )
+    expect(script).not.toMatch(/bun install`/)
     expect(script.match(/bun install --frozen-lockfile/g)).toHaveLength(2)
-    expect(script).not.toMatch(/bun install(?! --(?:frozen-lockfile|lockfile-only --ignore-scripts))/)
     expect(workflow).not.toContain("NPM_TOKEN")
     expect(workflow).not.toContain("NODE_AUTH_TOKEN")
     expect(workflow).not.toContain("_authToken")
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).toContain("contents: read")
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).not.toContain("id-token: write")
     expect(publish).toContain("id-token: write")
-    expect(publish).toContain("contents: write")
-    expect(publish).toContain("GH_TOKEN: ${{ github.token }}")
+    expect(publish).toContain("contents: read")
+    expect(publish).not.toContain("contents: write")
     expect(publish).not.toContain("packages: write")
   })
 
@@ -957,15 +920,9 @@ describe("workflow contracts", () => {
     expect(publish.indexOf("actions/setup-node")).toBeGreaterThan(
       publish.indexOf("- name: Install verified source dependencies"),
     )
-    const artifact = publish.indexOf("bun ./packages/slopcode/script/artifact-manifest.ts verify")
-    const gate = publish.indexOf("- name: Gate clean publication source")
-    const publisher = publish.indexOf("run: bun ./packages/slopcode/script/publish.ts")
-    const finalize = publish.indexOf("- name: Finalize GitHub release")
-    expect(artifact).toBeGreaterThan(publish.indexOf("- name: Install verified source dependencies"))
-    expect(gate).toBeGreaterThan(artifact)
-    expect(publisher).toBeGreaterThan(gate)
-    expect(finalize).toBeGreaterThan(publisher)
-    expect(publish).not.toContain("run: ./script/publish.ts")
+    expect(publish.indexOf("run: ./script/publish.ts")).toBeGreaterThan(
+      publish.indexOf("- name: Install verified source dependencies"),
+    )
   })
 
   test("release npm verification loads and verifies complete provenance before returning", async () => {

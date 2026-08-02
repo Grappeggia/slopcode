@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://slopcode.ai/desktop-theme.json",
+  "$id": "https://slopcode.dev/desktop-theme.json",
   "title": "SlopCode Desktop Theme",
   "description": "A theme definition for the SlopCode desktop application",
   "type": "object",

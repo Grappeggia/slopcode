@@ -21,7 +21,7 @@ import { createSizing, focusTerminalById } from "@/pages/session/helpers"
 import { getTerminalHandoff, setTerminalHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 
-export function TerminalPanel() {
+export function TerminalPanel(props: { variant?: "legacy" | "v2" } = {}) {
   const delays = [120, 240]
   const layout = useLayout()
   const terminal = useTerminal()
@@ -29,6 +29,7 @@ export function TerminalPanel() {
   const command = useCommand()
   const settings = useSettings()
   const { params, workspaceKey, view } = useSessionLayout()
+  const v2 = () => props.variant === "v2"
 
   const opened = createMemo(() => view().terminal.opened())
   const size = createSizing()
@@ -202,6 +203,8 @@ export function TerminalPanel() {
       inert={!opened()}
       class="relative w-full shrink-0 bg-background-stronger"
       classList={{
+        "bg-v2-background-bg-base md:mx-2 md:mb-2 md:w-[calc(100%-16px)] rounded-[10px] shadow-[var(--v2-elevation-raised)] overflow-hidden":
+          v2() && opened(),
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
           !size.active(),
       }}
@@ -227,7 +230,7 @@ export function TerminalPanel() {
       <div
         class="absolute inset-x-0 top-0 flex flex-col overflow-hidden"
         classList={{
-          "border-t border-border-weak-base": opened(),
+          "border-t border-border-weak-base": opened() && !v2(),
           "pointer-events-none": !opened(),
         }}
         style={{ height: `${pane()}px` }}
@@ -236,7 +239,10 @@ export function TerminalPanel() {
           when={terminal.ready()}
           fallback={
             <div class="flex flex-col h-full pointer-events-none">
-              <div class="h-10 flex items-center gap-2 px-2 border-b border-border-weaker-base bg-background-stronger overflow-hidden">
+              <div
+                class="h-10 flex items-center gap-2 px-2 border-b border-border-weaker-base bg-background-stronger overflow-hidden"
+                classList={{ "bg-v2-background-bg-base": v2() }}
+              >
                 <For each={handoff()}>
                   {(title) => (
                     <div class="px-2 py-1 rounded-md bg-surface-base text-14-regular text-text-weak truncate max-w-40">
@@ -269,7 +275,10 @@ export function TerminalPanel() {
                 onChange={(id) => terminal.open(id)}
                 class="!h-auto !flex-none"
               >
-                <Tabs.List class="h-10 border-b border-border-weaker-base">
+                <Tabs.List
+                  class="h-10 border-b border-border-weaker-base"
+                  classList={{ "bg-v2-background-bg-base px-1": v2() }}
+                >
                   <SortableProvider ids={ids()}>
                     <For each={all()}>{(pty) => <SortableTerminalTab terminal={pty} onClose={close} />}</For>
                   </SortableProvider>
@@ -318,7 +327,10 @@ export function TerminalPanel() {
                 {(id) => (
                   <Show when={all().find((pty) => pty.id === id)}>
                     {(t) => (
-                      <div class="relative p-1 h-10 flex items-center bg-background-stronger text-14-regular">
+                      <div
+                        class="relative p-1 h-10 flex items-center bg-background-stronger text-14-regular"
+                        classList={{ "bg-v2-background-bg-base rounded-md shadow-[var(--v2-elevation-raised)]": v2() }}
+                      >
                         {terminalTabLabel({
                           title: t().title,
                           titleNumber: t().titleNumber,

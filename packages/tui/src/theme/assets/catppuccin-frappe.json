@@ -1,5 +1,5 @@
 {
-  "$schema": "https://slopcode.ai/theme.json",
+  "$schema": "https://slopcode.dev/theme.json",
   "defs": {
     "frappeRosewater": "#f2d5cf",
     "frappeFlamingo": "#eebebe",

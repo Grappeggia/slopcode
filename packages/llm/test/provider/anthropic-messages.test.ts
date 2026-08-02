@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { CacheHint, CustomToolDefinition, LLM, LLMError, Message, ToolCallPart, Usage } from "../../src"
+import { CacheHint, LLM, LLMError, Message, ToolCallPart, Usage } from "../../src"
 import { Auth, LLMClient } from "../../src/route"
 import * as AnthropicMessages from "../../src/protocols/anthropic-messages"
 import { continuationRequest, nativeAnthropicMessagesContinuation } from "../continuation-scenarios"
@@ -54,20 +54,6 @@ describe("Anthropic Messages route", () => {
         max_tokens: 20,
         temperature: 0,
       })
-    }),
-  )
-
-  it.effect("rejects custom tools at the non-OpenAI protocol boundary", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
-        LLM.updateRequest(request, {
-          tools: [new CustomToolDefinition({ name: "shell", description: "Run shell text." })],
-        }),
-      ).pipe(Effect.flip)
-
-      expect(error).toBeInstanceOf(LLMError)
-      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
-      expect(error.message).toContain("Anthropic Messages does not support custom tools")
     }),
   )
 
@@ -414,35 +400,6 @@ describe("Anthropic Messages route", () => {
         reason: "stop",
         providerMetadata: { anthropic: { stopSequence: "\n\nHuman:" } },
       })
-    }),
-  )
-
-  it.effect("preserves malformed recorded tool arguments without failing the stream", () =>
-    Effect.gen(function* () {
-      const body = sseEvents(
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "tool_use", id: "call_bad", name: "final_output" },
-        },
-        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{" } },
-        { type: "content_block_stop", index: 0 },
-        { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
-      )
-      const response = yield* LLMClient.generate(
-        LLM.updateRequest(request, {
-          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
-          toolChoice: { type: "required" },
-        }),
-      ).pipe(Effect.provide(fixedResponse(body)))
-
-      expect(response.events).toContainEqual({
-        type: "tool-input-error",
-        id: "call_bad",
-        name: "final_output",
-        reason: "invalid-json",
-      })
-      expect(JSON.stringify(response.events)).not.toContain('partial_json":"{"')
     }),
   )
 

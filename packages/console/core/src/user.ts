@@ -148,7 +148,7 @@ export namespace User {
             // @ts-ignore
             InviteEmail({
               inviter: emailInfo.inviterEmail,
-              assetsUrl: `https://slopcode.ai/email`,
+              assetsUrl: `https://slopcode.dev/email`,
               workspaceID: workspaceID,
               workspaceName: emailInfo.workspaceName,
             }),

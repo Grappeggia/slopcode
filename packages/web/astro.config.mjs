@@ -131,7 +131,7 @@ export default defineConfig({
           tag: "link",
           attrs: {
             rel: "icon",
-            href: "/favicon-v3.ico",
+            href: "/docs/favicon-v3.ico",
             sizes: "32x32",
           },
         },
@@ -140,7 +140,7 @@ export default defineConfig({
           attrs: {
             rel: "icon",
             type: "image/png",
-            href: "/favicon-96x96-v3.png",
+            href: "/docs/favicon-96x96-v3.png",
             sizes: "96x96",
           },
         },
@@ -148,8 +148,15 @@ export default defineConfig({
           tag: "link",
           attrs: {
             rel: "apple-touch-icon",
-            href: "/apple-touch-icon-v3.png",
+            href: "/docs/apple-touch-icon-v3.png",
             sizes: "180x180",
+          },
+        },
+        {
+          tag: "link",
+          attrs: {
+            rel: "manifest",
+            href: "/docs/site-docs.webmanifest",
           },
         },
       ],
@@ -166,6 +173,11 @@ export default defineConfig({
         headingLinks: false,
       },
       customCss: ["./src/styles/custom.css"],
+      logo: {
+        light: "./src/assets/logo-light.svg",
+        dark: "./src/assets/logo-dark.svg",
+        replacesTitle: true,
+      },
       sidebar: [
         "",
         "changelog",

@@ -27,11 +27,6 @@ import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
-import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
-import { ProviderTest } from "../fake/provider"
-import { Account } from "@/account/account"
-import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
-import { CacheHint } from "@slopcode-ai/llm"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -117,8 +112,6 @@ function llmLayerWithExecutor(executor: Layer.Layer<RequestExecutor.Service>, fl
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)))),
     Layer.provide(RuntimeFlags.layer(flags)),
-    Layer.provide(Account.defaultLayer),
-    Layer.provide(SafetyIdentity.defaultLayer),
   )
 }
 
@@ -207,197 +200,6 @@ describe("session.llm.hasToolCalls", () => {
     ] as ModelMessage[]
     expect(LLM.hasToolCalls(messages)).toBe(true)
   })
-})
-
-describe("session.llm provider option safety", () => {
-  const options = {
-    safetyIdentifier: "hostile",
-    promptCacheOptions: { mode: "explicit", ttl: "30m" },
-    reasoningEffort: "high",
-  }
-  const model = (providerID: string, npm: string, id = "gpt-5.6", url = "https://api.openai.com/v1") =>
-    ({ providerID, api: { id, npm, url } }) as Provider.Model
-
-  test("scrubs safety and cache options from every excluded route", () => {
-    const routes = [
-      { model: model("openai", "@ai-sdk/openai"), auth: { type: "oauth" } as Auth.Info },
-      { model: model("openai", "@ai-sdk/openai", "gpt-5.5") },
-      { model: model("azure", "@ai-sdk/azure") },
-      { model: model("github-copilot", "@ai-sdk/github-copilot") },
-      { model: model("openrouter", "@openrouter/ai-sdk-provider") },
-      { model: model("compatible", "@ai-sdk/openai-compatible") },
-      { model: model("openai", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/v1") },
-      { model: model("slopcode", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/zen/v1") },
-    ]
-    routes.forEach((route) =>
-      expect(LLM.sanitizeOptions({ ...route, options, safetyIdentifier: "sc_safe", cacheHint: true })).toEqual({
-        reasoningEffort: "high",
-      }),
-    )
-  })
-
-  test("requires a 30m hint for eligible explicit cache options", () => {
-    const input = { model: model("openai", "@ai-sdk/openai"), options, safetyIdentifier: "sc_safe" }
-    expect(LLM.sanitizeOptions({ ...input, cacheHint: false })).toEqual({
-      reasoningEffort: "high",
-      safetyIdentifier: "sc_safe",
-    })
-    expect(LLM.sanitizeOptions({ ...input, cacheHint: true })).toEqual({
-      reasoningEffort: "high",
-      safetyIdentifier: "sc_safe",
-      promptCacheOptions: { mode: "explicit", ttl: "30m" },
-    })
-    expect(
-      LLM.sanitizeOptions({
-        ...input,
-        options: { ...options, promptCacheOptions: { mode: "explicit", ttl: "1h" } },
-        cacheHint: true,
-      }),
-    ).toEqual({
-      reasoningEffort: "high",
-      safetyIdentifier: "sc_safe",
-      promptCacheOptions: { mode: "explicit", ttl: "30m" },
-    })
-  })
-
-  test("preserves protocol-neutral cache hints outside unofficial OpenAI GPT-5.6", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
-      },
-    ] as unknown as ModelMessage[]
-    const cases = [
-      model("openai", "@ai-sdk/openai", "gpt-5.5"),
-      model("anthropic", "@ai-sdk/anthropic", "claude-opus-4-6", "https://api.anthropic.com/v1"),
-      model(
-        "amazon-bedrock",
-        "@ai-sdk/amazon-bedrock",
-        "anthropic.claude-sonnet-4-6",
-        "https://bedrock-runtime.us-east-1.amazonaws.com",
-      ),
-    ]
-
-    cases.forEach((item) => expect(LLM.sanitizeMessages({ model: item, messages })).toBe(messages))
-  })
-
-  test("scrubs custom OpenAI GPT-5.6 hints while preserving official hints", () => {
-    const messages = [
-      {
-        role: "system",
-        content: [{ type: "text", text: "stable", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
-      } as unknown as ModelMessage,
-      {
-        role: "user",
-        content: [{ type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
-      },
-    ] as unknown as ModelMessage[]
-    const official = model("openai", "@ai-sdk/openai")
-    const custom = model("openai", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/v1")
-
-    expect(LLM.sanitizeMessages({ model: official, messages })).toBe(messages)
-    const scrubbed = LLM.sanitizeMessages({ model: custom, messages })
-    expect(scrubbed[0]).toEqual({ role: "system", content: "stable" })
-    expect(scrubbed[1]).toEqual({ role: "user", content: [{ type: "text", text: "cache me" }] })
-  })
-})
-
-describe("session.llm side runtime isolation", () => {
-  test("uses a conservative UTF-8 upper bound for side context", () => {
-    const messages: ModelMessage[] = [{ role: "user", content: "🧪".repeat(100) }]
-    const serialized = JSON.stringify({ system: [], messages, tools: [] })
-
-    expect(LLM.contextTokens({ system: [], messages, tools: {} })).toBeGreaterThanOrEqual(Buffer.byteLength(serialized))
-  })
-
-  it.instance("fails closed on cached GitLab workflow models before mutation or provider execution", () =>
-    Effect.gen(function* () {
-      const model = ProviderTest.model({
-        id: ModelV2.ID.make("duo-workflow-test"),
-        providerID: ProviderV2.ID.gitlab,
-        api: { id: ModelV2.ID.make("duo-workflow-test"), url: "https://gitlab.test", npm: "gitlab-ai-provider" },
-      })
-      const language = new GitLabWorkflowLanguageModel("duo-workflow", {
-        provider: "gitlab.workflow",
-        instanceUrl: "https://gitlab.test",
-        getHeaders: () => ({}),
-      })
-      let executions = 0
-      Object.defineProperty(language, "doStream", {
-        configurable: true,
-        value: async () => {
-          executions += 1
-          throw new Error("workflow provider executed")
-        },
-      })
-      language.sessionID = "main-session"
-      language.systemPrompt = "main-system"
-      language.sessionPreapprovedTools = ["main-tool"]
-      language.toolExecutor = async () => ({ result: "main-result" })
-      language.approvalHandler = async () => ({ approved: true })
-      const executor = language.toolExecutor
-      const approval = language.approvalHandler
-      const provider = ProviderTest.fake({
-        model,
-        getLanguage: () => Effect.succeed(language),
-      })
-      const layer = LLM.layer.pipe(
-        Layer.provide(Auth.defaultLayer),
-        Layer.provide(Config.defaultLayer),
-        Layer.provide(provider.layer),
-        Layer.provide(Plugin.defaultLayer),
-        Layer.provide(
-          LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
-        ),
-        Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
-        Layer.provide(Account.defaultLayer),
-        Layer.provide(SafetyIdentity.defaultLayer),
-      )
-      const sessionID = SessionID.make("ses_side_workflow")
-      const agent = {
-        name: "build",
-        mode: "primary",
-        permission: [],
-        options: {},
-      } satisfies Agent.Info
-      const input = {
-        user: {
-          id: MessageID.make("msg_side_workflow"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: model.providerID, modelID: model.id },
-        } satisfies SessionV1.User,
-        sessionID,
-        model,
-        agent,
-        system: ["side-system"],
-        messages: [{ role: "user" as const, content: "side question" }],
-        tools: {
-          read: tool({
-            description: "private reader",
-            inputSchema: z.object({ path: z.string() }),
-            execute: async () => ({ output: "private" }),
-          }),
-        },
-        toolChoice: "auto" as const,
-        runtime: "side" as const,
-      }
-
-      const result = yield* drainWith(layer, input).pipe(Effect.exit)
-
-      expect(Exit.isFailure(result)).toBe(true)
-      if (Exit.isFailure(result))
-        expect(String(Cause.squash(result.cause))).toMatch(/private local reads cannot be isolated/i)
-      expect(executions).toBe(0)
-      expect(language.sessionID).toBe("main-session")
-      expect(language.systemPrompt).toBe("main-system")
-      expect(language.sessionPreapprovedTools).toEqual(["main-tool"])
-      expect(language.toolExecutor).toBe(executor)
-      expect(language.approvalHandler).toBe(approval)
-    }),
-  )
 })
 
 describe("session.llm.ai-sdk adapter", () => {
@@ -1246,10 +1048,7 @@ describe("session.llm.stream", () => {
         const agent = {
           name: "test",
           mode: "primary",
-          options: {
-            safetyIdentifier: "hostile-client-id",
-            promptCacheOptions: { mode: "explicit", ttl: "30m" },
-          },
+          options: {},
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
           temperature: 0.2,
         } satisfies Agent.Info
@@ -1269,12 +1068,7 @@ describe("session.llm.stream", () => {
           model: resolved,
           agent,
           system: ["You are a helpful assistant."],
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: "Hello", cache: { type: "ephemeral", ttlSeconds: 1800 } }],
-            } as unknown as ModelMessage,
-          ],
+          messages: [{ role: "user", content: "Hello" }],
           tools: {},
         })
 
@@ -1283,9 +1077,6 @@ describe("session.llm.stream", () => {
 
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
         expect(body.model).toBe(resolved.api.id)
-        expect(body.safety_identifier).toBeUndefined()
-        expect(body.prompt_cache_options).toBeUndefined()
-        expect(JSON.stringify(body)).not.toContain("prompt_cache_breakpoint")
         expect(body.stream).toBe(true)
         expect((body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
 
@@ -1360,10 +1151,7 @@ describe("session.llm.stream", () => {
             const agent = {
               name: "test",
               mode: "primary",
-              options: {
-                safetyIdentifier: "hostile-client-id",
-                promptCacheOptions: { mode: "explicit", ttl: "30m" },
-              },
+              options: {},
               permission: [{ permission: "*", pattern: "*", action: "allow" }],
             } satisfies Agent.Info
             const user = {
@@ -1394,174 +1182,10 @@ describe("session.llm.stream", () => {
           expect(capture.body.reasoning).toEqual({ effort: "max", summary: "auto" })
           expect(capture.body.include).toEqual(["reasoning.encrypted_content"])
           expect(capture.body.store).toBe(false)
-          expect(capture.body.safety_identifier).toBeUndefined()
-          expect(capture.body.prompt_cache_options).toBeUndefined()
-          expect(JSON.stringify(capture.body)).not.toContain("prompt_cache_breakpoint")
         })
         expect(captures[1].body.service_tier).toBe("priority")
       }),
     { config: () => openAI56Config(`${state.server!.url.origin}/v1`) },
-  )
-
-  it.instance(
-    "strips explicit cache annotations on custom endpoints",
-    () =>
-      Effect.gen(function* () {
-        const cases = [
-          { name: "hint-only", hint: true, option: false, cached: true },
-          { name: "option-only", hint: false, option: true, cached: false },
-          { name: "option-and-hint", hint: true, option: true, cached: true },
-        ]
-        const captures = yield* Effect.forEach(cases, (item, index) =>
-          Effect.gen(function* () {
-            const request = waitRequest(
-              "/responses",
-              createEventResponse(
-                [
-                  {
-                    type: "response.created",
-                    response: {
-                      id: `resp-cache-${index}`,
-                      created_at: Math.floor(Date.now() / 1000),
-                      model: "gpt-5.6",
-                      service_tier: null,
-                    },
-                  },
-                  {
-                    type: "response.completed",
-                    response: {
-                      incomplete_details: null,
-                      usage: { input_tokens: 1, output_tokens: 0 },
-                      service_tier: null,
-                    },
-                  },
-                ],
-                true,
-              ),
-            )
-            const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6"))
-            model.headers["x-slopcode-openai-cache-breakpoints"] = "forged"
-            const sessionID = SessionID.make(`session-cache-${index}`)
-            const agent = {
-              name: "test",
-              mode: "primary",
-              options: {
-                systemMessageMode: "remove",
-                ...(item.option ? { promptCacheOptions: { mode: "explicit", ttl: "30m" } } : {}),
-              },
-              permission: [{ permission: "*", pattern: "*", action: "allow" }],
-            } satisfies Agent.Info
-            yield* drain({
-              user: {
-                id: MessageID.make(`msg-cache-${index}`),
-                sessionID,
-                role: "user",
-                time: { created: Date.now() },
-                agent: agent.name,
-                model: { providerID: ProviderV2.ID.openai, modelID: model.id },
-              } satisfies SessionV1.User,
-              sessionID,
-              model,
-              agent,
-              system: [],
-              messages: [
-                {
-                  role: "system",
-                  content: item.hint
-                    ? [
-                        {
-                          type: "text",
-                          text: `${item.name}-system`,
-                          cache: { type: "ephemeral", ttlSeconds: 1800 },
-                        },
-                      ]
-                    : `${item.name}-system`,
-                } as unknown as ModelMessage,
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type: "text",
-                      text: item.name,
-                      ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
-                    },
-                    {
-                      type: "text",
-                      text: `${item.name}-second`,
-                      ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
-                    },
-                  ],
-                } as ModelMessage,
-              ],
-              tools: {},
-            })
-            return { item, capture: yield* Effect.promise(() => request) }
-          }),
-        )
-
-        captures.forEach(({ item, capture }) => {
-          expect(capture.body.prompt_cache_options).toBeUndefined()
-          const body = JSON.stringify(capture.body)
-          expect(body).not.toContain("prompt_cache_breakpoint")
-          expect(capture.headers.get("x-slopcode-openai-cache-breakpoints")).toBeNull()
-        })
-      }),
-    { config: () => openAI56Config(`${state.server!.url.origin}/v1`) },
-  )
-
-  it.instance(
-    "fails closed when explicit caching cannot use native Responses",
-    () =>
-      Effect.gen(function* () {
-        const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6"))
-        model.api.url = "https://api.openai.com/v1"
-        const sessionID = SessionID.make("session-cache-native-unavailable")
-        const agent = {
-          name: "test",
-          mode: "primary",
-          options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
-        } satisfies Agent.Info
-        const exit = yield* drain({
-          user: {
-            id: MessageID.make("msg-cache-native-unavailable"),
-            sessionID,
-            role: "user",
-            time: { created: Date.now() },
-            agent: agent.name,
-            model: { providerID: ProviderV2.ID.openai, modelID: model.id },
-          } satisfies SessionV1.User,
-          sessionID,
-          model,
-          agent,
-          system: [],
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: "must cache",
-                  cache: { type: "ephemeral", ttlSeconds: 1800 },
-                },
-              ],
-            } as unknown as ModelMessage,
-          ],
-          tools: {},
-        }).pipe(Effect.exit)
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit))
-          expect(String(Cause.squash(exit.cause))).toContain(
-            "Explicit GPT-5.6 caching requires native OpenAI Responses",
-          )
-      }),
-    {
-      config: () => {
-        const config = openAI56Config("https://api.openai.com/v1")
-        config.provider!.openai!.options!.apiKey = ""
-        return config
-      },
-    },
   )
 
   it.instance(
@@ -1643,8 +1267,6 @@ describe("session.llm.stream", () => {
             Layer.provide(Plugin.defaultLayer),
             Layer.provide(failingNativeClient),
             Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
-            Layer.provide(Account.defaultLayer),
-            Layer.provide(SafetyIdentity.defaultLayer),
           ),
           {
             user: {

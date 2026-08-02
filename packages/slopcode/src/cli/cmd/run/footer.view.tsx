@@ -8,14 +8,12 @@
 // All state comes from the parent RunFooter through SolidJS signals.
 // The view itself is stateless except for derived memos.
 /** @jsxImportSource @opentui/solid */
-import { useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import "opentui-spinner/solid"
 import { createColors, createFrames } from "@slopcode-ai/tui/ui/spinner"
 import {
-  RUN_COMMAND_LIST_ROWS,
   RUN_SUBAGENT_PANEL_ROWS,
-  RUN_SUBAGENT_LIST_ROWS,
   RunCommandMenuBody,
   RunModelSelectBody,
   RunQueuedPromptSelectBody,
@@ -23,14 +21,12 @@ import {
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "./footer.command"
-import { footerMenuRows, footerPanelMinimum } from "./footer.height"
-import { RunFooterMenu } from "./footer.menu"
+import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { footerWidthPolicy } from "./footer.width"
-import { questionSingle } from "./question.shared"
 import {
   SLOPCODE_BASE_MODE,
   formatKeyBindings,
@@ -45,7 +41,6 @@ import type {
   FooterState,
   FooterSubagentState,
   FooterView,
-  PermissionBatchReply,
   PermissionReply,
   QuestionReject,
   QuestionReply,
@@ -59,7 +54,6 @@ import type {
   RunTuiConfig,
 } from "./types"
 import type { RunTheme } from "./theme"
-import type { PermissionScopeLabel } from "./permission.shared"
 import { modelInfo } from "./variant.shared"
 
 const EMPTY_BORDER = {
@@ -78,7 +72,6 @@ const EMPTY_BORDER = {
 
 type RunFooterViewProps = {
   directory: string
-  permissionScope: PermissionScopeLabel
   findFiles: (query: string) => Promise<string[]>
   agents: () => RunAgent[]
   resources: () => RunResource[]
@@ -99,7 +92,6 @@ type RunFooterViewProps = {
   agent: string
   onSubmit: (input: RunPrompt) => boolean
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
-  onPermissionBatchReply: (input: PermissionBatchReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycle: () => void
@@ -122,13 +114,8 @@ type RunFooterViewProps = {
 export { TEXTAREA_MIN_ROWS, TEXTAREA_MAX_ROWS } from "./footer.prompt"
 
 export function RunFooterView(props: RunFooterViewProps) {
-  const renderer = useRenderer()
   const term = useTerminalDimensions()
   const width = createMemo(() => term().width)
-  const height = createMemo(() => {
-    term()
-    return renderer.height
-  })
   const responsive = createMemo(() => footerWidthPolicy(width()))
   const active = createMemo<FooterView>(() => props.view?.() ?? { type: "prompt" })
   const subagent = createMemo<FooterSubagentState>(() => {
@@ -143,8 +130,6 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const [route, setRoute] = createSignal<FooterPromptRoute>({ type: "composer" })
   const [subagentMenuRows, setSubagentMenuRows] = createSignal(RUN_SUBAGENT_PANEL_ROWS)
-  const commandRows = createMemo(() => footerMenuRows(height(), RUN_COMMAND_LIST_ROWS))
-  const subagentRows = createMemo(() => footerMenuRows(height(), RUN_SUBAGENT_LIST_ROWS))
   const queuedPrompts = createMemo(() => props.queuedPrompts?.() ?? [])
   const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
   const prompt = createMemo(() => active().type === "prompt" && route().type === "composer")
@@ -166,14 +151,6 @@ export function RunFooterView(props: RunFooterViewProps) {
       modeling() ||
       varianting(),
   )
-  const panelMinimum = createMemo(() => {
-    const view = active()
-    return footerPanelMinimum({
-      type: view.type === "permission" || view.type === "question" ? view.type : "panel",
-      narrow: responsive().dialog.narrow,
-      single: view.type === "question" ? questionSingle(view.request) : undefined,
-    })
-  })
   const selected = createMemo(() => {
     const current = route()
     return current.type === "subagent" ? current.sessionID : undefined
@@ -388,7 +365,6 @@ export function RunFooterView(props: RunFooterViewProps) {
     view: promptView,
     prompt,
     width,
-    height,
     theme,
     history: props.history,
     onSubmit: props.onSubmit,
@@ -653,7 +629,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       gap={0}
       padding={0}
     >
-      <Show when={(panel() || inspecting()) && height() > panelMinimum()}>
+      <Show when={panel() || inspecting()}>
         <box width="100%" height={1} flexShrink={0} backgroundColor="transparent" />
       </Show>
 
@@ -708,7 +684,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                             onClose={closePanel}
                             onSelect={openTab}
                             onRows={setSubagentMenuRows}
-                            rows={subagentRows}
                           />
                         </Match>
                         <Match when={selectingQueued()}>
@@ -723,7 +698,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                               queueMicrotask(() => composer.replacePrompt(item.prompt))
                             }}
                             onRows={setSubagentMenuRows}
-                            rows={subagentRows}
                           />
                         </Match>
                         <Match when={commanding()}>
@@ -757,14 +731,12 @@ export function RunFooterView(props: RunFooterViewProps) {
                               closePanel()
                             }}
                             onExit={props.onExit}
-                            rows={commandRows}
                           />
                         </Match>
                         <Match when={skilling()}>
                           <RunSkillSelectBody
                             theme={theme}
                             commands={props.commands}
-                            rows={commandRows}
                             onClose={closePanel}
                             onSelect={(name) => {
                               composer.replacePrompt({
@@ -784,7 +756,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                             theme={theme}
                             providers={props.providers}
                             current={props.currentModel}
-                            rows={commandRows}
                             onClose={closePanel}
                             onSelect={(model) => {
                               props.onModelSelect(model)
@@ -797,7 +768,6 @@ export function RunFooterView(props: RunFooterViewProps) {
                             theme={theme}
                             variants={props.variants}
                             current={props.currentVariant}
-                            rows={commandRows}
                             onClose={closePanel}
                             onSelect={(variant) => {
                               props.onVariantSelect(variant)
@@ -807,13 +777,11 @@ export function RunFooterView(props: RunFooterViewProps) {
                         </Match>
                         <Match when={active().type === "permission"}>
                           <RunPermissionBody
-                            requests={permission()!.requests}
+                            request={permission()!.request}
                             theme={theme()}
                             block={block()}
                             diffStyle={props.diffStyle}
-                            scope={props.permissionScope}
                             onReply={props.onPermissionReply}
-                            onBatchReply={props.onPermissionBatchReply}
                           />
                         </Match>
                         <Match when={active().type === "question"}>
@@ -838,7 +806,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                 selected={composer.selected}
                 offset={composer.offset}
                 rows={composer.rows}
-                limit={composer.limit()}
+                limit={FOOTER_MENU_ROWS}
                 border={false}
                 paddingLeft={0}
               />

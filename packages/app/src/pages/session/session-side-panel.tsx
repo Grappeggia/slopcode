@@ -13,6 +13,7 @@ import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@slopcode-ai/ui/context/dialog"
 
 import FileTree from "@/components/file-tree"
+import FileTreeV2 from "@/components/file-tree-v2"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { SessionContextTab, SortableTab, FileVisual } from "@/components/session"
 import { useCommand } from "@/context/command"
@@ -32,6 +33,8 @@ import {
 } from "@/pages/session/helpers"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { ReviewPanelV2 } from "@/pages/session/v2/review-panel-v2"
+import { createReviewPanelV2State } from "@/pages/session/v2/review-panel-v2-state"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 
@@ -47,6 +50,7 @@ export function SessionSidePanel(props: {
   hasReview: () => boolean
   reviewCount: () => number
   reviewPanel: () => JSX.Element
+  reviewPanelV2: (path: string | undefined) => JSX.Element
   activeDiff?: string
   focusReviewDiff: (path: string) => void
   reviewSnap: boolean
@@ -60,6 +64,7 @@ export function SessionSidePanel(props: {
   const command = useCommand()
   const dialog = useDialog()
   const { sessionKey, tabs, view, params } = useSessionLayout()
+  const reviewV2 = createReviewPanelV2State()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const shown = settings.visibility.fileTree
@@ -327,7 +332,21 @@ export function SessionSidePanel(props: {
 
                     <Show when={reviewTab() && props.canReview()}>
                       <Tabs.Content value="review" class="flex flex-col h-full overflow-hidden contain-strict">
-                        <Show when={reviewOpen() && activeTab() === "review"}>{props.reviewPanel()}</Show>
+                        <Show when={reviewOpen() && activeTab() === "review"}>
+                          <Show
+                            when={settings.general.newLayoutDesigns()}
+                            fallback={props.reviewPanel()}
+                          >
+                            <ReviewPanelV2
+                              diffs={props.diffs}
+                              ready={props.diffsReady}
+                              active={props.activeDiff}
+                              onSelect={props.focusReviewDiff}
+                              state={reviewV2}
+                              content={props.reviewPanelV2}
+                            />
+                          </Show>
+                        </Show>
                       </Tabs.Content>
                     </Show>
 
@@ -421,15 +440,28 @@ export function SessionSidePanel(props: {
                               </div>
                             }
                           >
-                            <FileTree
-                              path=""
-                              class="pt-3"
-                              allowed={diffFiles()}
-                              kinds={kinds()}
-                              draggable={false}
-                              active={props.activeDiff}
-                              onFileClick={(node) => props.focusReviewDiff(node.path)}
-                            />
+                            <Show
+                              when={settings.general.newLayoutDesigns()}
+                              fallback={
+                                <FileTree
+                                  path=""
+                                  class="pt-3"
+                                  allowed={diffFiles()}
+                                  kinds={kinds()}
+                                  draggable={false}
+                                  active={props.activeDiff}
+                                  onFileClick={(node) => props.focusReviewDiff(node.path)}
+                                />
+                              }
+                            >
+                              <FileTreeV2
+                                allowed={diffFiles()}
+                                kinds={kinds()}
+                                draggable={false}
+                                active={props.activeDiff}
+                                onFileClick={(node) => props.focusReviewDiff(node.path)}
+                              />
+                            </Show>
                           </Show>
                         </Match>
                       </Switch>
@@ -438,13 +470,23 @@ export function SessionSidePanel(props: {
                       <Switch>
                         <Match when={nofiles()}>{empty(language.t("session.files.empty"))}</Match>
                         <Match when={true}>
-                          <FileTree
-                            path=""
-                            class="pt-3"
-                            modified={diffFiles()}
-                            kinds={kinds()}
-                            onFileClick={(node) => openTab(file.tab(node.path))}
-                          />
+                          <Show
+                            when={settings.general.newLayoutDesigns()}
+                            fallback={
+                              <FileTree
+                                path=""
+                                class="pt-3"
+                                modified={diffFiles()}
+                                kinds={kinds()}
+                                onFileClick={(node) => openTab(file.tab(node.path))}
+                              />
+                            }
+                          >
+                            <FileTreeV2
+                              kinds={kinds()}
+                              onFileClick={(node) => openTab(file.tab(node.path))}
+                            />
+                          </Show>
                         </Match>
                       </Switch>
                     </Tabs.Content>

@@ -33,7 +33,7 @@ Você pode personalizar a URL base para qualquer provedor definindo a opção `b
 
 ```json title="slopcode.json" {6}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -54,7 +54,7 @@ SlopCode Zen é uma lista de modelos fornecidos pela equipe do slopcode que fora
 Se você é novo, recomendamos começar com o SlopCode Zen.
 :::
 
-1. Execute o comando `/connect` no TUI, selecione `SlopCode Zen` e acesse [slopcode.ai/zen](https://slopcode.ai/zen).
+1. Execute o comando `/connect` no TUI, selecione `SlopCode Zen` e acesse [slopcode.dev/zen](https://slopcode.dev/zen).
 
    ```txt
    /connect
@@ -86,7 +86,7 @@ Funciona como qualquer outro provedor no slopcode e é completamente opcional.
 SlopCode Go é um plano de assinatura de baixo custo que fornece acesso confiável a modelos de codificação abertos populares fornecidos pela equipe do slopcode que foram
 testados e verificados para funcionar bem com o slopcode.
 
-1. Execute o comando `/connect` no TUI, selecione `SlopCode Go` e acesse [slopcode.ai/zen](https://slopcode.ai/zen).
+1. Execute o comando `/connect` no TUI, selecione `SlopCode Go` e acesse [slopcode.dev/zen](https://slopcode.dev/zen).
 
    ```txt
    /connect
@@ -194,7 +194,7 @@ Para usar o Amazon Bedrock com o slopcode:
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -223,7 +223,7 @@ Para usar o Amazon Bedrock com o slopcode:
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -272,7 +272,7 @@ Para perfis de inferência personalizados, use o nome do modelo e do provedor na
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -331,7 +331,7 @@ Você pode configurar o slopcode para usar modelos locais através do [Atomic Ch
 
 ```json title="slopcode.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -559,7 +559,7 @@ O Cloudflare AI Gateway permite que você acesse modelos do OpenAI, Anthropic, W
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "cloudflare-ai-gateway": {
          "models": {
@@ -765,7 +765,7 @@ arquivo `slopcode.json`. Também é recomendado desativar o compartilhamento de 
 
 ```json
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "small_model": "gitlab/duo-chat-haiku-4-5",
   "share": "disabled"
 }
@@ -827,7 +827,7 @@ Personalize através do `slopcode.json`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -844,7 +844,7 @@ Para acessar ferramentas do GitLab (merge requests, issues, pipelines, CI/CD, et
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "plugin": ["slopcode-gitlab-plugin"]
 }
 ```
@@ -1025,7 +1025,7 @@ Aqui está o [Diretório de Modelos do Helicone](https://helicone.ai/models), vo
 
 ```jsonc title="~/.config/slopcode/slopcode.jsonc"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1053,7 +1053,7 @@ Helicone suporta cabeçalhos personalizados para recursos como cache, rastreamen
 
 ```jsonc title="~/.config/slopcode/slopcode.jsonc"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1107,7 +1107,7 @@ Você pode configurar o slopcode para usar modelos locais através da utilidade 
 
 ```json title="slopcode.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1174,7 +1174,7 @@ Você pode configurar o slopcode para usar modelos locais através do LM Studio.
 
 ```json title="slopcode.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1295,7 +1295,7 @@ Ollama pode se configurar automaticamente para o slopcode. Consulte a [documenta
 
 ```json title="slopcode.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1457,7 +1457,7 @@ SlopCode Zen é uma lista de modelos testados e verificados fornecidos pela equi
 
    ```json title="slopcode.json" {6}
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1472,7 +1472,7 @@ SlopCode Zen é uma lista de modelos testados e verificados fornecidos pela equi
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1721,7 +1721,7 @@ Você também pode personalizar modelos através da sua configuração do slopco
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1831,7 +1831,7 @@ Algumas opções de roteamento úteis:
 
    ```json title="slopcode.json" {6}
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "zenmux": {
          "models": {
@@ -1899,7 +1899,7 @@ Você pode usar qualquer provedor compatível com OpenAI com o slopcode. A maior
 
    ```json title="slopcode.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -1937,7 +1937,7 @@ Aqui está um exemplo definindo as opções `apiKey`, `headers` e `limit` do mod
 
 ```json title="slopcode.json" {9,11,17-20}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

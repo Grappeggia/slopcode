@@ -1,7 +1,7 @@
 export * as SessionMessage from "./message"
 
 import { Schema } from "effect"
-import { ProviderMetadata, ToolContent, ToolType } from "@slopcode-ai/llm"
+import { ProviderMetadata, ToolContent } from "@slopcode-ai/llm"
 import { ModelV2 } from "../model"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
@@ -36,7 +36,6 @@ export class User extends Schema.Class<User>("Session.Message.User")({
   text: Prompt.fields.text,
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
-  format: Prompt.fields.format,
   type: Schema.Literal("user"),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
@@ -62,11 +61,6 @@ export class Shell extends Schema.Class<Shell>("Session.Message.Shell")({
   callID: SessionEvent.Shell.Started.data.fields.callID,
   command: SessionEvent.Shell.Started.data.fields.command,
   output: Schema.String,
-  status: SessionEvent.Shell.Status.pipe(Schema.optional),
-  exitCode: Schema.Number.pipe(Schema.optional),
-  truncated: Schema.Boolean.pipe(Schema.optional),
-  stdoutTruncated: Schema.Boolean.pipe(Schema.optional),
-  stderrTruncated: Schema.Boolean.pipe(Schema.optional),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
     completed: V2Schema.DateTimeUtcFromMillis.pipe(Schema.optional),
@@ -80,14 +74,14 @@ export class ToolStatePending extends Schema.Class<ToolStatePending>("Session.Me
 
 export class ToolStateRunning extends Schema.Class<ToolStateRunning>("Session.Message.ToolState.Running")({
   status: Schema.Literal("running"),
-  input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
+  input: Schema.Record(Schema.String, Schema.Unknown),
   structured: Schema.Record(Schema.String, Schema.Any),
   content: ToolContent.pipe(Schema.Array),
 }) {}
 
 export class ToolStateCompleted extends Schema.Class<ToolStateCompleted>("Session.Message.ToolState.Completed")({
   status: Schema.Literal("completed"),
-  input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
+  input: Schema.Record(Schema.String, Schema.Unknown),
   attachments: SessionEvent.FileAttachment.pipe(Schema.Array, Schema.optional),
   content: ToolContent.pipe(Schema.Array),
   outputPaths: SessionEvent.Tool.Success.data.fields.outputPaths,
@@ -97,7 +91,7 @@ export class ToolStateCompleted extends Schema.Class<ToolStateCompleted>("Sessio
 
 export class ToolStateError extends Schema.Class<ToolStateError>("Session.Message.ToolState.Error")({
   status: Schema.Literal("error"),
-  input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
+  input: Schema.Record(Schema.String, Schema.Unknown),
   content: ToolContent.pipe(Schema.Array),
   structured: Schema.Record(Schema.String, Schema.Any),
   error: SessionEvent.UnknownError,
@@ -111,7 +105,6 @@ export type ToolState = Schema.Schema.Type<typeof ToolState>
 
 export class AssistantTool extends Schema.Class<AssistantTool>("Session.Message.Assistant.Tool")({
   type: Schema.Literal("tool"),
-  toolType: ToolType.pipe(Schema.optional),
   id: Schema.String,
   name: Schema.String,
   provider: Schema.Struct({
@@ -149,7 +142,6 @@ export type AssistantContent = Schema.Schema.Type<typeof AssistantContent>
 export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistant")({
   ...Base,
   type: Schema.Literal("assistant"),
-  rootUserID: SessionMessageID.ID.pipe(Schema.optional),
   agent: Schema.String,
   model: SessionEvent.Step.Started.data.fields.model,
   content: AssistantContent.pipe(Schema.Array),
@@ -169,20 +161,6 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
     }),
   }).pipe(Schema.optional),
   error: SessionEvent.Step.Failed.data.fields.error.pipe(Schema.optional),
-  structured: Schema.Unknown.pipe(Schema.optional),
-  structuredError: Schema.Struct({
-    reason: SessionEvent.Structured.FailureReason,
-    attempts: Schema.Number,
-    retryCount: Schema.Number,
-    exhausted: Schema.Boolean,
-    message: Schema.String,
-  }).pipe(Schema.optional),
-  structuredRetry: Schema.Struct({
-    attempt: Schema.Number,
-    remaining: Schema.Number,
-    reason: SessionEvent.Structured.FailureReason,
-    message: Schema.String,
-  }).pipe(Schema.optional),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
     completed: V2Schema.DateTimeUtcFromMillis.pipe(Schema.optional),

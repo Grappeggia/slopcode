@@ -1,16 +1,13 @@
 import { Effect, Layer, LayerMap } from "effect"
-import { LayerNode } from "./effect/layer-node"
 import { Location } from "./location"
 import { Policy } from "./policy"
 import { Config } from "./config"
 import { PluginV2 } from "./plugin"
-import { PluginPackage } from "./plugin/package"
 import { Catalog } from "./catalog"
 import { Integration } from "./integration"
 import { CommandV2 } from "./command"
 import { AgentV2 } from "./agent"
 import { PluginBoot } from "./plugin/boot"
-import { PluginTool } from "./plugin/tool"
 import { Project } from "./project"
 import { ProjectCopy } from "./project/copy"
 import { ProjectDirectories } from "./project/directories"
@@ -30,9 +27,6 @@ import { Ripgrep } from "./ripgrep"
 import { Watcher } from "./filesystem/watcher"
 import { LocationMutation } from "./location-mutation"
 import { FileMutation } from "./file-mutation"
-import { Formatter } from "./formatter"
-import { MutationEvents } from "./mutation-events"
-import { PostMutation } from "./post-mutation"
 import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import { RepositoryCache } from "./repository-cache"
@@ -52,39 +46,9 @@ import { QuestionV2 } from "./question"
 import { LLMClient } from "@slopcode-ai/llm"
 import { RequestExecutor } from "@slopcode-ai/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
-import { SessionExecutionStatus } from "./session/execution-status"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
-import { MCP } from "./mcp"
-import { MCPClient } from "./mcp/client"
-import { MCPOAuth } from "./mcp/oauth"
-import { MCPOAuthCallback } from "./mcp/oauth-callback"
-import { MCPOAuthStore } from "./mcp/oauth-store"
-
-export const dependencies = [
-  Project.defaultLayer,
-  EventV2.defaultLayer,
-  Credential.defaultLayer,
-  Npm.defaultLayer,
-  ModelsDev.defaultLayer,
-  FSUtil.defaultLayer,
-  Git.defaultLayer,
-  AppProcess.defaultLayer,
-  Global.defaultLayer,
-  Ripgrep.defaultLayer,
-  Database.defaultLayer,
-  ProjectDirectories.defaultLayer,
-  SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
-  SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
-  PermissionSaved.defaultLayer,
-  RepositoryCache.defaultLayer,
-  LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
-  FetchHttpClient.layer,
-  ToolOutputStore.defaultCleanupLayer,
-  ApplicationTools.layer,
-  MCPOAuthCallback.hostLayer,
-] as const
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@slopcode/example/LocationServiceMap", {
   lookup: (ref: Location.Ref) => {
@@ -92,8 +56,6 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Effect.logInfo("booting location services", { directory: ref.directory, workspaceID: ref.workspaceID }),
     )
     const location = Location.layer(ref)
-    const mutationEvents = MutationEvents.locationLayer.pipe(Layer.provide(FSUtil.defaultLayer))
-    const watcher = Watcher.locationLayer.pipe(Layer.provide(mutationEvents))
     const systemContext = SystemContextBuiltIns.locationLayer
     const base = Layer.mergeAll(
       location,
@@ -109,8 +71,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       ProjectCopy.locationLayer,
       FileSystem.locationLayer,
       LocationSearch.locationLayer,
-      mutationEvents,
-      watcher,
+      Watcher.locationLayer,
       Pty.locationLayer,
       SkillV2.locationLayer,
       systemContext,
@@ -125,14 +86,6 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const services = Layer.mergeAll(base, resources, permissionsAndTools)
     const image = Image.layer.pipe(Layer.provide(services))
     const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
-    const formatter = Formatter.locationLayer.pipe(Layer.provide(services))
-    const postMutation = PostMutation.locationLayer.pipe(
-      Layer.provide(services),
-      Layer.provide(mutation),
-      Layer.provide(formatter),
-      Layer.provide(mutationEvents),
-      Layer.provide(PostMutation.diagnosticsLayer),
-    )
     const skillGuidance = SkillGuidance.locationLayer.pipe(Layer.provide(services))
     const referenceGuidance = ReferenceGuidance.locationLayer.pipe(Layer.provide(services))
     const todos = SessionTodo.layer.pipe(Layer.provide(services))
@@ -140,35 +93,16 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const builtInTools = BuiltInTools.locationLayer.pipe(
       Layer.provide(services),
       Layer.provide(mutation),
-      Layer.provide(postMutation),
       Layer.provide(resources),
       Layer.provide(todos),
       Layer.provide(questions),
       Layer.provide(image),
-    )
-    const pluginTools = PluginTool.layer.pipe(
-      Layer.provide(services),
-      // Discovery starts only after application/built-in Location tools exist.
-      Layer.provide(builtInTools),
-    )
-    const oauthStore = MCPOAuthStore.layer
-    const oauthCallback = MCPOAuthCallback.locationLayer
-    const oauth = MCPOAuth.layer.pipe(Layer.provide(oauthStore), Layer.provide(oauthCallback))
-    const mcpClient = MCPClient.locationLayer.pipe(Layer.provide(oauthStore))
-    const mcp = MCP.locationLayer.pipe(
-      Layer.provide(services),
-      Layer.provide(oauthStore),
-      Layer.provide(oauth),
-      Layer.provide(mcpClient),
-      // MCP has the final Location registration precedence after plugins.
-      Layer.provide(pluginTools),
     )
     const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))
     const runner = SessionRunnerLLM.defaultLayer.pipe(
       Layer.provide(services),
       Layer.provide(model),
       Layer.provide(SessionRuntime.layer),
-      Layer.provide(SessionExecutionStatus.layer),
       Layer.provide(skillGuidance),
       Layer.provide(referenceGuidance),
     )
@@ -182,29 +116,37 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       services,
       image,
       mutation,
-      formatter,
-      postMutation,
       resources,
       todos,
       questions,
       model,
       runner,
       builtInTools,
-      pluginTools,
-      oauthStore,
-      oauthCallback,
-      oauth,
-      mcpClient,
-      mcp,
       referenceGuidance,
       projectCopyRefresh,
     ).pipe(Layer.fresh)
   },
   idleTimeToLive: "60 minutes",
-  dependencies,
+  dependencies: [
+    Project.defaultLayer,
+    EventV2.defaultLayer,
+    Credential.defaultLayer,
+    Npm.defaultLayer,
+    ModelsDev.defaultLayer,
+    FSUtil.defaultLayer,
+    Git.defaultLayer,
+    AppProcess.defaultLayer,
+    Global.defaultLayer,
+    Ripgrep.defaultLayer,
+    Database.defaultLayer,
+    ProjectDirectories.defaultLayer,
+    SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
+    SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
+    PermissionSaved.defaultLayer,
+    RepositoryCache.defaultLayer,
+    LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
+    FetchHttpClient.layer,
+    ToolOutputStore.defaultCleanupLayer,
+    ApplicationTools.layer,
+  ],
 }) {}
-
-export const withPluginHost = (host: Layer.Layer<PluginPackage.Host>) =>
-  LocationServiceMap.layerNoDeps.pipe(Layer.provide([...dependencies, host]))
-
-export const node = LayerNode.make(LocationServiceMap.layer, [])

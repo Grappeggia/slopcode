@@ -8,7 +8,6 @@ import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
 import { described } from "./metadata"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
-import { Usage as OpenAIUsage } from "@/plugin/openai/usage"
 
 const root = "/provider"
 
@@ -54,16 +53,6 @@ export const ProviderApi = HttpApi.make("provider")
             identifier: "provider.auth",
             summary: "Get provider auth methods",
             description: "Retrieve available authentication methods for all AI providers.",
-          }),
-        ),
-        HttpApiEndpoint.get("openaiUsage", `${root}/openai/usage`, {
-          query: WorkspaceRoutingQuery,
-          success: described(OpenAIUsage, "Safe OpenAI account usage status"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "provider.openai.usage",
-            summary: "Get OpenAI usage",
-            description: "Get safe normalized OpenAI authentication and ChatGPT usage status.",
           }),
         ),
         HttpApiEndpoint.post("authorize", `${root}/:providerID/oauth/authorize`, {

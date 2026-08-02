@@ -16,8 +16,11 @@ import { createPathHelpers } from "./file/path"
 import type { ProjectAvatarVariant } from "@slopcode-ai/ui/v2/project-avatar-v2"
 import { migrateLegacySessionStateKeys, ServerScope, SessionStateKey } from "@/utils/server-scope"
 import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./layout-helpers"
+import { currentRoute, routeWithServer, type LayoutRoute } from "./layout-route"
 
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
+export { currentRoute }
+export type { LayoutRoute }
 
 export type { ProjectAvatarVariant }
 
@@ -75,12 +78,6 @@ export type LocalProject = Partial<Project> & { worktree: string; expanded: bool
 
 export type ReviewDiffStyle = "unified" | "split"
 
-export type LayoutRoute =
-  | { type: "home" }
-  | { type: "draft"; draftID: string; server?: ServerConnection.Key }
-  | { type: "dir-new-sesssion"; dir: string; dirBase64: string; server?: ServerConnection.Key }
-  | { type: "session"; dir: string; dirBase64: string; sessionId: string; server?: ServerConnection.Key }
-
 function nextSessionTabsForOpen(current: SessionTabs | undefined, tab: string): SessionTabs {
   const all = current?.all ?? []
   if (tab === "review") return { all: all.filter((x) => x !== "review"), active: tab }
@@ -121,27 +118,6 @@ const normalizeStoredSessionTabs = (key: string, tabs: SessionTabs) => {
   }
 }
 
-const currentRoute = (pathname: string, search: string): LayoutRoute => {
-  const parts = pathname.split("/").filter(Boolean)
-  if (parts.length === 0) return { type: "home" }
-
-  if (parts[0] === "new-session") {
-    const draftID = new URLSearchParams(search).get("draftId")
-    if (!draftID) return { type: "home" }
-    return { type: "draft", draftID }
-  }
-
-  const dirBase64 = parts[0]
-  const dir = decode64(dirBase64)
-  if (!dir) return { type: "home" }
-
-  if (parts[1] !== "session") return { type: "home" }
-
-  const id = parts[2]
-  if (id) return { type: "session", dir, dirBase64, sessionId: id }
-  return { type: "dir-new-sesssion", dir, dirBase64 }
-}
-
 export const { use: useLayout, provider: LayoutProvider } = createSimpleContext({
   name: "Layout",
   gate: false,
@@ -151,11 +127,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     const server = useServer()
     const platform = usePlatform()
     const location = useLocation()
-    const route = createMemo(() => {
-      const value = currentRoute(location.pathname, location.search)
-      if (value.type === "home") return value
-      return { ...value, server: server.key }
-    })
+    const route = createMemo(() => routeWithServer(currentRoute(location.pathname, location.search), server.key))
 
     const isRecord = (value: unknown): value is Record<string, unknown> =>
       typeof value === "object" && value !== null && !Array.isArray(value)

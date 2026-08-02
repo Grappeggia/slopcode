@@ -20,7 +20,6 @@ import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
-import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -39,7 +38,6 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(project),
   Layer.provide(store),
   Layer.provide(SessionExecution.noopLayer),
-  Layer.provide(locationServices),
 )
 const layer = MoveSession.layer.pipe(
   Layer.provide(database),

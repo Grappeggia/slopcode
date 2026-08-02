@@ -2084,6 +2084,46 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
     expect(result[0].content[0].providerOptions?.openai?.itemId).toBe("msg_123")
   })
 
+  test("strips GitHub Copilot itemId from the copilot namespace", () => {
+    const model = {
+      ...openaiModel,
+      providerID: "github-copilot",
+      api: {
+        id: "gpt-5.5",
+        url: "https://api.githubcopilot.com",
+        npm: "@ai-sdk/github-copilot",
+      },
+    }
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "thinking...",
+            providerOptions: {
+              copilot: { itemId: "rs_123", reasoningEncryptedContent: "encrypted" },
+            },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call_1",
+            toolName: "bash",
+            input: { command: "ls" },
+            providerOptions: { copilot: { itemId: "fc_456", reasoningEffort: "medium" } },
+          },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, model, { store: false }) as any[]
+
+    expect(result[0].content[0].providerOptions?.copilot?.itemId).toBeUndefined()
+    expect(result[0].content[0].providerOptions?.copilot?.reasoningEncryptedContent).toBe("encrypted")
+    expect(result[0].content[1].providerOptions?.copilot?.itemId).toBeUndefined()
+    expect(result[0].content[1].providerOptions?.copilot?.reasoningEffort).toBe("medium")
+  })
+
   test("preserves metadata for non-openai packages when store is false", () => {
     const anthropicModel = {
       ...openaiModel,
@@ -2123,7 +2163,7 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
       providerID: "slopcode",
       api: {
         id: "slopcode-test",
-        url: "https://api.slopcode.ai",
+        url: "https://api.slopcode.dev",
         npm: "@ai-sdk/openai-compatible",
       },
     }
@@ -2157,7 +2197,7 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
       providerID: "slopcode",
       api: {
         id: "slopcode-test",
-        url: "https://api.slopcode.ai",
+        url: "https://api.slopcode.dev",
         npm: "@ai-sdk/openai-compatible",
       },
     }
@@ -2704,7 +2744,7 @@ describe("ProviderTransform.variants", () => {
       providerID: "slopcode-go",
       api: {
         id: "glm-5",
-        url: "https://www.slopcode.dev/zen/go/v1",
+        url: "https://slopcode.dev/zen/go/v1",
         npm: "@ai-sdk/openai-compatible",
       },
       capabilities: { reasoning: true },

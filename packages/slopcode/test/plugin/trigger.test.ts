@@ -53,7 +53,7 @@ function withProject<A, E, R>(source: string, self: Effect.Effect<A, E, R>) {
             path.join(test.directory, "slopcode.json"),
             JSON.stringify(
               {
-                $schema: "https://slopcode.ai/config.json",
+                $schema: "https://slopcode.dev/config.json",
                 plugin: [pathToFileURL(file).href],
               },
               null,

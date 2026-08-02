@@ -39,9 +39,5 @@ export const migrations = (
     import("./migration/20260612174303_project_dir_strategy"),
     import("./migration/20260703232749_add_memory"),
     import("./migration/20260710133403_add_session_runtime"),
-    import("./migration/20260712155937_session_execution_status"),
-    import("./migration/20260716031712_permission_scopes"),
-    import("./migration/20260716053152_permission_scope_constraints"),
-    import("./migration/20260717051925_permission_directory_owner"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

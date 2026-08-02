@@ -60,6 +60,34 @@ describe("HttpApi CORS", () => {
     }),
   )
 
+  it.live("allows only the packaged Android WebView origin", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.options(InstancePaths.path).pipe(
+        HttpClientRequest.setHeaders({
+          origin: "https://appassets.androidplatform.net",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "authorization",
+        }),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(204)
+      expect(response.headers["access-control-allow-origin"]).toBe("https://appassets.androidplatform.net")
+
+      const rejected = yield* HttpClientRequest.options(InstancePaths.path).pipe(
+        HttpClientRequest.setHeaders({
+          origin: "https://appassets.androidplatform.net.attacker.example",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "authorization",
+        }),
+        HttpClient.execute,
+      )
+
+      expect(rejected.status).toBe(204)
+      expect(rejected.headers["access-control-allow-origin"]).toBeUndefined()
+    }),
+  )
+
   it.live("adds CORS headers to unauthorized responses", () =>
     Effect.gen(function* () {
       const handler = HttpRouter.toWebHandler(
@@ -71,14 +99,14 @@ describe("HttpApi CORS", () => {
       const response = yield* Effect.promise(() =>
         handler(
           new Request(new URL("/global/config", "http://localhost"), {
-            headers: { origin: "https://app.slopcode.ai" },
+            headers: { origin: "https://app.slopcode.dev" },
           }),
           HttpApiApp.context,
         ),
       )
 
       expect(response.status).toBe(401)
-      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.slopcode.ai")
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.slopcode.dev")
     }),
   )
 

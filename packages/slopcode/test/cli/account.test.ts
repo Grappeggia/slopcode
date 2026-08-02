@@ -4,8 +4,8 @@ import stripAnsi from "strip-ansi"
 import { defaultConsoleUrl, formatAccountLabel, formatOrgLine } from "../../src/cli/cmd/account"
 
 describe("console account display", () => {
-  test("uses console.slopcode.ai as the default login URL", () => {
-    expect(defaultConsoleUrl).toBe("https://console.slopcode.ai")
+  test("uses slopcode.dev as the default login URL", () => {
+    expect(defaultConsoleUrl).toBe("https://slopcode.dev")
   })
 
   test("includes the account url in account labels", () => {

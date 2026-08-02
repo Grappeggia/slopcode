@@ -1,11 +1,19 @@
 import { AppProcess } from "@slopcode-ai/core/process"
-import { InstanceRef } from "@/effect/instance-ref"
-import { Effect, Duration, Stream } from "effect"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { Location } from "@slopcode-ai/core/location"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { Pty } from "@slopcode-ai/core/pty"
+import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
+import type { WorkspaceV2 } from "@slopcode-ai/core/workspace"
+import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { PtyPreparation } from "@/pty-preparation"
+import { Effect, Duration, Layer, Stream } from "effect"
 import { open, opendir, lstat, realpath } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import { ChildProcess } from "effect/unstable/process"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { type ParseError as JsoncParseError, parse as parseJsonc } from "jsonc-parser"
 import {
   CODEX_TIMEOUT,
   MAX_REMOTE_AGENT_CATALOG_BYTES,
@@ -25,10 +33,12 @@ import {
   RemoteAgentConfig,
   RemoteAgentPrompt,
   RemoteAgentPromptQuery,
+  RemoteAgentSession,
+  RemoteAgentSessionCreate,
   RemoteBrowseResult,
+  RemoteRuntimeApi,
   REMOTE_AGENT_VERSION_TIMEOUT,
 } from "../groups/remote-runtime"
-import { InstanceHttpApi } from "../api"
 import { ApiNotFoundError, ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "../errors"
 
 const CODEX_FORCE_KILL_AFTER = Duration.seconds(2)
@@ -46,12 +56,13 @@ const AGENT_COMMANDS = {
 } as const
 const MAX_REMOTE_AGENT_VERSION_OUTPUT_BYTES = 4 * 1024
 const MAX_REMOTE_AGENT_METADATA_BYTES = 8 * 1024
+const MAX_REMOTE_AGENT_CONFIG_BYTES = 64 * 1024
 const MAX_REMOTE_AGENT_DISCOVERY_FILES = 512
 const MAX_REMOTE_AGENT_COMMAND_DEPTH = 8
 const AGENT_COMMAND_DIRECTORIES = {
   "codex-cli": [".codex/prompts", ".codex/commands"],
   "opencode-cli": [".opencode/commands", "commands"],
-  "claude-code": [".claude/commands"],
+  "claude-code": [".claude/commands", ".claude/skills"],
 } as const
 const ENTRY_TYPE_RANK = {
   directory: 0,
@@ -65,50 +76,217 @@ type Config = typeof RemoteAgentConfig.Type
 type Agent = typeof RemoteAgent.Type
 type Command = typeof RemoteAgentCommand.Type
 type Catalog = typeof RemoteAgentCatalog.Type
+type CommandFile = { file: string; name?: string }
 
 const BUILTIN_AGENT_COMMANDS = {
   "codex-cli": [
-    { name: "help", description: "Show Codex help." },
-    { name: "clear", description: "Clear the current conversation." },
-    { name: "compact", description: "Compact the current conversation." },
-    { name: "status", description: "Show the current Codex status." },
-    { name: "model", description: "Select or inspect the current model." },
-    { name: "approvals", description: "Inspect approval settings." },
-    { name: "sandbox", description: "Inspect sandbox settings." },
-    { name: "review", description: "Review the current project changes." },
-    { name: "diff", description: "Show the current project diff." },
-    { name: "mention", description: "Mention a file or directory in the prompt." },
-    { name: "exit", description: "Exit the Codex session." },
+    { name: "help" },
+    { name: "model" },
+    { name: "ide" },
+    { name: "permissions" },
+    { name: "approvals" },
+    { name: "sandbox" },
+    { name: "keymap" },
+    { name: "vim" },
+    { name: "setup-default-sandbox" },
+    { name: "sandbox-add-read-dir" },
+    { name: "experimental" },
+    { name: "approve" },
+    { name: "memories" },
+    { name: "skills" },
+    { name: "import" },
+    { name: "hooks" },
+    { name: "review" },
+    { name: "rename" },
+    { name: "new" },
+    { name: "archive" },
+    { name: "delete" },
+    { name: "resume" },
+    { name: "fork" },
+    { name: "app" },
+    { name: "init" },
+    { name: "compact" },
+    { name: "plan" },
+    { name: "goal" },
+    { name: "agent" },
+    { name: "side" },
+    { name: "btw" },
+    { name: "copy" },
+    { name: "raw" },
+    { name: "diff" },
+    { name: "mention" },
+    { name: "status" },
+    { name: "usage" },
+    { name: "debug-config" },
+    { name: "title" },
+    { name: "statusline" },
+    { name: "theme" },
+    { name: "pets" },
+    { name: "pet" },
+    { name: "mcp" },
+    { name: "apps" },
+    { name: "plugins" },
+    { name: "logout" },
+    { name: "quit" },
+    { name: "exit" },
+    { name: "feedback" },
+    { name: "rollout" },
+    { name: "ps" },
+    { name: "stop" },
+    { name: "clean" },
+    { name: "clear" },
+    { name: "personality" },
+    { name: "test-approval" },
+    { name: "subagents" },
+    { name: "debug-m-drop" },
+    { name: "debug-m-update" },
   ],
   "opencode-cli": [
+    { name: "connect" },
+    { name: "compact" },
+    { name: "summarize" },
+    { name: "details" },
+    { name: "editor" },
+    { name: "exit" },
+    { name: "quit" },
+    { name: "q" },
+    { name: "export" },
     { name: "help", description: "Show OpenCode help." },
-    { name: "clear", description: "Clear the current conversation." },
-    { name: "compact", description: "Compact the current conversation." },
-    { name: "new", description: "Start a new OpenCode session." },
-    { name: "agents", description: "List available OpenCode agents." },
-    { name: "models", description: "List available OpenCode models." },
-    { name: "sessions", description: "List or resume OpenCode sessions." },
-    { name: "undo", description: "Undo the latest OpenCode change." },
-    { name: "redo", description: "Redo the latest OpenCode change." },
-    { name: "share", description: "Share the current OpenCode session." },
-    { name: "exit", description: "Exit the OpenCode session." },
+    { name: "init" },
+    { name: "models" },
+    { name: "new" },
+    { name: "clear" },
+    { name: "redo" },
+    { name: "sessions" },
+    { name: "resume" },
+    { name: "continue" },
+    { name: "share" },
+    { name: "themes" },
+    { name: "thinking" },
+    { name: "undo" },
+    { name: "unshare" },
   ],
   "claude-code": [
+    { name: "add-dir" },
+    { name: "advisor" },
+    { name: "agents" },
+    { name: "autofix-pr" },
+    { name: "background" },
+    { name: "bg" },
+    { name: "batch" },
+    { name: "branch" },
+    { name: "btw" },
+    { name: "bug" },
+    { name: "cd" },
+    { name: "chrome" },
+    { name: "claude-api" },
+    { name: "clear" },
+    { name: "reset" },
+    { name: "new" },
+    { name: "code-review" },
+    { name: "color" },
+    { name: "compact" },
+    { name: "config" },
+    { name: "settings" },
+    { name: "context" },
+    { name: "copy" },
+    { name: "cost" },
+    { name: "dataviz" },
+    { name: "debug" },
+    { name: "deep-research" },
+    { name: "design-login" },
+    { name: "design-sync" },
+    { name: "desktop" },
+    { name: "app" },
+    { name: "diff" },
+    { name: "doctor" },
+    { name: "checkup" },
+    { name: "effort" },
+    { name: "exit" },
+    { name: "quit" },
+    { name: "export" },
+    { name: "fast" },
+    { name: "feedback" },
+    { name: "fewer-permission-prompts" },
+    { name: "focus" },
+    { name: "fork" },
+    { name: "goal" },
+    { name: "heapdump" },
     { name: "help", description: "Show Claude Code help." },
-    { name: "clear", description: "Clear the current conversation." },
-    { name: "compact", description: "Compact the current conversation." },
-    { name: "context", description: "Show the current context usage." },
-    { name: "cost", description: "Show session usage and cost." },
-    { name: "doctor", description: "Check Claude Code installation health." },
+    { name: "hooks" },
+    { name: "ide" },
     { name: "init", description: "Initialize project guidance files." },
-    { name: "memory", description: "Inspect project memory instructions." },
+    { name: "insights" },
+    { name: "install-github-app" },
+    { name: "install-slack-app" },
+    { name: "keybindings" },
+    { name: "login" },
+    { name: "logout" },
+    { name: "loop" },
+    { name: "proactive" },
     { name: "mcp", description: "Manage MCP server connections." },
+    { name: "memory" },
+    { name: "mobile" },
+    { name: "ios" },
+    { name: "android" },
     { name: "model", description: "Select the current Claude model." },
+    { name: "passes" },
     { name: "permissions", description: "Inspect permission settings." },
+    { name: "allowed-tools" },
+    { name: "plan" },
+    { name: "plugin" },
+    { name: "powerup" },
+    { name: "pr-comments" },
+    { name: "privacy-settings" },
+    { name: "radio" },
+    { name: "recap" },
+    { name: "release-notes" },
+    { name: "reload-plugins" },
+    { name: "reload-skills" },
+    { name: "remote-control" },
+    { name: "rc" },
+    { name: "remote-env" },
+    { name: "rename" },
+    { name: "resume" },
+    { name: "continue" },
     { name: "review", description: "Review the current project changes." },
+    { name: "rewind" },
+    { name: "checkpoint" },
+    { name: "undo" },
+    { name: "run" },
+    { name: "run-skill-generator" },
+    { name: "sandbox" },
+    { name: "schedule" },
+    { name: "routines" },
+    { name: "scroll-speed" },
+    { name: "security-review" },
+    { name: "setup-bedrock" },
+    { name: "setup-vertex" },
+    { name: "simplify" },
+    { name: "skills" },
+    { name: "stats" },
     { name: "status", description: "Show Claude Code status." },
-    { name: "vim", description: "Toggle Vim editing mode." },
-    { name: "exit", description: "Exit the Claude Code session." },
+    { name: "statusline" },
+    { name: "stickers" },
+    { name: "stop" },
+    { name: "subtask" },
+    { name: "tasks" },
+    { name: "bashes" },
+    { name: "team-onboarding" },
+    { name: "teleport" },
+    { name: "tp" },
+    { name: "terminal-setup" },
+    { name: "theme" },
+    { name: "tui" },
+    { name: "ultraplan" },
+    { name: "ultrareview" },
+    { name: "upgrade" },
+    { name: "usage" },
+    { name: "verify" },
+    { name: "vim" },
+    { name: "voice" },
+    { name: "web-setup" },
+    { name: "workflows" },
   ],
 } as const satisfies { [key in Agent]: readonly Command[] }
 
@@ -336,6 +514,32 @@ function timedOut(error: AppProcess.AppProcessError) {
 
 export const buildAgentCommand = agentCommand
 
+function agentInteractiveCommand(agent: Agent, config?: Config) {
+  const executable = AGENT_EXECUTABLES[agent]
+  if (!executable) return undefined
+  const args: string[] = []
+  if (agent === "opencode-cli") {
+    if (config?.sandbox || config?.approval || config?.permissionMode) return undefined
+    if (config?.model) args.push("--model", config.model)
+    if (config?.profile) args.push("--agent", config.profile)
+    return { executable, args }
+  }
+  if (agent === "claude-code") {
+    if (config?.profile || config?.sandbox || config?.approval) return undefined
+    if (config?.model) args.push("--model", config.model)
+    if (config?.permissionMode) args.push("--permission-mode", config.permissionMode)
+    return { executable, args }
+  }
+  if (config?.permissionMode) return undefined
+  if (config?.model) args.push("--model", config.model)
+  if (config?.profile) args.push("--profile", config.profile)
+  if (config?.sandbox) args.push("--sandbox", config.sandbox)
+  if (config?.approval) args.push("--ask-for-approval", config.approval)
+  return { executable, args }
+}
+
+export const buildAgentInteractiveCommand = agentInteractiveCommand
+
 export function buildAgentVersionCommand(agent: Agent, directory: string) {
   const executable = AGENT_EXECUTABLES[agent]
   if (!executable) return
@@ -454,26 +658,26 @@ function frontmatter(content: string) {
   return metadata
 }
 
-export function parseRemoteCommandMetadata(filename: string, content: string) {
-  const name = commandName(path.basename(filename).replace(/\.md$/i, ""))
+export function parseRemoteCommandMetadata(filename: string, content: string, overrideName?: string) {
+  const name = commandName(overrideName ?? path.basename(filename).replace(/\.md$/i, ""))
   if (!name || (Buffer.byteLength(content) > MAX_REMOTE_AGENT_METADATA_BYTES && content.startsWith("---"))) return
   const data = frontmatter(content)
   if (data === undefined) return
   return { name, ...data } satisfies Command
 }
 
-async function readCommandMetadata(file: string) {
+async function readCommandMetadata(file: string, name?: string) {
   const handle = await open(file, "r")
   try {
     const buffer = Buffer.alloc(MAX_REMOTE_AGENT_METADATA_BYTES)
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-    return parseRemoteCommandMetadata(file, buffer.subarray(0, bytesRead).toString("utf8"))
+    return parseRemoteCommandMetadata(file, buffer.subarray(0, bytesRead).toString("utf8"), name)
   } finally {
     await handle.close()
   }
 }
 
-async function commandFiles(root: string, directory: string, files: string[], depth = 0): Promise<void> {
+async function commandFiles(root: string, directory: string, files: CommandFile[], depth = 0): Promise<void> {
   if (depth > MAX_REMOTE_AGENT_COMMAND_DEPTH || files.length >= MAX_REMOTE_AGENT_DISCOVERY_FILES) return
   const resolved = await realpath(directory).catch(() => undefined)
   if (!resolved || !isWithin(root, resolved)) return
@@ -490,22 +694,113 @@ async function commandFiles(root: string, directory: string, files: string[], de
     }
     if (!entry.isFile() || !/\.md$/i.test(entry.name)) continue
     const target = await realpath(item).catch(() => undefined)
-    if (target && isWithin(root, target)) files.push(target)
+    if (target && isWithin(root, target)) files.push({ file: target })
   }
+}
+
+async function skillFiles(root: string, directory: string, files: CommandFile[]) {
+  if (files.length >= MAX_REMOTE_AGENT_DISCOVERY_FILES) return
+  const resolved = await realpath(directory).catch(() => undefined)
+  if (!resolved || !isWithin(root, resolved)) return
+  const entries = await opendir(resolved).catch(() => undefined)
+  if (!entries) return
+  for await (const entry of entries) {
+    if (files.length >= MAX_REMOTE_AGENT_DISCOVERY_FILES) break
+    if (!entry.isDirectory() || !entry.name || /[\u0000-\u001f\u007f/\\]/.test(entry.name)) continue
+    const name = commandName(entry.name)
+    if (!name) continue
+    const file = path.join(resolved, entry.name, "SKILL.md")
+    const target = await realpath(file).catch(() => undefined)
+    if (!target || !isWithin(root, target)) continue
+    const info = await lstat(target).catch(() => undefined)
+    if (info?.isFile()) files.push({ file: target, name })
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function parseOpenCodeCommand(name: string, value: unknown) {
+  if (!isRecord(value)) return
+  const next = commandName(name)
+  if (!next) return
+  const description =
+    value.description === undefined || typeof value.description !== "string"
+      ? value.description === undefined
+        ? undefined
+        : null
+      : metadataText(value.description, MAX_REMOTE_AGENT_COMMAND_DESCRIPTION_LENGTH)
+  const agent =
+    value.agent === undefined || typeof value.agent !== "string"
+      ? value.agent === undefined
+        ? undefined
+        : null
+      : metadataText(value.agent, MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH)
+  const model =
+    value.model === undefined || typeof value.model !== "string"
+      ? value.model === undefined
+        ? undefined
+        : null
+      : metadataText(value.model, MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH)
+  if (description === null || agent === null || model === null || (value.subtask !== undefined && typeof value.subtask !== "boolean"))
+    return
+  return {
+    name: next,
+    ...(description ? { description } : {}),
+    ...(agent ? { agent } : {}),
+    ...(model ? { model } : {}),
+    ...(value.subtask === undefined ? {} : { subtask: value.subtask }),
+  } satisfies Command
+}
+
+async function readOpenCodeConfig(file: string) {
+  const handle = await open(file, "r")
+  try {
+    const buffer = Buffer.alloc(MAX_REMOTE_AGENT_CONFIG_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    if (bytesRead >= MAX_REMOTE_AGENT_CONFIG_BYTES) return []
+    const errors: JsoncParseError[] = []
+    const value = parseJsonc(buffer.subarray(0, bytesRead).toString("utf8"), errors, {
+      allowTrailingComma: true,
+    }) as unknown
+    if (errors.length || !isRecord(value) || !isRecord(value.command)) return []
+    return Object.entries(value.command).flatMap(([name, item]) => {
+      const command = parseOpenCodeCommand(name, item)
+      return command ? [command] : []
+    })
+  } finally {
+    await handle.close()
+  }
+}
+
+async function discoverOpenCodeConfig(root: string) {
+  const commands: Command[] = []
+  for (const filename of ["opencode.json", "opencode.jsonc"]) {
+    const file = path.join(root, filename)
+    const target = await realpath(file).catch(() => undefined)
+    if (!target || !isWithin(root, target)) continue
+    commands.push(...(await readOpenCodeConfig(target).catch(() => [])))
+  }
+  return commands
 }
 
 export async function discoverRemoteCommands(agent: Agent, directory: string) {
   const root = await realpath(directory).catch(() => undefined)
   if (!root) return []
-  const files: string[] = []
+  const files: CommandFile[] = []
+  const commands: Command[] = agent === "opencode-cli" ? await discoverOpenCodeConfig(root) : []
   for (const relative of AGENT_COMMAND_DIRECTORIES[agent]) {
-    await commandFiles(root, path.join(root, relative), files)
+    if (agent === "claude-code" && relative === ".claude/skills") {
+      await skillFiles(root, path.join(root, relative), files)
+    } else {
+      await commandFiles(root, path.join(root, relative), files)
+    }
     if (files.length >= MAX_REMOTE_AGENT_DISCOVERY_FILES) break
   }
-  files.sort()
-  const commands: Command[] = []
-  for (const file of files.slice(0, MAX_REMOTE_AGENT_DISCOVERY_FILES)) {
-    const command = await readCommandMetadata(file).catch(() => undefined)
+  files.sort((left, right) => left.file.localeCompare(right.file))
+  for (const item of files.slice(0, MAX_REMOTE_AGENT_DISCOVERY_FILES)) {
+    const command = await readCommandMetadata(item.file, item.name).catch(() => undefined)
     if (command) commands.push(command)
   }
   return commands
@@ -585,6 +880,53 @@ export const runAgentPrompt = Effect.fn("RemoteRuntime.agentPrompt")(function* (
     )
 })
 
+export const runAgentSession = Effect.fn("RemoteRuntime.agentSession")(function* (input: {
+  readonly agent: Agent
+  readonly root: string
+  readonly directory: string
+  readonly workspaceID?: WorkspaceV2.ID
+  readonly config?: Config
+}) {
+  const locations = yield* LocationServiceMap
+  const tickets = yield* PtyTicket.Service
+  const selected = agentInteractiveCommand(input.agent, input.config)
+  if (!selected) {
+    return yield* new InvalidRequestError({
+      message:
+        input.agent === "opencode-cli"
+          ? "unsupported OpenCode configuration"
+          : input.agent === "claude-code"
+            ? "unsupported Claude Code configuration"
+            : "unsupported agent configuration",
+      field: "config",
+    })
+  }
+  const info = yield* Effect.provide(
+    Pty.Service.use((service) =>
+      Effect.flatMap(
+        PtyPreparation.prepareCreate({
+          command: selected.executable,
+          args: selected.args,
+          cwd: input.directory,
+          title: `${input.agent} remote session`,
+          env: {
+            SLOPCODE_REMOTE_SUPERVISOR_TOKEN: "",
+            SLOPCODE_SERVER_PASSWORD: "",
+          },
+        }),
+        service.create,
+      ),
+    ),
+    locations.get(Location.Ref.make({ directory: AbsolutePath.make(input.root) })),
+  )
+  const token = yield* tickets.issue({
+    ptyID: info.id,
+    directory: input.root,
+    workspaceID: input.workspaceID,
+  })
+  return { ptyID: info.id, directory: input.root, ...token } satisfies typeof RemoteAgentSession.Type
+})
+
 async function listEntries(root: string, current: string) {
   const entries: Array<Entry> = []
   const directory = await opendir(current)
@@ -660,7 +1002,7 @@ export const resolveRemoteFolder = Effect.fn("RemoteRuntime.resolveFolder")(func
   return { root, current }
 })
 
-export const remoteRuntimeHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote-runtime", (handlers) =>
+export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "remote-runtime", (handlers) =>
   Effect.gen(function* () {
     const browse = Effect.fn("RemoteRuntimeHttpApi.browse")(function* (ctx: {
       query: { path?: string; sshAuthority?: string; sshPort?: number }
@@ -695,6 +1037,25 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(InstanceHttpApi, "remo
       })
     })
 
+    const session = Effect.fn("RemoteRuntimeHttpApi.session")(function* (ctx: {
+      query: typeof RemoteAgentPromptQuery.Type
+      payload: RemoteAgentSessionCreate
+    }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
+      const folder = yield* resolveRemoteFolder({
+        root: instance.directory,
+        current: ctx.query.path ?? instance.directory,
+      })
+      return yield* runAgentSession({
+        agent: ctx.payload.agent,
+        root: instance.directory,
+        directory: folder.current,
+        workspaceID: yield* WorkspaceRef,
+        config: ctx.payload.config,
+      })
+    })
+
     const catalog = Effect.fn("RemoteRuntimeHttpApi.catalog")(function* (ctx: {
       query: typeof RemoteAgentCatalogQuery.Type
     }) {
@@ -707,6 +1068,6 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(InstanceHttpApi, "remo
       return yield* runAgentCatalog({ agent: ctx.query.agent, directory: folder.current })
     })
 
-    return handlers.handle("browse", browse).handle("prompt", prompt).handle("catalog", catalog)
+    return handlers.handle("browse", browse).handle("prompt", prompt).handle("session", session).handle("catalog", catalog)
   }),
-)
+).pipe(Layer.provide(LocationServiceMap.layer))

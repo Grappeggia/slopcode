@@ -1,26 +1,32 @@
-import { DateTime, Effect } from "effect"
+import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionControl } from "@slopcode-ai/core/session/control"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { DateTime, Effect, Option } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
-import { SessionGraph } from "../session-graph"
 import {
   ConflictError,
-  InvalidRequestError,
   InvalidCursorError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { RouteLocationContext } from "../middleware/route-location"
 
 const DefaultSessionsLimit = 50
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
-    const graph = yield* SessionGraph.Service
-    const session = graph.session
-    const control = graph.control
-    const runtime = graph.runtime
+    const session = yield* SessionV2.Service
+    const control = yield* SessionControl.Service
+    const runtime = yield* SessionRuntime.Service
+
+    const routeLocation = Effect.fn("SessionHandler.routeLocation")(function* () {
+      const route = yield* Effect.serviceOption(RouteLocationContext)
+      return Option.getOrUndefined(route)
+    })
 
     const runtimeUnavailable = (error: { readonly sessionID: string; readonly actualOwner: "v1" | "v2" }) =>
       new ServiceUnavailableError({
@@ -35,15 +41,38 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.list",
         Effect.fn(function* (ctx) {
+          const route = yield* routeLocation()
           const query =
             ctx.query.cursor !== undefined
               ? yield* SessionsCursor.parse(ctx.query.cursor).pipe(
                   Effect.mapError(() => new InvalidCursorError({ message: "Invalid cursor" })),
                 )
               : ctx.query
+          const filters = route
+            ? { directory: route.directory, project: undefined, subpath: undefined, workspaceID: route.workspaceID }
+            : "directory" in query
+              ? {
+                  directory: query.directory,
+                  project: undefined,
+                  subpath: undefined,
+                  workspaceID: query.workspace,
+                }
+              : "project" in query
+                ? {
+                    directory: undefined,
+                    project: query.project,
+                    subpath: query.subpath,
+                    workspaceID: query.workspace,
+                  }
+                : {
+                    directory: undefined,
+                    project: undefined,
+                    subpath: undefined,
+                    workspaceID: query.workspace,
+                  }
           const sessions = yield* session.list({
             ...query,
-            workspaceID: query.workspace,
+            ...filters,
             limit: ctx.query.limit ?? DefaultSessionsLimit,
           })
           const first = sessions[0]
@@ -78,12 +107,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          const route = yield* routeLocation()
           return {
             data: yield* session.create({
               id: ctx.payload.id,
               agent: ctx.payload.agent,
               model: ctx.payload.model,
-              location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+              location:
+                route
+                  ? {
+                      directory: AbsolutePath.make(route.directory),
+                      workspaceID: route.workspaceID,
+                    }
+                  : ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
               runtime: "v2",
             }),
           }
@@ -147,17 +183,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
-                Effect.catchTag("Session.PromptFormatConflictError", (error) =>
-                  Effect.fail(
-                    new ConflictError({
-                      message: `Prompt format conflicts with the active activity: ${error.messageID}`,
-                      resource: error.messageID,
-                    }),
-                  ),
-                ),
-                Effect.catchTag("Session.StructuredFormatAdmissionError", (error) =>
-                  Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt.format" })),
-                ),
                 Effect.catchTag("SessionRuntime.NotFound", (error) =>
                   Effect.fail(
                     new SessionNotFoundError({
@@ -174,73 +199,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
-          yield* control
-            .compact({
-              sessionID: ctx.params.sessionID,
-              id: ctx.payload.id,
-              prompt: ctx.payload.prompt,
-            })
-            .pipe(
-              Effect.catchTag("Session.NotFoundError", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-              Effect.catchTag("Session.CompactionConflictError", (error) =>
-                Effect.fail(
-                  new ConflictError({
-                    message: `Compaction message ID conflicts with an existing durable record: ${error.messageID}`,
-                    resource: error.messageID,
-                  }),
-                ),
-              ),
-              Effect.catchTag("Session.CompactionPromptUnsupportedError", (error) =>
-                Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt" })),
-              ),
-              Effect.catchTag("Session.CompactionFailedError", (error) =>
-                Effect.fail(new UnknownError({ message: error.message, ref: error.messageID })),
-              ),
-              Effect.catchTag("SessionRuntime.NotFound", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-              Effect.catchTag("SessionRuntime.Mismatch", () =>
-                Effect.fail(
-                  new UnknownError({ message: "Session runtime changed during compaction; retry the request" }),
-                ),
-              ),
-            )
-          return HttpApiSchema.NoContent.make()
-        }),
-      )
-      .handle(
-        "session.wait",
-        Effect.fn(function* (ctx) {
-          yield* control.wait(ctx.params.sessionID).pipe(
-            Effect.tapError((error) =>
-              error._tag === "Session.NotFoundError" || error._tag === "SessionRuntime.NotFound"
-                ? Effect.void
-                : Effect.logError("session wait failed").pipe(
-                    Effect.annotateLogs({ sessionID: ctx.params.sessionID, error }),
-                  ),
-            ),
-            Effect.mapError((error) =>
-              error._tag === "Session.NotFoundError" || error._tag === "SessionRuntime.NotFound"
-                ? error
-                : new UnknownError({ message: "Session execution failed. Check server logs for details." }),
-            ),
+          yield* control.compact({ sessionID: ctx.params.sessionID }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
                 new SessionNotFoundError({
                   sessionID: error.sessionID,
                   message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.OperationUnavailableError", (error) =>
+              Effect.fail(
+                new ServiceUnavailableError({
+                  message: `Session ${error.operation} is not available yet`,
+                  service: `session.${error.operation}`,
                 }),
               ),
             ),
@@ -252,6 +224,40 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
+            Effect.catchTag("SessionRuntime.Mismatch", (error) => Effect.fail(runtimeUnavailable(error))),
+          )
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.wait",
+        Effect.fn(function* (ctx) {
+          yield* control.wait(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.OperationUnavailableError", (error) =>
+              Effect.fail(
+                new ServiceUnavailableError({
+                  message: `Session ${error.operation} is not available yet`,
+                  service: `session.${error.operation}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("SessionRuntime.NotFound", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("SessionRuntime.Mismatch", (error) => Effect.fail(runtimeUnavailable(error))),
           )
           return HttpApiSchema.NoContent.make()
         }),

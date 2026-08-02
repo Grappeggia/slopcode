@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show } from "solid-js"
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { bakedRemoteCommandCatalog, fetchRemoteAgentCatalog } from "./remote-commands"
 import { normalizeHttpsUrl, type RemoteAgent } from "./remote-workspace-state"
 import type { RemoteCommandCatalog } from "./remote-workspace-state"
@@ -10,10 +10,11 @@ const MAX_RESPONSE_BYTES = 128 * 1024
 const MAX_OUTPUT_LENGTH = 64 * 1024
 const MAX_CONFIG_VALUE_LENGTH = 128
 const REQUEST_TIMEOUT_MS = 60_000
+const MAX_TERMINAL_OUTPUT_LENGTH = 128 * 1024
 const statuses = ["completed", "failed", "timed_out"] as const
 const sandboxes = ["read-only", "workspace-write", "danger-full-access"] as const
 const approvals = ["untrusted", "on-failure", "on-request", "never"] as const
-const permissionModes = ["default", "acceptEdits", "plan", "bypassPermissions"] as const
+const permissionModes = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"] as const
 
 export type RemoteAgentStatus = (typeof statuses)[number]
 export type RemoteCliAgent = Exclude<RemoteAgent, "local-slopcode">
@@ -31,6 +32,13 @@ export type RemoteAgentResult = {
 }
 export type CodexCliStatus = RemoteAgentStatus
 export type CodexCliResult = RemoteAgentResult
+
+export type RemoteAgentTerminalSession = {
+  ptyID: string
+  directory: string
+  ticket: string
+  expiresIn: number
+}
 
 export type RemoteAgentPromptInput = {
   agent: RemoteCliAgent
@@ -171,33 +179,15 @@ function detail(value: unknown) {
   if (typeof message === "string" && message.length <= 512) return message
 }
 
-export function parseRemoteAgentResult(value: unknown): RemoteAgentResult | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["output", "status", "exitCode"].includes(key))) return
-  const output = text(value.output, MAX_OUTPUT_LENGTH)
-  const status = statuses.find((item) => item === value.status)
-  if (output === undefined || !status) return
-  if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isSafeInteger(value.exitCode)))
-    return
-  return value.exitCode === undefined ? { output, status } : { output, status, exitCode: value.exitCode }
-}
-
-export function parseCodexCliResult(value: unknown): CodexCliResult | undefined {
-  return parseRemoteAgentResult(value)
-}
-
-export async function promptRemoteAgent(
-  input: RemoteAgentPromptInput,
-  fetcher: Fetcher = fetch,
-): Promise<RemoteAgentResult> {
+function connection(input: Omit<RemoteAgentPromptInput, "prompt">) {
   const serverUrl = normalizeHttpsUrl(input.serverUrl)
   const workspace = workspaceID(input.workspaceID)
   const remoteDirectory = directory(input.directory)
   const selectedAgent = agent(input.agent)
-  const prompt = typeof input.prompt === "string" ? text(input.prompt.trim(), MAX_PROMPT_LENGTH) : undefined
   const parsedConfig = input.config === undefined ? undefined : config(input.config)
   if (!serverUrl) throw new Error("Remote agent requires an exact HTTPS desktop or relay URL.")
-  if (!workspace || !remoteDirectory || !selectedAgent || !prompt)
-    throw new Error("Remote agent requires a workspace, folder, agent, and prompt.")
+  if (!workspace || !remoteDirectory || !selectedAgent)
+    throw new Error("Remote agent requires a workspace, folder, and agent.")
   if (input.config !== undefined && !parsedConfig) throw new Error("Remote agent configuration is invalid.")
   if (
     selectedAgent === "opencode-cli" &&
@@ -216,6 +206,75 @@ export async function promptRemoteAgent(
   if (selectedAgent === "codex-cli" && parsedConfig?.permissionMode !== undefined) {
     throw new Error("Codex configuration does not support Claude Code permission mode.")
   }
+  return { serverUrl, workspace, remoteDirectory, selectedAgent, parsedConfig }
+}
+
+function terminalSession(value: unknown): RemoteAgentTerminalSession | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key)))
+    return
+  const ptyID = text(value.ptyID, 256)
+  const remoteDirectory = directory(value.directory)
+  const ticket = text(value.ticket, 512)
+  const expiresIn = value.expires_in
+  if (
+    !ptyID ||
+    !/^pty_[A-Za-z0-9._:-]+$/.test(ptyID) ||
+    !remoteDirectory ||
+    !ticket ||
+    typeof expiresIn !== "number" ||
+    !Number.isSafeInteger(expiresIn) ||
+    expiresIn < 1
+  )
+    return
+  return { ptyID, directory: remoteDirectory, ticket, expiresIn }
+}
+
+export function remoteAgentTerminalUrl(
+  serverUrl: string,
+  workspace: string,
+  session: Pick<RemoteAgentTerminalSession, "ptyID" | "directory" | "ticket">,
+  credentials?: { username?: string; password: string },
+) {
+  const origin = normalizeHttpsUrl(serverUrl)
+  const workspaceIDValue = workspaceID(workspace)
+  if (!origin || !workspaceIDValue) throw new Error("Remote agent WebSocket routing is invalid.")
+  const endpoint = new URL(`${origin}/pty/${encodeURIComponent(session.ptyID)}/connect`)
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:"
+  endpoint.searchParams.set("workspace", workspaceIDValue)
+  endpoint.searchParams.set("directory", session.directory)
+  endpoint.searchParams.set("cursor", "-1")
+  endpoint.searchParams.set("ticket", session.ticket)
+  if (credentials?.password) endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
+  return endpoint.toString()
+}
+
+export function parseRemoteAgentCommand(value: string) {
+  const match = value.trim().match(/^\/([A-Za-z0-9][A-Za-z0-9._:-]*)(?:\s+([^\r\n]*))?$/)
+  if (!match) return
+  return { name: match[1]!, args: match[2]?.trim() ?? "" }
+}
+
+export function parseRemoteAgentResult(value: unknown): RemoteAgentResult | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => !["output", "status", "exitCode"].includes(key))) return
+  const output = text(value.output, MAX_OUTPUT_LENGTH)
+  const status = statuses.find((item) => item === value.status)
+  if (output === undefined || !status) return
+  if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isSafeInteger(value.exitCode)))
+    return
+  return value.exitCode === undefined ? { output, status } : { output, status, exitCode: value.exitCode }
+}
+
+export function parseCodexCliResult(value: unknown): CodexCliResult | undefined {
+  return parseRemoteAgentResult(value)
+}
+
+export async function promptRemoteAgent(
+  input: RemoteAgentPromptInput,
+  fetcher: Fetcher = fetch,
+): Promise<RemoteAgentResult> {
+  const { serverUrl, workspace, remoteDirectory, selectedAgent, parsedConfig } = connection(input)
+  const prompt = typeof input.prompt === "string" ? text(input.prompt.trim(), MAX_PROMPT_LENGTH) : undefined
+  if (!prompt) throw new Error("Remote agent requires a workspace, folder, agent, and prompt.")
 
   const endpoint = new URL(`${serverUrl}/remote/agent/prompt`)
   endpoint.searchParams.set("workspace", workspace)
@@ -250,6 +309,63 @@ export async function promptRemoteAgent(
   return result
 }
 
+export async function createRemoteAgentSession(
+  input: Omit<RemoteAgentPromptInput, "prompt">,
+  fetcher: Fetcher = fetch,
+): Promise<RemoteAgentTerminalSession> {
+  const { serverUrl, workspace, remoteDirectory, selectedAgent, parsedConfig } = connection(input)
+  const endpoint = new URL(`${serverUrl}/remote/agent/session`)
+  endpoint.searchParams.set("workspace", workspace)
+  endpoint.searchParams.set("path", remoteDirectory)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  let response: Response
+  let value: unknown
+  try {
+    response = await fetcher(endpoint.toString(), {
+      method: "POST",
+      headers: {
+        authorization: authorization(input.username, input.password),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        agent: selectedAgent,
+        ...(parsedConfig === undefined ? {} : { config: parsedConfig }),
+      }),
+      credentials: "omit",
+      redirect: "error",
+      signal: controller.signal,
+    })
+    value = await json(response)
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!response.ok) throw new Error(detail(value) ?? `Remote agent session failed (${response.status}).`)
+  const result = terminalSession(value)
+  if (!result) throw new Error("Remote agent returned an invalid PTY session.")
+  return result
+}
+
+async function removeRemoteAgentSession(
+  input: Omit<RemoteAgentPromptInput, "prompt">,
+  current: Pick<RemoteAgentTerminalSession, "ptyID" | "directory">,
+) {
+  try {
+    const { serverUrl, workspace } = connection(input)
+    const endpoint = new URL(`${serverUrl}/pty/${encodeURIComponent(current.ptyID)}`)
+    endpoint.searchParams.set("workspace", workspace)
+    endpoint.searchParams.set("directory", current.directory)
+    await fetch(endpoint.toString(), {
+      method: "DELETE",
+      headers: { authorization: authorization(input.username, input.password) },
+      credentials: "omit",
+      redirect: "error",
+    })
+  } catch {
+    return
+  }
+}
+
 export function promptCodexCli(input: CodexCliPromptInput, fetcher: Fetcher = fetch) {
   return promptRemoteAgent({ ...input, agent: "codex-cli" }, fetcher)
 }
@@ -277,10 +393,15 @@ export function RemoteAgentSession(props: Props) {
   const [result, setResult] = createSignal<RemoteAgentResult>()
   const [error, setError] = createSignal("")
   const [busy, setBusy] = createSignal(false)
+  const [terminalOutput, setTerminalOutput] = createSignal("")
+  let socket: WebSocket | undefined
+  let session: RemoteAgentTerminalSession | undefined
+  let opening: Promise<void> | undefined
   const initialCatalog = () =>
     props.catalog?.agent === props.agent ? props.catalog : bakedRemoteCommandCatalog(props.agent)
   const [commands, setCommands] = createSignal(initialCatalog().commands)
   const [agentVersion, setAgentVersion] = createSignal(initialCatalog().version)
+  let savedCatalog = initialCatalog()
   const name = () => {
     if (props.agent === "opencode-cli") return "OpenCode CLI"
     if (props.agent === "claude-code") return "Claude Code"
@@ -297,6 +418,92 @@ export function RemoteAgentSession(props: Props) {
     return Object.keys(next).length > 0 ? next : props.config
   }
 
+  const input = () => {
+    const { catalog: _catalog, onCatalog: _onCatalog, ...rest } = props
+    return { ...rest, config: config() }
+  }
+
+  const appendTerminalOutput = (chunk: string) => {
+    if (!chunk) return
+    const next = `${terminalOutput()}${chunk}`.slice(-MAX_TERMINAL_OUTPUT_LENGTH)
+    setTerminalOutput(next)
+    setResult({ output: next, status: "completed" })
+  }
+
+  const terminalMessage = (event: MessageEvent) => {
+    if (typeof event.data === "string") {
+      appendTerminalOutput(event.data)
+      return
+    }
+    if (!(event.data instanceof ArrayBuffer)) return
+    const bytes = new Uint8Array(event.data)
+    if (bytes[0] === 0) return
+    appendTerminalOutput(new TextDecoder().decode(bytes))
+  }
+
+  const openTerminal = () => {
+    if (socket?.readyState === WebSocket.OPEN) return Promise.resolve()
+    if (opening) return opening
+    const task = (async () => {
+      const created = await createRemoteAgentSession(input())
+      setTerminalOutput("")
+      const next = new WebSocket(
+        remoteAgentTerminalUrl(props.serverUrl, props.workspaceID, created, {
+          username: props.username,
+          password: props.password,
+        }),
+      )
+      next.binaryType = "arraybuffer"
+      next.onmessage = terminalMessage
+      let opened = false
+      const ready = new Promise<void>((resolve, reject) => {
+        next.onopen = () => {
+          opened = true
+          resolve()
+        }
+        next.onclose = () => {
+          if (!opened) reject(new Error("Remote agent PTY connection closed during handshake."))
+          if (socket !== next) return
+          socket = undefined
+          session = undefined
+        }
+        next.onerror = () => {
+          if (!opened) reject(new Error("Remote agent PTY connection failed."))
+          else setError("Remote agent PTY connection failed.")
+        }
+      })
+      try {
+        await ready
+      } catch (cause) {
+        next.close()
+        await removeRemoteAgentSession(input(), created)
+        throw cause
+      }
+      session = created
+      socket = next
+    })()
+    opening = task
+    void task.then(
+      () => {
+        if (opening === task) opening = undefined
+      },
+      () => {
+        if (opening === task) opening = undefined
+      },
+    )
+    return task
+  }
+
+  const closeTerminal = async () => {
+    const current = session
+    const currentSocket = socket
+    session = undefined
+    socket = undefined
+    currentSocket?.close()
+    if (!current) return
+    await removeRemoteAgentSession(input(), current)
+  }
+
   const refresh = async () => {
     try {
       const catalog = await fetchRemoteAgentCatalog({
@@ -309,8 +516,14 @@ export function RemoteAgentSession(props: Props) {
       })
       setCommands(catalog.commands)
       setAgentVersion(catalog.version)
-      if (props.catalog?.version !== catalog.version || props.catalog?.agent !== catalog.agent)
+      if (
+        savedCatalog.agent !== catalog.agent ||
+        savedCatalog.version !== catalog.version ||
+        JSON.stringify(savedCatalog.commands) !== JSON.stringify(catalog.commands)
+      ) {
         props.onCatalog?.(catalog)
+        savedCatalog = catalog
+      }
     } catch {
       return
     }
@@ -318,15 +531,32 @@ export function RemoteAgentSession(props: Props) {
 
   onMount(() => {
     void refresh()
+    const timer = setInterval(() => void refresh(), 30_000)
+    const onFocus = () => void refresh()
+    window.addEventListener("focus", onFocus)
+    onCleanup(() => {
+      clearInterval(timer)
+      window.removeEventListener("focus", onFocus)
+      void closeTerminal()
+    })
   })
 
-  const send = async () => {
+  const execute = async (raw: string) => {
     if (busy()) return
     setBusy(true)
     setError("")
     try {
-      const { catalog: _catalog, onCatalog: _onCatalog, ...input } = props
-      setResult(await promptRemoteAgent({ ...input, prompt: prompt(), config: config() }))
+      const value = raw.trim()
+      if (!value) throw new Error("Enter a prompt or choose a remote slash command.")
+      const command = parseRemoteAgentCommand(value)
+      if (command || socket) {
+        await openTerminal()
+        if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Remote agent PTY is not connected.")
+        socket.send(`${command ? `/${command.name}${command.args ? ` ${command.args}` : ""}` : value}\r`)
+        setResult({ output: terminalOutput(), status: "completed" })
+      } else {
+        setResult(await promptRemoteAgent({ ...input(), prompt: value }))
+      }
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Remote agent request failed.")
@@ -335,13 +565,16 @@ export function RemoteAgentSession(props: Props) {
     }
   }
 
+  const send = () => void execute(prompt())
+
   return (
     <main class="min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6">
       <section class="w-full max-w-2xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4">
         <div class="flex flex-col gap-1">
           <h1 class="text-20-medium">{name()} remote session</h1>
           <p class="text-14-regular text-text-weak">
-            Prompts are sent through the authenticated desktop or relay connection for the selected remote folder.
+            Prompts and slash commands are sent through the authenticated desktop or relay connection for the selected
+            remote folder. Slash commands open a persistent PTY session so the selected harness executes them itself.
           </p>
           <p class="text-12-regular text-text-weak">{props.directory}</p>
         </div>
@@ -368,7 +601,7 @@ export function RemoteAgentSession(props: Props) {
                 <button
                   type="button"
                   class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular"
-                  onClick={() => setPrompt(`/${item.name} `)}
+                  onClick={() => void execute(`/${item.name}`)}
                   title={item.description}
                 >
                   /{item.name}
@@ -450,8 +683,8 @@ export function RemoteAgentSession(props: Props) {
 
         <Show when={props.agent === "opencode-cli"}>
           <p class="text-12-regular text-text-weak">
-            OpenCode forwards the model and agent fields to <code>opencode run</code>; its permissions remain controlled
-            by the remote OpenCode configuration.
+            OpenCode forwards the model and agent fields to the interactive CLI; its permissions remain controlled by
+            the remote OpenCode configuration.
           </p>
         </Show>
 
@@ -473,7 +706,7 @@ export function RemoteAgentSession(props: Props) {
             </select>
           </label>
           <p class="text-12-regular text-text-weak">
-            Claude Code runs in print mode with the selected model and permission mode on the SSH host.
+            Claude Code runs interactively with the selected model and permission mode on the SSH host.
           </p>
         </Show>
 
@@ -493,7 +726,7 @@ export function RemoteAgentSession(props: Props) {
           onClick={() => void send()}
           class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 disabled:opacity-50"
         >
-          {busy() ? `Running ${name()}…` : "Send prompt"}
+          {busy() ? `Running ${name()}…` : parseRemoteAgentCommand(prompt()) ? "Run slash command" : "Send prompt"}
         </button>
 
         <Show when={result()}>

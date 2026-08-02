@@ -11,7 +11,6 @@ import { SessionStatus } from "./status"
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly take: (sessionID: SessionID) => Effect.Effect<Effect.Effect<void>>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -57,17 +56,14 @@ export const layer = Layer.effect(
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       if (existing) return existing
-      const slot: { current?: Runner.Runner<SessionV1.WithParts> } = {}
       const next = Runner.make<SessionV1.WithParts>(data.scope, {
-        onIdle: Effect.suspend(function () {
-          if (data.runners.get(sessionID) !== slot.current) return Effect.void
+        onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
-          return status.set(sessionID, { type: "idle" })
+          yield* status.set(sessionID, { type: "idle" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),
         onInterrupt,
       })
-      slot.current = next
       data.runners.set(sessionID, next)
       return next
     })
@@ -78,20 +74,15 @@ export const layer = Layer.effect(
       if (existing?.busy) yield* busyError(sessionID)
     })
 
-    const take = Effect.fn("SessionRunState.take")(function* (sessionID: SessionID) {
+    const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
+      yield* cancelBackgroundJobs(background, sessionID)
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
-      if (existing) data.runners.delete(sessionID)
-      return Effect.gen(function* () {
-        yield* cancelBackgroundJobs(background, sessionID)
-        yield* existing?.cancel ?? Effect.void
-        if (!data.runners.has(sessionID)) yield* status.set(sessionID, { type: "idle" })
-      })
-    })
-
-    const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
-      const cleanup = yield* take(sessionID)
-      yield* cleanup
+      if (!existing) {
+        yield* status.set(sessionID, { type: "idle" })
+        return
+      }
+      yield* existing.cancel
     })
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
@@ -113,7 +104,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
-    return Service.of({ assertNotBusy, cancel, take, ensureRunning, startShell })
+    return Service.of({ assertNotBusy, cancel, ensureRunning, startShell })
   }),
 )
 

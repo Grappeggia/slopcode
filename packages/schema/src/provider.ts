@@ -10,7 +10,6 @@ export const ID = Schema.String.pipe(
   statics((schema) => ({
     slopcode: schema.make("slopcode"),
     slopcodeGo: schema.make("slopcode-go"),
-    opencode: schema.make("opencode"),
     anthropic: schema.make("anthropic"),
     openai: schema.make("openai"),
     google: schema.make("google"),

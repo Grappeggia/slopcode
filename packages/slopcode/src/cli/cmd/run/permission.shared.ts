@@ -4,7 +4,7 @@
 // machine has three stages:
 //
 //   permission → initial view with Allow once / Always / Reject options
-//   project    → confirmation step (Confirm / Cancel)
+//   always     → confirmation step (Confirm / Cancel)
 //   reject     → text input for rejection message
 //
 // permissionRun() is the main transition: given the current state and the
@@ -19,10 +19,8 @@ import { toolPath, toolPermissionInfo } from "./tool"
 
 type Dict = Record<string, unknown>
 
-export type PermissionStage = "permission" | "project" | "reject"
-export type PermissionScopeLabel = "project" | "folder" | undefined
-export type PermissionOption = "once" | "always" | "project" | "reject" | "confirm" | "cancel"
-export type PermissionBatchOption = "once" | "always" | "project" | "reject" | "confirm" | "cancel"
+export type PermissionStage = "permission" | "always" | "reject"
+export type PermissionOption = "once" | "always" | "reject" | "confirm" | "cancel"
 
 export type PermissionBodyState = {
   requestID: string
@@ -43,35 +41,6 @@ export type PermissionInfo = {
 export type PermissionStep = {
   state: PermissionBodyState
   reply?: PermissionReply
-}
-
-export type PermissionBatchState = {
-  stage: "review" | "project"
-  focused: number
-  requestIDs: string[]
-  selected: string[]
-}
-
-export type PermissionBatchReply = {
-  batchID: string
-  requestIDs: string[]
-  reply: "once" | "always" | "project" | "reject"
-}
-
-export async function permissionBatchSubmit(input: {
-  send: () => Promise<void>
-  error: (error: unknown) => void
-  done: () => void
-}) {
-  try {
-    await input.send()
-    return true
-  } catch (error) {
-    input.error(error)
-    return false
-  } finally {
-    input.done()
-  }
 }
 
 function dict(v: unknown): Dict {
@@ -108,103 +77,13 @@ export function createPermissionBodyState(requestID: string): PermissionBodyStat
   }
 }
 
-export function permissionQueue(requests: PermissionRequest[]) {
-  const blocking = requests.find((item) => item.kind !== "forecast")
-  if (blocking) return [blocking]
-  const first = requests[0]
-  if (!first?.batchID) return first ? [first] : []
-  return requests.filter((item) => item.kind === "forecast" && item.batchID === first.batchID)
-}
-
-export function createPermissionBatchState(requests: PermissionRequest[]): PermissionBatchState {
-  const requestIDs = requests.map((item) => item.id)
-  return { stage: "review", focused: 0, requestIDs, selected: requestIDs }
-}
-
-function permissionBatchFocus(state: PermissionBatchState, requests: PermissionRequest[]) {
-  if (state.stage !== "project" || state.selected.includes(requests[state.focused]?.id ?? "")) return state
-  return {
-    ...state,
-    focused: Math.max(
-      requests.findIndex((item) => state.selected.includes(item.id)),
-      0,
-    ),
-  }
-}
-
-export function permissionBatchSync(state: PermissionBatchState, requests: PermissionRequest[]): PermissionBatchState {
-  const requestIDs = requests.map((item) => item.id)
-  const known = new Set(state.requestIDs)
-  const next = {
-    ...state,
-    focused: Math.min(state.focused, Math.max(requestIDs.length - 1, 0)),
-    requestIDs,
-    selected: [...state.selected.filter((id) => requestIDs.includes(id)), ...requestIDs.filter((id) => !known.has(id))],
-  }
-  if (next.stage === "project" && !permissionBatchPersistent(next, requests)) return { ...next, stage: "review" }
-  return permissionBatchFocus(next, requests)
-}
-
-export function permissionBatchMove(state: PermissionBatchState, requests: PermissionRequest[], step: number) {
-  const visible = requests.flatMap((item, index) =>
-    state.stage === "review" || state.selected.includes(item.id) ? [index] : [],
-  )
-  if (!visible.length) return state
-  const index = visible.indexOf(state.focused)
-  const current = index === -1 ? (step > 0 ? -1 : 0) : index
-  return { ...state, focused: visible[(current + step + visible.length) % visible.length] }
-}
-
-export function permissionBatchToggle(state: PermissionBatchState, requestID: string) {
-  return {
-    ...state,
-    selected: state.selected.includes(requestID)
-      ? state.selected.filter((item) => item !== requestID)
-      : [...state.selected, requestID],
-  }
-}
-
-export function permissionBatchPersistent(state: PermissionBatchState, requests: PermissionRequest[]) {
-  if (!state.selected.length) return false
-  return state.selected.every((id) => Boolean(requests.find((item) => item.id === id)?.always.length))
-}
-
-export function permissionBatchReply(
-  state: PermissionBatchState,
-  requests: PermissionRequest[],
-  option: PermissionBatchOption,
-): { state: PermissionBatchState; reply?: PermissionBatchReply } {
-  if (option === "project" && state.stage === "review") {
-    if (!permissionBatchPersistent(state, requests)) return { state }
-    return {
-      state: permissionBatchFocus({ ...state, stage: "project" }, requests),
-    }
-  }
-  if (option === "cancel") return { state: { ...state, stage: "review" } }
-  const batchID = requests[0]?.batchID
-  if (!batchID) return { state }
-  if (option === "reject") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
-  if (!state.selected.length) return { state }
-  if (option === "once") return { state, reply: { batchID, requestIDs: state.selected, reply: "once" } }
-  if (option === "always") {
-    if (!permissionBatchPersistent(state, requests)) return { state }
-    return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
-  }
-  if (option === "confirm" && state.stage === "project") {
-    if (!permissionBatchPersistent(state, requests)) return { state: { ...state, stage: "review" } }
-    return { state, reply: { batchID, requestIDs: state.selected, reply: "project" } }
-  }
-  return { state }
-}
-
-export function permissionOptions(stage: PermissionStage, persistent = true, durable = persistent): PermissionOption[] {
+export function permissionOptions(stage: PermissionStage): PermissionOption[] {
   if (stage === "permission") {
-    if (!persistent) return ["once", "reject"]
-    return durable ? ["once", "always", "project", "reject"] : ["once", "always", "reject"]
+    return ["once", "always", "reject"]
   }
 
-  if (stage === "project") {
-    return durable ? ["confirm", "cancel"] : []
+  if (stage === "always") {
+    return ["confirm", "cancel"]
   }
 
   return []
@@ -244,19 +123,20 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
   }
 }
 
-export function permissionProjectLines(request: PermissionRequest, scope: PermissionScopeLabel): string[] {
-  if (!request.always.length || !scope) return []
+export function permissionAlwaysLines(request: PermissionRequest): string[] {
+  if (request.always.length === 1 && request.always[0] === "*") {
+    return [`This will allow ${request.permission} until SlopCode is restarted.`]
+  }
+
   return [
-    `This approval survives restarts and remains active for this ${scope} until revoked.`,
-    "The following exact patterns will always be allowed:",
+    "This will allow the following patterns until SlopCode is restarted.",
     ...request.always.map((item) => `- ${item}`),
   ]
 }
 
-export function permissionLabel(option: PermissionOption, scope: PermissionScopeLabel): string {
+export function permissionLabel(option: PermissionOption): string {
   if (option === "once") return "Allow once"
-  if (option === "always") return "Allow for this session"
-  if (option === "project") return scope ? `Always allow these patterns for this ${scope}` : "Always allow"
+  if (option === "always") return "Allow always"
   if (option === "reject") return "Reject"
   if (option === "confirm") return "Confirm"
   return "Cancel"
@@ -270,13 +150,8 @@ export function permissionReply(requestID: string, reply: PermissionReply["reply
   }
 }
 
-export function permissionShift(
-  state: PermissionBodyState,
-  dir: -1 | 1,
-  persistent = true,
-  durable = persistent,
-): PermissionBodyState {
-  const list = permissionOptions(state.stage, persistent, durable)
+export function permissionShift(state: PermissionBodyState, dir: -1 | 1): PermissionBodyState {
+  const list = permissionOptions(state.stage)
   if (list.length === 0) {
     return state
   }
@@ -302,11 +177,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
   }
 
   if (state.stage === "permission") {
-    if (option === "project") {
+    if (option === "always") {
       return {
         state: {
           ...state,
-          stage: "project",
+          stage: "always",
           selected: "confirm",
         },
       }
@@ -324,11 +199,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
 
     return {
       state,
-      reply: permissionReply(requestID, option === "always" ? "always" : "once"),
+      reply: permissionReply(requestID, "once"),
     }
   }
 
-  if (state.stage !== "project") {
+  if (state.stage !== "always") {
     return { state }
   }
 
@@ -337,14 +212,14 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
       state: {
         ...state,
         stage: "permission",
-        selected: "project",
+        selected: "always",
       },
     }
   }
 
   return {
     state,
-    reply: permissionReply(requestID, "project"),
+    reply: permissionReply(requestID, "always"),
   }
 }
 
@@ -365,11 +240,11 @@ export function permissionCancel(state: PermissionBodyState): PermissionBodyStat
 }
 
 export function permissionEscape(state: PermissionBodyState): PermissionBodyState {
-  if (state.stage === "project") {
+  if (state.stage === "always") {
     return {
       ...state,
       stage: "permission",
-      selected: "project",
+      selected: "always",
     }
   }
 

@@ -8,7 +8,6 @@ const context = Effect.gen(function* () {
   return {
     instance: yield* InstanceRef,
     workspaceID: yield* WorkspaceRef,
-    bridge: yield* EffectBridge.make(),
   }
 })
 

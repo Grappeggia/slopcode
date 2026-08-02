@@ -19,7 +19,6 @@ const media = (file: FileAttachment): ContentPart => ({
 })
 
 const toolInput = (tool: SessionMessage.AssistantTool) => {
-  if (tool.toolType === "custom") return tool.state.input
   if (tool.state.status !== "pending") return tool.state.input
   try {
     return JSON.parse(tool.state.input) as unknown
@@ -28,18 +27,14 @@ const toolInput = (tool: SessionMessage.AssistantTool) => {
   }
 }
 
-const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined): ContentPart => {
-  const input = toolInput(tool)
-  const common = {
+const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined): ContentPart =>
+  ToolCallPart.make({
     id: tool.id,
     name: tool.name,
+    input: toolInput(tool),
     providerExecuted: tool.provider?.executed,
     providerMetadata,
-  }
-  if (tool.toolType !== "custom") return ToolCallPart.make({ ...common, input, toolType: tool.toolType })
-  if (typeof input !== "string") throw new TypeError(`Custom tool input is not raw text: ${tool.id}`)
-  return ToolCallPart.make({ ...common, input, toolType: "custom" })
-}
+  })
 
 const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
   if (tool.state.status === "completed") {
@@ -53,7 +48,6 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
       id: tool.id,
       name: tool.name,
       result,
-      toolType: tool.toolType,
       providerExecuted: tool.provider?.executed,
       providerMetadata,
     })
@@ -66,7 +60,6 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
         tool.provider?.executed === true && tool.state.result !== undefined
           ? tool.state.result
           : { error: tool.state.error, content: tool.state.content, structured: tool.state.structured },
-      toolType: tool.toolType,
       resultType: "error",
       providerExecuted: tool.provider?.executed,
       providerMetadata,
@@ -75,8 +68,6 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
 }
 
 const assistant = (message: SessionMessage.Assistant, model: Model) => {
-  if (message.structured !== undefined)
-    return [Message.make({ id: message.id, role: "assistant", content: JSON.stringify(message.structured) })]
   const sameModel =
     String(message.model.providerID) === String(model.provider) && String(message.model.id) === String(model.id)
   const content = message.content.flatMap((item): ContentPart[] => {
@@ -155,30 +146,4 @@ ${message.recent}
 
 /** Translate projected V2 Session history into canonical @slopcode-ai/llm context. */
 export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
-  messages.flatMap((message, index) => {
-    const lowered = toLLMMessage(message, model)
-    if (message.type !== "assistant" || !message.structuredRetry) return lowered
-    const later = messages.slice(index + 1).some((item) => item.type === "assistant")
-    if (later) return lowered
-    return [
-      ...lowered,
-      Message.make({
-        role: "assistant",
-        content: [
-          ToolCallPart.make({
-            id: `structured-retry-${message.structuredRetry.attempt}`,
-            name: "final_output",
-            input: {},
-          }),
-        ],
-      }),
-      Message.tool(
-        ToolResultPart.make({
-          id: `structured-retry-${message.structuredRetry.attempt}`,
-          name: "final_output",
-          resultType: "error",
-          result: message.structuredRetry.message,
-        }),
-      ),
-    ]
-  })
+  messages.flatMap((message) => toLLMMessage(message, model))

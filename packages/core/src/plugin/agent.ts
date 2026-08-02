@@ -16,8 +16,7 @@ const BUILD_SYSTEM =
 
 const slopcodeModeModel = () => ({
   providerID: ProviderV2.ID.slopcode,
-  id: ModelV2.ID.make("gpt-5.5"),
-  variant: ModelV2.VariantID.make("fast"),
+  id: ModelV2.ID.make("gpt-5.6-sol-fast"),
 })
 
 const PROMPT_EXPLORE = `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.

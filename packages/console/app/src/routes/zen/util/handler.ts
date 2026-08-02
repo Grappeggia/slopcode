@@ -62,7 +62,6 @@ import {
   type UsageCutover,
 } from "./usageBatcher"
 import { calculateUsageCost } from "./cost"
-import { sanitizeSafety } from "./safety"
 
 type ZenData = Awaited<ReturnType<typeof ZenData.list>>
 export type HandlerRuntime = {
@@ -73,7 +72,6 @@ export type HandlerRuntime = {
   reload?: boolean
   leaseSeconds?: number
   heartbeatInterval?: number
-  safetySecret?: string
   drainTimeout?: number
   usageCutover?: {
     redis?: Redis
@@ -422,7 +420,7 @@ export async function handler(
 
       const startTimestamp = Date.now()
       const reqUrl = providerInfo.modifyUrl(providerInfo.api, isStream)
-      const converted = providerInfo.modifyBody({
+      const reqPayload = providerInfo.modifyBody({
         ...createBodyConverter(opts.format, providerInfo.format)(body),
         model: providerInfo.model,
         ...(() => {
@@ -445,15 +443,6 @@ export async function handler(
           return replacer(providerInfo.payloadModifier ?? {})
         })(),
       })
-      const reqPayload =
-        providerInfo.format === "openai" &&
-        ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(model.toLowerCase())
-          ? await sanitizeSafety(
-              converted,
-              authInfo?.user.id,
-              runtime.safetySecret ?? Resource.ZEN_SESSION_SECRET.value,
-            )
-          : converted
       const bound = prepareReservation(reqPayload, providerInfo.format, modelInfo.cost, modelInfo.cost200K, {
         limit: modelInfo.limit,
         payloads: [body],
@@ -757,7 +746,7 @@ export async function handler(
       throw new ModelError(
         `${t("zen.api.error.trialEnded", {
           model: modelData.name,
-          link: "https://slopcode.ai/go",
+          link: "https://slopcode.dev/go",
         })}`,
       )
 
@@ -1061,7 +1050,7 @@ export async function handler(
     }
     const reject = (error: unknown, next: Exclude<BillingSource, "anonymous">): never => {
       if (!(error instanceof Billing.UsageReservationError)) throw error
-      const billingUrl = `https://slopcode.ai/workspace/${authInfo.workspaceID}/billing`
+      const billingUrl = `https://slopcode.dev/workspace/${authInfo.workspaceID}/billing`
       if (error.reason === "balance") throw new CreditsError(t("zen.api.error.insufficientBalance", { billingUrl }))
       if (error.reason === "workspace")
         throw new MonthlyLimitError(
@@ -1074,7 +1063,7 @@ export async function handler(
         throw new UserLimitError(
           t("zen.api.error.userMonthlyLimitReached", {
             amount: authInfo.user.monthlyLimit ?? 0,
-            membersUrl: `https://slopcode.ai/workspace/${authInfo.workspaceID}/members`,
+            membersUrl: `https://slopcode.dev/workspace/${authInfo.workspaceID}/members`,
           }),
         )
       if (next === "subscription" && (error.reason === "fixed" || error.reason === "rolling")) {
@@ -1096,7 +1085,7 @@ export async function handler(
         throw new GoUsageLimitError(
           t(message, {
             retryIn: `${Math.ceil(seconds / 3600)}hr`,
-            consoleGoUrl: `https://slopcode.ai/workspace/${authInfo.workspaceID}/go`,
+            consoleGoUrl: `https://slopcode.dev/workspace/${authInfo.workspaceID}/go`,
           }),
           authInfo.workspaceID,
           limit,
@@ -1182,7 +1171,7 @@ export async function handler(
     // Validate lite subscription billing
     if (opts.modelList === "lite" && authInfo.billing.lite && authInfo.lite) {
       try {
-        const consoleGoUrl = `https://slopcode.ai/workspace/${authInfo.workspaceID}/go`
+        const consoleGoUrl = `https://slopcode.dev/workspace/${authInfo.workspaceID}/go`
         const sub = authInfo.lite
         const liteData = LiteData.getLimits()
 
@@ -1253,8 +1242,8 @@ export async function handler(
 
     // Validate pay as you go billing
     const billing = authInfo.billing
-    const billingUrl = `https://slopcode.ai/workspace/${authInfo.workspaceID}/billing`
-    const membersUrl = `https://slopcode.ai/workspace/${authInfo.workspaceID}/members`
+    const billingUrl = `https://slopcode.dev/workspace/${authInfo.workspaceID}/billing`
+    const membersUrl = `https://slopcode.dev/workspace/${authInfo.workspaceID}/members`
     if (!billing.paymentMethodID && billing.balance <= 0)
       throw new CreditsError(t("zen.api.error.noPaymentMethod", { billingUrl }))
     if (billing.balance <= 0) throw new CreditsError(t("zen.api.error.insufficientBalance", { billingUrl }))

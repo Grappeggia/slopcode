@@ -192,6 +192,14 @@ describe("HttpApi authorization middleware", () => {
     }),
   )
 
+  itSecret.live("accepts an internal remote-target capability", () =>
+    Effect.gen(function* () {
+      const response = yield* getProbe({ "x-slopcode-remote-capability": "secret" })
+
+      expect(response.status).toBe(200)
+    }),
+  )
+
   itSecret.live("prefers auth token query credentials over basic auth", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.get(
@@ -237,6 +245,15 @@ describe("HttpApi authorization middleware", () => {
       expect(response.status).toBe(401)
       expect(response.headers["www-authenticate"] ?? "").toContain("Basic")
       expect(body).toEqual({ _tag: "UnauthorizedError", message: "Authentication required" })
+    }),
+  )
+
+  itV2Secret.live("accepts an internal remote-target capability", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.get("/api/probe")
+        .pipe(HttpClientRequest.setHeader("x-slopcode-remote-capability", "secret"), HttpClient.execute)
+
+      expect(response.status).toBe(200)
     }),
   )
 

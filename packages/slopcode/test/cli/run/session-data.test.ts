@@ -110,17 +110,6 @@ function tool(input: { id: string; messageID: string; tool: string; state: Recor
   }
 }
 
-function permission(id: string) {
-  return {
-    id,
-    sessionID: "session-1",
-    permission: "read",
-    patterns: ["README.md"],
-    metadata: {},
-    always: [],
-  }
-}
-
 describe("run session data", () => {
   test("buffers delayed assistant text until the role is known", () => {
     let data = createSessionData()
@@ -223,7 +212,7 @@ describe("run session data", () => {
       patch: { status: "awaiting permission" },
       view: {
         type: "permission",
-        requests: [expect.objectContaining({ id: "perm-1" })],
+        request: expect.objectContaining({ id: "perm-1" }),
       },
     })
 
@@ -241,61 +230,6 @@ describe("run session data", () => {
       view: {
         type: "question",
         request: expect.objectContaining({ id: "question-1" }),
-      },
-    })
-  })
-
-  test("shows one forecast batch but keeps ordinary permission requests FIFO", () => {
-    let data = createSessionData()
-    for (const properties of [
-      {
-        id: "per_forecast_a",
-        sessionID: "session-1",
-        permission: "bash",
-        patterns: ["git status"],
-        metadata: {},
-        always: ["git status"],
-        kind: "forecast" as const,
-        batchID: "pmb_one",
-        reason: "Inspect changes",
-      },
-      {
-        id: "per_forecast_b",
-        sessionID: "session-1",
-        permission: "read",
-        patterns: ["README.md"],
-        metadata: {},
-        always: ["README.md"],
-        kind: "forecast" as const,
-        batchID: "pmb_one",
-        reason: "Review docs",
-      },
-    ]) {
-      data = reduce(data, { type: "permission.asked", properties }).data
-    }
-
-    const blocked = reduce(data, { type: "permission.asked", properties: permission("per_blocking") })
-    expect(blocked.footer).toEqual({
-      patch: { status: "awaiting permission" },
-      view: {
-        type: "permission",
-        requests: [expect.objectContaining({ id: "per_blocking" })],
-      },
-    })
-
-    expect(
-      reduce(blocked.data, {
-        type: "permission.replied",
-        properties: { sessionID: "session-1", requestID: "per_blocking", reply: "reject" },
-      }).footer,
-    ).toEqual({
-      patch: { status: "awaiting permission" },
-      view: {
-        type: "permission",
-        requests: [
-          expect.objectContaining({ id: "per_forecast_a" }),
-          expect.objectContaining({ id: "per_forecast_b" }),
-        ],
       },
     })
   })
@@ -336,16 +270,14 @@ describe("run session data", () => {
     expect(out.footer).toEqual({
       view: {
         type: "permission",
-        requests: [
-          expect.objectContaining({
-            id: "perm-1",
-            metadata: expect.objectContaining({
-              input: {
-                command: "git status --short",
-              },
-            }),
+        request: expect.objectContaining({
+          id: "perm-1",
+          metadata: expect.objectContaining({
+            input: {
+              command: "git status --short",
+            },
           }),
-        ],
+        }),
       },
     })
   })

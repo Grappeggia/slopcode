@@ -9,9 +9,6 @@ import { SessionSchema } from "./schema"
 import { Location } from "../location"
 import { RelativePath } from "../schema"
 import { SessionMessageID } from "./message-id"
-import { ProjectV2 } from "../project"
-import { AgentV2 } from "../agent"
-import { PermissionSchema } from "../permission/schema"
 
 export { FileAttachment }
 
@@ -49,26 +46,6 @@ export const UnknownError = Schema.Struct({
   identifier: "Session.Error.Unknown",
 })
 export type UnknownError = typeof UnknownError.Type
-
-export const Created = EventV2.define({
-  type: "session.next.created",
-  ...options,
-  schema: {
-    ...Base,
-    parentID: SessionSchema.ID.pipe(Schema.optional),
-    projectID: ProjectV2.ID,
-    location: Location.RefJson,
-    subpath: RelativePath.pipe(Schema.optional),
-    title: Schema.String,
-    slug: Schema.String,
-    version: Schema.String,
-    agent: AgentV2.ID.pipe(Schema.optional),
-    model: ModelV2.Ref.pipe(Schema.optional),
-    metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
-    runtime: Schema.Literals(["v1", "v2"]),
-  },
-})
-export type Created = typeof Created.Type
 
 export const AgentSwitched = EventV2.define({
   type: "session.next.agent.switched",
@@ -171,18 +148,6 @@ export const Synthetic = EventV2.define({
 export type Synthetic = typeof Synthetic.Type
 
 export namespace Shell {
-  export const Requested = EventV2.define({
-    type: "session.next.shell.requested",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-      command: Schema.String,
-      resume: Schema.Boolean,
-    },
-  })
-  export type Requested = typeof Requested.Type
-
   export const Started = EventV2.define({
     type: "session.next.shell.started",
     ...options,
@@ -195,66 +160,16 @@ export namespace Shell {
   })
   export type Started = typeof Started.Type
 
-  // Retain the v1 decoder so existing shell history remains replayable.
-  export const EndedV1 = EventV2.define({
+  export const Ended = EventV2.define({
     type: "session.next.shell.ended",
     ...options,
     schema: {
       ...Base,
       callID: Schema.String,
       output: Schema.String,
-    },
-  })
-
-  export const Status = Schema.Literals(["completed", "timed_out", "failed", "interrupted", "unknown"])
-  export type Status = typeof Status.Type
-
-  export const Ended = EventV2.define({
-    type: "session.next.shell.ended",
-    sync: { aggregate: "sessionID", version: 2 },
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-      callID: Schema.String,
-      output: Schema.String,
-      status: Status,
-      exitCode: Schema.Number.pipe(Schema.optional),
-      truncated: Schema.Boolean,
-      stdoutTruncated: Schema.Boolean.pipe(Schema.optional),
-      stderrTruncated: Schema.Boolean.pipe(Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type
-
-  export const Continued = EventV2.define({
-    type: "session.next.shell.continued",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-    },
-  })
-  export type Continued = typeof Continued.Type
-
-  export const ContinuationStarted = EventV2.define({
-    type: "session.next.shell.continuation.started",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-    },
-  })
-  export type ContinuationStarted = typeof ContinuationStarted.Type
-
-  export const ContinuationUnknown = EventV2.define({
-    type: "session.next.shell.continuation.unknown",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-    },
-  })
-  export type ContinuationUnknown = typeof ContinuationUnknown.Type
 }
 
 export namespace Step {
@@ -264,7 +179,6 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
-      rootUserID: SessionMessageID.ID.pipe(Schema.optional),
       agent: Schema.String,
       model: ModelV2.Ref,
       snapshot: Schema.String.pipe(Schema.optional),
@@ -302,209 +216,6 @@ export namespace Step {
       assistantMessageID: SessionMessageID.ID,
       error: UnknownError,
     },
-  })
-  export type Failed = typeof Failed.Type
-}
-
-export namespace Structured {
-  export const FailureReason = Schema.Literals([
-    "invalid-json",
-    "schema",
-    "value-limit",
-    "stale",
-    "missing-final",
-    "interrupted",
-  ])
-
-  export const Dispatched = EventV2.define({
-    type: "session.next.structured.dispatched",
-    ...options,
-    schema: {
-      ...Base,
-      rootUserID: SessionMessageID.ID,
-      attempt: NonNegativeInt,
-      fingerprint: Schema.String,
-    },
-  })
-
-  export const Candidate = EventV2.define({
-    type: "session.next.structured.candidate",
-    ...options,
-    schema: {
-      ...Base,
-      rootUserID: SessionMessageID.ID,
-      assistantMessageID: SessionMessageID.ID,
-      attempt: NonNegativeInt,
-      fingerprint: Schema.String,
-      value: Schema.Unknown.pipe(Schema.optional),
-      invalid: Schema.Boolean,
-      invalidReason: Schema.Literals(["invalid-json", "value-limit"]).pipe(Schema.optional),
-    },
-  })
-
-  export const Retry = EventV2.define({
-    type: "session.next.structured.retry",
-    ...options,
-    schema: {
-      ...Base,
-      rootUserID: SessionMessageID.ID,
-      assistantMessageID: SessionMessageID.ID,
-      attempt: NonNegativeInt,
-      remaining: NonNegativeInt,
-      reason: FailureReason,
-      message: Schema.String,
-    },
-  })
-
-  export const Result = EventV2.define({
-    type: "session.next.structured.result",
-    ...options,
-    schema: {
-      ...Base,
-      rootUserID: SessionMessageID.ID,
-      assistantMessageID: SessionMessageID.ID,
-      value: Schema.Unknown,
-      attempts: NonNegativeInt,
-      retryCount: NonNegativeInt,
-    },
-  })
-
-  export const Failed = EventV2.define({
-    type: "session.next.structured.failed",
-    ...options,
-    schema: {
-      ...Base,
-      rootUserID: SessionMessageID.ID,
-      assistantMessageID: SessionMessageID.ID,
-      reason: FailureReason,
-      attempts: NonNegativeInt,
-      retryCount: NonNegativeInt,
-      exhausted: Schema.Boolean,
-      message: Schema.String,
-    },
-  })
-}
-
-export namespace Execution {
-  export const Message = Schema.String.check(
-    Schema.makeFilter((value) =>
-      new TextEncoder().encode(value).byteLength <= 512 ? undefined : "Expected at most 512 UTF-8 bytes",
-    ),
-  )
-  const Fingerprint = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
-  export const Activity = Schema.Literals(["prompt", "shell", "compaction", "task"])
-  export const Phase = Schema.Literals(["preparing", "provider", "tool", "shell", "compaction", "task", "settling"])
-  export const TerminalCode = Schema.Literals([
-    "interrupted",
-    "restart",
-    "runtime-replaced",
-    "provider-nonretryable",
-    "provider-exhausted",
-    "runner-failure",
-    "step-limit",
-  ])
-  export const RetryCode = Schema.Literals(["rate-limit", "server", "explicit", "dispatch-uncertain"])
-  export type RetryCode = typeof RetryCode.Type
-  export const RetryAction = Schema.Literal("retry-provider")
-  export type RetryAction = typeof RetryAction.Type
-  const Identity = {
-    ...Base,
-    owner: Schema.Literal("v2"),
-    epoch: NonNegativeInt,
-    activityID: SessionMessageID.ID,
-    rootID: SessionMessageID.ID,
-    activity: Activity,
-  }
-  const Active = {
-    ...Identity,
-    phase: Phase,
-    requestAttempt: NonNegativeInt.pipe(Schema.optional),
-    providerAttempt: NonNegativeInt.pipe(Schema.optional),
-    structuredAttempt: NonNegativeInt.pipe(Schema.optional),
-    fingerprint: Fingerprint.pipe(Schema.optional),
-  }
-
-  export const Started = EventV2.define({
-    type: "session.next.execution.started",
-    ...options,
-    schema: Active,
-  })
-  export type Started = typeof Started.Type
-
-  export const ProviderDispatched = EventV2.define({
-    type: "session.next.execution.provider.dispatched",
-    ...options,
-    schema: {
-      ...Active,
-      requestAttempt: NonNegativeInt,
-      providerAttempt: NonNegativeInt,
-      fingerprint: Fingerprint,
-      recovery: Schema.Literals(["retry-provider", "continue-provider", "interrupt"]),
-    },
-  })
-  export type ProviderDispatched = typeof ProviderDispatched.Type
-
-  export const ProviderCompleted = EventV2.define({
-    type: "session.next.execution.provider.completed",
-    ...options,
-    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt, fingerprint: Fingerprint },
-  })
-  export type ProviderCompleted = typeof ProviderCompleted.Type
-
-  export const ContinuationReady = EventV2.define({
-    type: "session.next.execution.continuation.ready",
-    ...options,
-    schema: {
-      ...Active,
-      requestAttempt: NonNegativeInt,
-      providerAttempt: NonNegativeInt,
-      fingerprint: Fingerprint,
-      recovery: Schema.Literal("continue-provider"),
-    },
-  })
-  export type ContinuationReady = typeof ContinuationReady.Type
-
-  export const RetryScheduled = EventV2.define({
-    type: "session.next.execution.retry.scheduled",
-    ...options,
-    schema: {
-      ...Active,
-      requestAttempt: NonNegativeInt,
-      attempt: NonNegativeInt,
-      maxAttempts: NonNegativeInt,
-      nextAt: NonNegativeInt,
-      code: RetryCode,
-      action: RetryAction,
-      message: Message,
-      fingerprint: Fingerprint,
-      recovery: Schema.Literals(["retry-provider", "interrupt"]),
-    },
-  })
-  export type RetryScheduled = typeof RetryScheduled.Type
-
-  export const Succeeded = EventV2.define({
-    type: "session.next.execution.succeeded",
-    ...options,
-    schema: Identity,
-  })
-  export type Succeeded = typeof Succeeded.Type
-
-  const Terminal = {
-    ...Active,
-    code: TerminalCode,
-    message: Message,
-    resultingEpoch: NonNegativeInt,
-  }
-  export const Interrupted = EventV2.define({
-    type: "session.next.execution.interrupted",
-    ...options,
-    schema: Terminal,
-  })
-  export type Interrupted = typeof Interrupted.Type
-  export const Failed = EventV2.define({
-    type: "session.next.execution.failed",
-    ...options,
-    schema: Terminal,
   })
   export type Failed = typeof Failed.Type
 }
@@ -637,24 +348,7 @@ export namespace Tool {
       }),
     },
   })
-  export const CalledV1 = Called
-
-  export const CalledV2 = EventV2.define({
-    type: "session.next.tool.called",
-    registration: "internal",
-    sync: { aggregate: "sessionID", version: 2 },
-    schema: {
-      ...ToolBase,
-      tool: Schema.String,
-      input: Schema.String,
-      toolType: Schema.Literal("custom"),
-      provider: Schema.Struct({
-        executed: Schema.Boolean,
-        metadata: ProviderMetadata.pipe(Schema.optional),
-      }),
-    },
-  })
-  export type Called = typeof Called.Type | typeof CalledV2.Type
+  export type Called = typeof Called.Type
 
   /**
    * Replayable bounded running-tool state. Tools should checkpoint semantic
@@ -704,89 +398,6 @@ export namespace Tool {
   export type Failed = typeof Failed.Type
 }
 
-export namespace Task {
-  const TaskBase = {
-    ...Base,
-    assistantMessageID: SessionMessageID.ID,
-    callID: Schema.String,
-    childSessionID: SessionSchema.ID,
-  }
-
-  export const Prepared = EventV2.define({
-    type: "session.next.task.prepared",
-    ...options,
-    schema: {
-      ...Base,
-      assistantMessageID: SessionMessageID.ID,
-      callID: Schema.String,
-      input: Schema.Unknown,
-      callerAgent: AgentV2.ID,
-      permissions: PermissionSchema.Ruleset,
-      plan: Schema.Struct({
-        mode: Schema.Literals(["function", "code-preferred", "code-only"]).pipe(Schema.optional),
-        shell: Schema.Literal("shell_command").pipe(Schema.optional),
-        patch: Schema.Literal("freeform").pipe(Schema.optional),
-        multiAgent: Schema.Literals(["v1", "v2"]),
-      }),
-      agent: AgentV2.ID,
-      available: Schema.Array(AgentV2.ID),
-      model: ModelV2.Ref,
-      projectID: ProjectV2.ID,
-      location: Location.RefJson,
-      title: Schema.String,
-      ceiling: PermissionSchema.Ruleset,
-    },
-  })
-  export type Prepared = typeof Prepared.Type
-
-  export const Requested = EventV2.define({
-    type: "session.next.task.requested",
-    ...options,
-    schema: {
-      ...TaskBase,
-      promptMessageID: SessionMessageID.ID,
-      description: Schema.String,
-      prompt: Schema.String,
-      agent: Schema.String,
-      model: ModelV2.Ref,
-      command: Schema.String.pipe(Schema.optional),
-      multiAgent: Schema.Literals(["v1", "v2"]),
-      callerAgent: AgentV2.ID,
-      permissions: PermissionSchema.Ruleset,
-      plan: Schema.Struct({
-        mode: Schema.Literals(["function", "code-preferred", "code-only"]).pipe(Schema.optional),
-        shell: Schema.Literal("shell_command").pipe(Schema.optional),
-        patch: Schema.Literal("freeform").pipe(Schema.optional),
-        multiAgent: Schema.Literals(["v1", "v2"]),
-      }),
-      projectID: ProjectV2.ID,
-      location: Location.RefJson,
-      title: Schema.String,
-      ceiling: PermissionSchema.Ruleset,
-    },
-  })
-  export type Requested = typeof Requested.Type
-
-  export const Interrupted = EventV2.define({
-    type: "session.next.task.interrupted",
-    ...options,
-    schema: TaskBase,
-  })
-  export type Interrupted = typeof Interrupted.Type
-
-  /** Process-local execution signal backed by the authoritative Session lane. */
-  export const Execute = EventV2.define({
-    type: "session.next.task.execute",
-    schema: TaskBase,
-  })
-
-  /** Process-local cascade signal emitted only after interruption is durable. */
-  export const Interrupt = EventV2.define({
-    type: "session.next.task.interrupt",
-    schema: TaskBase,
-  })
-}
-
 export const RetryError = Schema.Struct({
   message: Schema.String,
   statusCode: Schema.Finite.pipe(Schema.optional),
@@ -811,39 +422,6 @@ export const Retried = EventV2.define({
 export type Retried = typeof Retried.Type
 
 export namespace Compaction {
-  export const Requested = EventV2.define({
-    type: "session.next.compaction.requested",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-      instruction: Schema.String.pipe(Schema.optional),
-    },
-  })
-  export type Requested = typeof Requested.Type
-
-  export const Skipped = EventV2.define({
-    type: "session.next.compaction.skipped",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-    },
-  })
-  export type Skipped = typeof Skipped.Type
-
-  export const Failed = EventV2.define({
-    type: "session.next.compaction.failed",
-    ...options,
-    schema: {
-      ...Base,
-      messageID: SessionMessageID.ID,
-      reason: Schema.Literals(["provider", "empty", "context", "interrupted", "runtime", "execution"]),
-      message: Schema.String,
-    },
-  })
-  export type Failed = typeof Failed.Type
-
   export const Started = EventV2.define({
     type: "session.next.compaction.started",
     ...options,
@@ -890,11 +468,6 @@ export namespace Compaction {
   export type Ended = typeof Ended.Type
 }
 
-const ShellEndedV1 = Shell.EndedV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
-const ShellEnded = Shell.Ended.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
-const ToolCalledV1 = Tool.Called.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
-const ToolCalled = Tool.CalledV2.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
-
 const DurableDefinitions = [
   AgentSwitched,
   ModelSwitched,
@@ -905,13 +478,8 @@ const DurableDefinitions = [
   InterruptRequested,
   ContextUpdated,
   Synthetic,
-  Shell.Requested,
   Shell.Started,
-  ShellEndedV1,
-  ShellEnded,
-  Shell.Continued,
-  Shell.ContinuationStarted,
-  Shell.ContinuationUnknown,
+  Shell.Ended,
   Step.Started,
   Step.Ended,
   Step.Failed,
@@ -919,46 +487,22 @@ const DurableDefinitions = [
   Text.Ended,
   Tool.Input.Started,
   Tool.Input.Ended,
-  ToolCalledV1,
-  ToolCalled,
+  Tool.Called,
   Tool.Progress,
   Tool.Success,
   Tool.Failed,
-  Task.Prepared,
-  Task.Requested,
-  Task.Interrupted,
   Reasoning.Started,
   Reasoning.Ended,
   Retried,
-  Compaction.Requested,
-  Compaction.Skipped,
-  Compaction.Failed,
   Compaction.Started,
   Compaction.Ended,
 ] as const
 const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta] as const
 
-const StructuredDefinitions = [Structured.Dispatched, Structured.Retry, Structured.Result, Structured.Failed] as const
-const ExecutionDefinitions = [
-  Execution.Started,
-  Execution.ProviderDispatched,
-  Execution.ProviderCompleted,
-  Execution.ContinuationReady,
-  Execution.RetryScheduled,
-  Execution.Succeeded,
-  Execution.Interrupted,
-  Execution.Failed,
-] as const
-const DurableBase = Schema.Union(DurableDefinitions, { mode: "oneOf" })
-const StructuredDurable = Schema.Union(StructuredDefinitions, { mode: "oneOf" })
-const ExecutionDurable = Schema.Union(ExecutionDefinitions, { mode: "oneOf" })
-export const Durable = Schema.Union([DurableBase, StructuredDurable, ExecutionDurable], { mode: "oneOf" }).pipe(
-  Schema.toTaggedUnion("type"),
-)
+export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
 export type DurableEvent = typeof Durable.Type
 
-const AllBase = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" })
-export const All = Schema.Union([AllBase, StructuredDurable, ExecutionDurable], { mode: "oneOf" }).pipe(
+export const All = Schema.Union([...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" }).pipe(
   Schema.toTaggedUnion("type"),
 )
 export type Event = typeof All.Type

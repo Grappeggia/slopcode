@@ -1,5 +1,5 @@
 {
-  "$schema": "https://slopcode.ai/theme.json",
+  "$schema": "https://slopcode.dev/theme.json",
   "defs": {
     "matrixInk0": "#0a0e0a",
     "matrixInk1": "#0e130d",

@@ -82,7 +82,7 @@ export type RunResult = {
   readonly durationMs: number
 }
 
-export type SpawnOpts = { readonly timeoutMs?: number; readonly env?: Record<string, string>; readonly cwd?: string }
+export type SpawnOpts = { readonly timeoutMs?: number; readonly env?: Record<string, string> }
 
 // Typed equivalent of constructing argv for `slopcode run`. New flags should
 // land here so tests stay grep-able and refactor-safe.
@@ -200,7 +200,7 @@ export function withCliFixture<A, E>(
       // consumed as the prompt). The old Process.run wrapper defaulted to
       // ignore; ChildProcess.make defaults to pipe, so we set it explicitly.
       const command = ChildProcess.make("bun", ["run", "--conditions=browser", cliEntry, ...args], {
-        cwd: opts?.cwd ?? home,
+        cwd: home,
         env: { ...env, ...opts?.env },
         extendEnv: true,
         stdin: "ignore",

@@ -141,7 +141,12 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "view",
     label: "View",
     items: [
-      { type: "item", label: "Toggle Sidebar", command: "sidebar.toggle", accelerator: { macos: "Cmd+B" } },
+      {
+        type: "item",
+        label: "Toggle Sidebar",
+        command: "sidebar.toggle",
+        accelerator: { macos: "Cmd+Shift+B" },
+      },
       { type: "item", label: "Toggle Terminal", command: "terminal.toggle", accelerator: { macos: "Ctrl+`" } },
       { type: "item", label: "Toggle File Tree", command: "fileTree.toggle" },
       { type: "separator" },
@@ -200,7 +205,7 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "help",
     label: "Help",
     items: [
-      { type: "item", label: "SlopCode Documentation", href: "https://slopcode.ai/docs" },
+      { type: "item", label: "SlopCode Documentation", href: "https://slopcode.dev/docs" },
       { type: "item", label: "Support Forum", href: "https://discord.com/invite/slopcode" },
       { type: "item", label: "Export Logs...", command: "logs.export" },
       { type: "separator" },

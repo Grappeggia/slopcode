@@ -6,7 +6,6 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { EventTable } from "@slopcode-ai/core/event/sql"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
-import { AppProcess } from "@slopcode-ai/core/process"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Config } from "@slopcode-ai/core/config"
 import { Project } from "@slopcode-ai/core/project"
@@ -18,7 +17,6 @@ import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionRunCoordinator } from "@slopcode-ai/core/session/run-coordinator"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
-import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import * as SessionRunnerLLM from "@slopcode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
@@ -34,7 +32,6 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
-import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -72,15 +69,13 @@ const model = OpenAIChat.route
     generation: { maxTokens: 20, temperature: 0 },
   })
   .model({ id: "gpt-4o-mini" })
-const models = SessionRunnerModel.layerWithModel(() => Effect.succeed(model))
+const models = SessionRunnerModel.layerWith(() => Effect.succeed(model))
 const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
-const status = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(events))
 const runner = SessionRunnerLLM.defaultLayer.pipe(
-  Layer.provide(status),
   Layer.provide(database),
   Layer.provide(store),
   Layer.provide(runtime),
@@ -94,7 +89,6 @@ const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
   Layer.provide(config),
-  Layer.provide(AppProcess.defaultLayer),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(
@@ -104,20 +98,17 @@ const execution = Layer.effect(
       SessionExecution.Service.of({
         resume: coordinator.run,
         wake: coordinator.wake,
-        wait: coordinator.awaitIdle,
         interrupt: coordinator.interrupt,
       }),
     ),
   ),
 ).pipe(Layer.provide(coordinator))
 const sessions = SessionV2.layer.pipe(
-  Layer.provide(status),
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
-  Layer.provide(locationServices),
 )
 const it = testEffect(
   Layer.mergeAll(
@@ -193,15 +184,11 @@ describe("SessionRunnerLLM recorded", () => {
           .all()).map((event) => event.type),
       ).toEqual([
         "session.next.prompt.admitted.1",
-        "session.next.execution.started.1",
         "session.next.prompt.promoted.1",
-        "session.next.execution.provider.dispatched.1",
         "session.next.step.started.1",
         "session.next.text.started.1",
         "session.next.text.ended.1",
         "session.next.step.ended.2",
-        "session.next.execution.provider.completed.1",
-        "session.next.execution.succeeded.1",
       ])
     }),
   )

@@ -108,23 +108,9 @@ export default {
           \`project_id\` text NOT NULL,
           \`action\` text NOT NULL,
           \`resource\` text NOT NULL,
-          \`scope\` text DEFAULT 'project' NOT NULL,
-          \`match\` text DEFAULT 'pattern' NOT NULL,
-          \`session_id\` text,
-          \`directory_id\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
-          CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
-          CONSTRAINT \`permission_session_owner_fk\` FOREIGN KEY (\`session_id\`,\`project_id\`) REFERENCES \`session\`(\`id\`,\`project_id\`) ON DELETE CASCADE,
-          CONSTRAINT "permission_scope_match_check" CHECK(("scope" = 'project' AND "match" = 'pattern' AND "session_id" IS NULL)
-                AND "directory_id" IS NULL
-                OR ("scope" = 'session' AND "match" = 'exact' AND "session_id" IS NOT NULL
-                  AND "directory_id" IS NULL)
-                OR ("scope" = 'global' AND "match" = 'exact' AND "session_id" IS NULL
-                  AND "directory_id" IS NULL AND "project_id" = 'global')
-                OR ("scope" = 'directory' AND "match" = 'pattern' AND "session_id" IS NULL
-                  AND "directory_id" IS NOT NULL AND length("directory_id") = 64
-                  AND "directory_id" NOT GLOB '*[^0-9a-f]*' AND "project_id" = 'global'))
+          CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`
@@ -185,18 +171,6 @@ export default {
           \`replacement_seq\` integer,
           \`revision\` integer DEFAULT 0 NOT NULL,
           CONSTRAINT \`fk_session_context_epoch_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
-        );
-      `)
-      yield* tx.run(`
-        CREATE TABLE \`session_execution_status\` (
-          \`session_id\` text PRIMARY KEY,
-          \`activity_id\` text NOT NULL,
-          \`root_id\` text NOT NULL,
-          \`owner\` text NOT NULL,
-          \`epoch\` integer NOT NULL,
-          \`seq\` integer NOT NULL,
-          \`data\` text NOT NULL,
-          CONSTRAINT \`fk_session_execution_status_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`
@@ -296,22 +270,13 @@ export default {
         `CREATE UNIQUE INDEX \`memory_project_scope_hash_idx\` ON \`memory\` (\`scope\`,\`project_id\`,\`hash\`) WHERE "memory"."project_id" IS NOT NULL;`,
       )
       yield* tx.run(
-        `CREATE UNIQUE INDEX \`permission_project_scope_action_resource_match_idx\` ON \`permission\` (\`project_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NULL AND "permission"."directory_id" IS NULL;`,
-      )
-      yield* tx.run(
-        `CREATE UNIQUE INDEX \`permission_session_scope_action_resource_match_idx\` ON \`permission\` (\`session_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NOT NULL;`,
-      )
-      yield* tx.run(
-        `CREATE UNIQUE INDEX \`permission_directory_scope_action_resource_match_idx\` ON \`permission\` (\`directory_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."directory_id" IS NOT NULL;`,
+        `CREATE UNIQUE INDEX \`permission_project_action_resource_idx\` ON \`permission\` (\`project_id\`,\`action\`,\`resource\`);`,
       )
       yield* tx.run(
         `CREATE INDEX \`message_session_time_created_id_idx\` ON \`message\` (\`session_id\`,\`time_created\`,\`id\`);`,
       )
       yield* tx.run(`CREATE INDEX \`part_message_id_id_idx\` ON \`part\` (\`message_id\`,\`id\`);`)
       yield* tx.run(`CREATE INDEX \`part_session_idx\` ON \`part\` (\`session_id\`);`)
-      yield* tx.run(
-        `CREATE INDEX \`session_execution_status_owner_state_idx\` ON \`session_execution_status\` (\`owner\`,\`epoch\`,\`session_id\`);`,
-      )
       yield* tx.run(
         `CREATE INDEX \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`delivery\`,\`admitted_seq\`);`,
       )
@@ -332,7 +297,6 @@ export default {
       )
       yield* tx.run(`CREATE INDEX \`session_message_time_created_idx\` ON \`session_message\` (\`time_created\`);`)
       yield* tx.run(`CREATE INDEX \`session_project_idx\` ON \`session\` (\`project_id\`);`)
-      yield* tx.run(`CREATE UNIQUE INDEX \`session_id_project_idx\` ON \`session\` (\`id\`,\`project_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)

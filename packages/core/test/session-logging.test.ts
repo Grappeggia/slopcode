@@ -27,23 +27,4 @@ describe("Session logging", () => {
       expect(entries[0]?.cause).not.toContain("[Object")
     })
   }
-
-  test("redacts credential canaries from stable failure logs", async () => {
-    const entries: Array<ReturnType<typeof Logger.formatStructured.log>> = []
-    const logger = Logger.formatStructured.pipe(
-      Logger.map((entry): void => {
-        entries.push(entry)
-      }),
-    )
-    const secret = "stable-log-secret-canary"
-
-    await logFailure(
-      "Failed to drain Session",
-      SessionSchema.ID.make("session-redacted"),
-      Cause.fail(new Error(`Basic ${secret} authorization=\"${secret}\"`)),
-    ).pipe(Effect.provide(Logger.layer([logger])), Effect.runPromise)
-
-    expect(JSON.stringify(entries)).not.toContain(secret)
-    expect(JSON.stringify(entries)).toContain("<redacted>")
-  })
 })

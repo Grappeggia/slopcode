@@ -3,7 +3,6 @@ import { TextAttributes, type InputRenderable, type KeyEvent } from "@opentui/co
 import { useKeyboard, type JSX } from "@opentui/solid"
 import fuzzysort from "fuzzysort"
 import { createEffect, createMemo, createSignal, type Accessor } from "solid-js"
-import { FOOTER_PANEL_CHROME_ROWS } from "./footer.height"
 import { RunFooterMenu, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
 import type { FooterQueuedPrompt, FooterSubagentTab, RunCommand, RunInput, RunProvider } from "./types"
@@ -52,11 +51,12 @@ type QueuedEntry = PanelEntry & {
 type MenuState = ReturnType<typeof createFooterMenuState>
 
 const PANEL_PAD = 2
-export const RUN_COMMAND_LIST_ROWS = 10
-const PANEL_FRAME_ROWS = FOOTER_PANEL_CHROME_ROWS - 1
-export const RUN_COMMAND_PANEL_ROWS = RUN_COMMAND_LIST_ROWS + PANEL_FRAME_ROWS
-export const RUN_SUBAGENT_LIST_ROWS = 12
-export const RUN_SUBAGENT_PANEL_ROWS = RUN_SUBAGENT_LIST_ROWS + PANEL_FRAME_ROWS
+const PANEL_LIST_ROWS = 10
+const PANEL_FRAME_ROWS = 6
+export const RUN_COMMAND_PANEL_ROWS = PANEL_LIST_ROWS + PANEL_FRAME_ROWS
+const SUBAGENT_LIST_ROWS = 12
+export const RUN_SUBAGENT_PANEL_ROWS = SUBAGENT_LIST_ROWS + PANEL_FRAME_ROWS
+const PANEL_PAGE = PANEL_LIST_ROWS - 1
 const PANEL_BORDER = {
   topLeft: "",
   bottomLeft: "",
@@ -155,13 +155,13 @@ function handleKey(input: {
 
   if (name === "pageup") {
     input.event.preventDefault()
-    input.menu.page(-1)
+    input.menu.reveal(input.menu.selected() - PANEL_PAGE)
     return
   }
 
   if (name === "pagedown") {
     input.event.preventDefault()
-    input.menu.page(1)
+    input.menu.reveal(input.menu.selected() + PANEL_PAGE)
     return
   }
 
@@ -349,7 +349,6 @@ export function RunCommandMenuBody(props: {
   onCommand: (name: string) => void
   onNew: () => void
   onExit: () => void
-  rows?: Accessor<number>
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -468,8 +467,7 @@ export function RunCommandMenuBody(props: {
     ]
   })
   const items = createMemo<CommandEntry[]>(() => match(query(), entries()))
-  const limit = () => Math.max(1, Math.min(RUN_COMMAND_LIST_ROWS, props.rows?.() ?? RUN_COMMAND_LIST_ROWS))
-  const menu = createFooterMenuState({ count: () => items().length, limit })
+  const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
   const pick = (item: CommandEntry) => {
     if (item.action === "model") {
       props.onModel()
@@ -561,8 +559,8 @@ export function RunCommandMenuBody(props: {
         items={items}
         selected={menu.selected}
         offset={menu.offset}
-        rows={limit}
-        limit={limit()}
+        rows={() => PANEL_LIST_ROWS}
+        limit={PANEL_LIST_ROWS}
         empty="No results found"
         border={false}
         paddingLeft={PANEL_PAD}
@@ -582,7 +580,6 @@ export function RunSubagentSelectBody(props: {
   onClose: () => void
   onSelect: (sessionID: string) => void
   onRows?: (rows: number) => void
-  rows?: Accessor<number>
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -601,8 +598,7 @@ export function RunSubagentSelectBody(props: {
     }),
   )
   const items = createMemo<SubagentEntry[]>(() => match(query(), entries()))
-  const limit = () => Math.max(1, Math.min(RUN_SUBAGENT_LIST_ROWS, props.rows?.() ?? RUN_SUBAGENT_LIST_ROWS))
-  const menu = createFooterMenuState({ count: () => items().length, limit })
+  const menu = createFooterMenuState({ count: () => items().length, limit: SUBAGENT_LIST_ROWS })
   const select = () => {
     const item = items()[menu.selected()]
     if (!item) {
@@ -629,7 +625,7 @@ export function RunSubagentSelectBody(props: {
   })
 
   createEffect(() => {
-    props.onRows?.(Math.max(1, Math.min(RUN_SUBAGENT_LIST_ROWS, items().length)) + PANEL_FRAME_ROWS)
+    props.onRows?.(menu.rows() + PANEL_FRAME_ROWS)
   })
 
   useKeyboard((event) => {
@@ -661,7 +657,7 @@ export function RunSubagentSelectBody(props: {
         selected={menu.selected}
         offset={menu.offset}
         rows={menu.rows}
-        limit={limit()}
+        limit={SUBAGENT_LIST_ROWS}
         empty="No subagents found"
         border={false}
         paddingLeft={PANEL_PAD}
@@ -680,7 +676,6 @@ export function RunQueuedPromptSelectBody(props: {
   onEdit: (prompt: FooterQueuedPrompt) => void | Promise<void>
   onDelete: (prompt: FooterQueuedPrompt) => void | Promise<void>
   onRows?: (rows: number) => void
-  rows?: Accessor<number>
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -694,8 +689,7 @@ export function RunQueuedPromptSelectBody(props: {
     })),
   )
   const items = createMemo<QueuedEntry[]>(() => match(query(), entries()))
-  const limit = () => Math.max(1, Math.min(RUN_SUBAGENT_LIST_ROWS, props.rows?.() ?? RUN_SUBAGENT_LIST_ROWS))
-  const menu = createFooterMenuState({ count: () => items().length, limit })
+  const menu = createFooterMenuState({ count: () => items().length, limit: SUBAGENT_LIST_ROWS })
   const selected = () => items()[menu.selected()]
 
   createEffect(() => {
@@ -704,7 +698,7 @@ export function RunQueuedPromptSelectBody(props: {
   })
 
   createEffect(() => {
-    props.onRows?.(Math.max(1, Math.min(RUN_SUBAGENT_LIST_ROWS, items().length)) + PANEL_FRAME_ROWS)
+    props.onRows?.(menu.rows() + PANEL_FRAME_ROWS)
   })
 
   useKeyboard((event) => {
@@ -760,7 +754,7 @@ export function RunQueuedPromptSelectBody(props: {
         selected={menu.selected}
         offset={menu.offset}
         rows={menu.rows}
-        limit={limit()}
+        limit={SUBAGENT_LIST_ROWS}
         empty="No queued prompts"
         border={false}
         paddingLeft={PANEL_PAD}
@@ -777,7 +771,6 @@ export function RunSkillSelectBody(props: {
   commands: Accessor<RunCommand[] | undefined>
   onClose: () => void
   onSelect: (name: string) => void
-  rows?: Accessor<number>
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -794,8 +787,7 @@ export function RunSkillSelectBody(props: {
       .sort((a, b) => a.display.localeCompare(b.display)),
   )
   const items = createMemo<SkillEntry[]>(() => match(query(), entries()))
-  const limit = () => Math.max(1, Math.min(RUN_COMMAND_LIST_ROWS, props.rows?.() ?? RUN_COMMAND_LIST_ROWS))
-  const menu = createFooterMenuState({ count: () => items().length, limit })
+  const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
   const select = () => {
     const item = items()[menu.selected()]
     if (!item) {
@@ -838,8 +830,8 @@ export function RunSkillSelectBody(props: {
         items={items}
         selected={menu.selected}
         offset={menu.offset}
-        rows={limit}
-        limit={limit()}
+        rows={() => PANEL_LIST_ROWS}
+        limit={PANEL_LIST_ROWS}
         empty={props.commands() ? "No skills found" : "Skills loading"}
         border={false}
         paddingLeft={PANEL_PAD}
@@ -857,7 +849,6 @@ export function RunVariantSelectBody(props: {
   current: Accessor<string | undefined>
   onClose: () => void
   onSelect: (variant: string | undefined) => void
-  rows?: Accessor<number>
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -880,8 +871,7 @@ export function RunVariantSelectBody(props: {
     })),
   ])
   const items = createMemo<VariantEntry[]>(() => match(query(), entries()))
-  const limit = () => Math.max(1, Math.min(RUN_COMMAND_LIST_ROWS, props.rows?.() ?? RUN_COMMAND_LIST_ROWS))
-  const menu = createFooterMenuState({ count: () => items().length, limit })
+  const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
   const pick = (item: VariantEntry) => {
     props.onSelect(item.variant)
   }
@@ -938,8 +928,8 @@ export function RunVariantSelectBody(props: {
         items={items}
         selected={menu.selected}
         offset={menu.offset}
-        rows={limit}
-        limit={limit()}
+        rows={() => PANEL_LIST_ROWS}
+        limit={PANEL_LIST_ROWS}
         empty="No results found"
         border={false}
         paddingLeft={PANEL_PAD}
@@ -957,7 +947,6 @@ export function RunModelSelectBody(props: {
   current: Accessor<RunInput["model"]>
   onClose: () => void
   onSelect: (model: NonNullable<RunInput["model"]>) => void
-  rows?: Accessor<number>
 }) {
   let field: InputRenderable | undefined
   const [query, setQuery] = createSignal("")
@@ -1003,8 +992,7 @@ export function RunModelSelectBody(props: {
       }),
   )
   const items = createMemo<ModelEntry[]>(() => match(query(), entries()))
-  const limit = () => Math.max(1, Math.min(RUN_COMMAND_LIST_ROWS, props.rows?.() ?? RUN_COMMAND_LIST_ROWS))
-  const menu = createFooterMenuState({ count: () => items().length, limit })
+  const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
   const pick = (item: ModelEntry) => {
     props.onSelect({ providerID: item.providerID, modelID: item.modelID })
   }
@@ -1061,8 +1049,8 @@ export function RunModelSelectBody(props: {
         items={items}
         selected={menu.selected}
         offset={menu.offset}
-        rows={limit}
-        limit={limit()}
+        rows={() => PANEL_LIST_ROWS}
+        limit={PANEL_LIST_ROWS}
         empty={props.providers() ? "No results found" : "Models loading"}
         border={false}
         paddingLeft={PANEL_PAD}

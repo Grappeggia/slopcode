@@ -249,34 +249,6 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
-  it.effect("preserves malformed recorded tool arguments without failing the stream", () =>
-    Effect.gen(function* () {
-      const body = eventStreamBody(
-        [
-          "contentBlockStart",
-          { contentBlockIndex: 0, start: { toolUse: { toolUseId: "call_bad", name: "final_output" } } },
-        ],
-        ["contentBlockDelta", { contentBlockIndex: 0, delta: { toolUse: { input: "{" } } }],
-        ["contentBlockStop", { contentBlockIndex: 0 }],
-        ["messageStop", { stopReason: "tool_use" }],
-      )
-      const response = yield* LLMClient.generate(
-        LLM.updateRequest(baseRequest, {
-          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
-          toolChoice: { type: "required" },
-        }),
-      ).pipe(Effect.provide(fixedBytes(body)))
-
-      expect(response.events).toContainEqual({
-        type: "tool-input-error",
-        id: "call_bad",
-        name: "final_output",
-        reason: "invalid-json",
-      })
-      expect(JSON.stringify(response.events)).not.toContain('input":"{"')
-    }),
-  )
-
   it.effect("assembles streamed tool call input", () =>
     Effect.gen(function* () {
       const body = eventStreamBody(

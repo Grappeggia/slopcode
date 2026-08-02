@@ -35,14 +35,6 @@ async function startListener() {
   return Server.listen({ hostname: "127.0.0.1", port: 0 })
 }
 
-async function startInstrumentedListener(initialized: () => void) {
-  Flag.SLOPCODE_SERVER_PASSWORD = auth.password
-  Flag.SLOPCODE_SERVER_USERNAME = auth.username
-  process.env.SLOPCODE_SERVER_PASSWORD = auth.password
-  process.env.SLOPCODE_SERVER_USERNAME = auth.username
-  return Server.listen({ hostname: "127.0.0.1", port: 0, sessionGraphInitialized: initialized })
-}
-
 async function startNoAuthListener() {
   Flag.SLOPCODE_SERVER_PASSWORD = undefined
   Flag.SLOPCODE_SERVER_USERNAME = auth.username
@@ -140,7 +132,7 @@ async function expectSocketRejected(url: URL, init?: { headers?: Record<string, 
 }
 
 function stop(listener: Awaited<ReturnType<typeof startListener>>, label: string) {
-  return withTimeout(listener.stop(true), 20_000, label)
+  return withTimeout(listener.stop(true), 10_000, label)
 }
 
 function waitForMessage(ws: WebSocket, predicate: (message: string) => boolean) {
@@ -173,29 +165,6 @@ async function openPtySocket(listener: Awaited<ReturnType<typeof startListener>>
 }
 
 describe("HttpApi Server.listen", () => {
-  test("constructs the native session graph lazily once", async () => {
-    let initialized = 0
-    const listener = await startInstrumentedListener(() => initialized++)
-    try {
-      expect(initialized).toBe(0)
-      const status = await fetch(new URL("/status", listener.url))
-      expect(status.status).toBe(200)
-      expect(initialized).toBe(0)
-      const native = await fetch(new URL("/api/session", listener.url), {
-        headers: { authorization: authorization() },
-      })
-      expect(native.status).toBe(200)
-      expect(initialized).toBe(1)
-      const reused = await fetch(new URL("/api/session", listener.url), {
-        headers: { authorization: authorization() },
-      })
-      expect(reused.status).toBe(200)
-      expect(initialized).toBe(1)
-    } finally {
-      await stop(listener, "timed out cleaning up instrumented listener")
-    }
-  })
-
   testPty("serves HTTP routes and upgrades PTY websocket through Server.listen", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     const listener = await startListener()
@@ -256,7 +225,7 @@ describe("HttpApi Server.listen", () => {
 
       await withTimeout(
         Promise.all([listener.stop(true), listener.stop(true)]).then(() => undefined),
-        20_000,
+        10_000,
         "timed out waiting for concurrent listener.stop(true)",
       )
       await withTimeout(socket.closed, 5_000, "timed out waiting for websocket close after concurrent stop")
@@ -278,7 +247,7 @@ describe("HttpApi Server.listen", () => {
       const forced = listener.stop(true)
       await withTimeout(
         Promise.all([graceful, forced]).then(() => undefined),
-        20_000,
+        10_000,
         "timed out waiting for forced listener stop",
       )
       await withTimeout(socket.closed, 5_000, "timed out waiting for websocket close after forced stop")
@@ -295,7 +264,7 @@ describe("HttpApi Server.listen", () => {
     try {
       const socket = await openPtySocket(listener, tmp.path)
       const forced = listener.stop(true)
-      await withTimeout(listener.stop(), 20_000, "timed out waiting for graceful stop after forced stop")
+      await withTimeout(listener.stop(), 10_000, "timed out waiting for graceful stop after forced stop")
       stopped = true
       await withTimeout(forced, 5_000, "timed out waiting for overlapping forced stop")
       await withTimeout(socket.closed, 5_000, "timed out waiting for websocket close before graceful stop resolved")
@@ -306,7 +275,7 @@ describe("HttpApi Server.listen", () => {
 
   test("stop() gracefully closes an idle listener and is repeat-safe", async () => {
     const listener = await startListener()
-    await withTimeout(listener.stop(), 20_000, "timed out waiting for graceful listener.stop()")
+    await withTimeout(listener.stop(), 10_000, "timed out waiting for graceful listener.stop()")
     await withTimeout(listener.stop(), 5_000, "timed out waiting for repeated graceful listener.stop()")
     await expect(
       fetch(new URL(PtyPaths.shells, listener.url), { headers: { authorization: authorization() } }),

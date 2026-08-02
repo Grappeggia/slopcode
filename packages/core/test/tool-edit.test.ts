@@ -2,14 +2,8 @@ import fs from "fs/promises"
 import path from "path"
 import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
-import { AppProcess } from "@slopcode-ai/core/process"
-import { Config } from "@slopcode-ai/core/config"
+import { Effect, Layer } from "effect"
 import { FileMutation } from "@slopcode-ai/core/file-mutation"
-import { EventV2 } from "@slopcode-ai/core/event"
-import { Formatter } from "@slopcode-ai/core/formatter"
-import { MutationEvents } from "@slopcode-ai/core/mutation-events"
-import { PostMutation } from "@slopcode-ai/core/post-mutation"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Location } from "@slopcode-ai/core/location"
 import { LocationMutation } from "@slopcode-ai/core/location-mutation"
@@ -69,89 +63,34 @@ const filesystem = Layer.effect(
               Effect.sync(() => reads++).pipe(Effect.andThen(Effect.suspend(() => afterRead(target, content)))),
             ),
           ),
+      writeWithDirs: (target, content, mode) =>
+        Effect.sync(() => writes.push(target)).pipe(Effect.andThen(fs.writeWithDirs(target, content, mode))),
+      writeFile: (target, content, options) =>
+        Effect.sync(() => writes.push(target)).pipe(Effect.andThen(fs.writeFile(target, content, options))),
+      writeFileString: (target, content, options) =>
+        Effect.sync(() => writes.push(target)).pipe(Effect.andThen(fs.writeFileString(target, content, options))),
     })
   }),
 ).pipe(Layer.provide(FSUtil.defaultLayer))
-const hooks = Layer.succeed(
-  FileMutation.Hooks,
-  FileMutation.Hooks.of({
-    pause: (phase, target) => (phase === "before-write" ? Effect.sync(() => writes.push(target)) : Effect.void),
-  }),
-)
 
-const withTool = <A, E, R>(
-  directory: string,
-  body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>,
-  actual = false,
-) => {
+const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>) => {
   const activeLocation = Layer.succeed(
     Location.Service,
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
   )
   const resolution = LocationMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(activeLocation))
-  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(hooks))
-  const events = EventV2.defaultLayer
-  const reconcile = MutationEvents.layer.pipe(Layer.provide(filesystem))
-  const formatter = actual
-    ? Formatter.layer.pipe(
-        Layer.provide(AppProcess.defaultLayer),
-        Layer.provide(filesystem),
-        Layer.provide(activeLocation),
-        Layer.provide(
-          Layer.succeed(
-            Config.Service,
-            Config.Service.of({
-              entries: () =>
-                Effect.succeed([
-                  new Config.Document({
-                    type: "document",
-                    info: Schema.decodeUnknownSync(Config.Info)({
-                      formatter: {
-                        integration: {
-                          command: [
-                            process.execPath,
-                            "-e",
-                            "require('fs').appendFileSync(process.argv[1],'!')",
-                            "$FILE",
-                          ],
-                          extensions: [".fmt"],
-                        },
-                      },
-                    }),
-                  }),
-                ]),
-            }),
-          ),
-        ),
-      )
-    : Layer.succeed(
-        Formatter.Service,
-        Formatter.Service.of({
-          format: () => Effect.succeed({ matched: false, outcomes: [] }),
-          list: () => Effect.succeed([]),
-          status: () => Effect.succeed([]),
-        }),
-      )
-  const post = PostMutation.layer.pipe(
-    Layer.provide(mutation),
-    Layer.provide(formatter),
-    Layer.provide(filesystem),
-    Layer.provide(events),
-    Layer.provide(reconcile),
-    Layer.provide(PostMutation.diagnosticsLayer),
-  )
+  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem))
   const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(permission))
   const edit = EditTool.layer.pipe(
     Layer.provide(registry),
     Layer.provide(permission),
     Layer.provide(resolution),
     Layer.provide(mutation),
-    Layer.provide(post),
     Layer.provide(filesystem),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
-  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, events, reconcile, post, edit)))
+  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, edit)))
 }
 
 const call = (input: typeof EditTool.Input.Type, id = "call-edit") => ({
@@ -454,38 +393,6 @@ describe("EditTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
-
-  it.live("runs the real formatter layer through edit settlement", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        const file = path.join(tmp.path, "actual.fmt")
-        return Effect.promise(() => fs.writeFile(file, "before")).pipe(
-          Effect.andThen(
-            withTool(
-              tmp.path,
-              (registry) =>
-                Effect.gen(function* () {
-                  expect(
-                    yield* executeTool(
-                      registry,
-                      call({
-                        path: "actual.fmt",
-                        oldString: "before",
-                        newString: "after",
-                      }),
-                    ),
-                  ).toMatchObject({ type: "text" })
-                  expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("after!")
-                }),
-              true,
-            ),
-          ),
-        )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
-  )
 })
 
 test("keeps the locked edit schema, semantics docstring, and deferred TODOs visible", async () => {
@@ -501,6 +408,8 @@ test("keeps the locked edit schema, semantics docstring, and deferred TODOs visi
   )
   for (const todo of [
     "Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.",
+    "Add formatter integration after V2 formatter runtime exists.",
+    "Publish watcher/file-edit events after V2 watcher integration exists.",
     "Add snapshots / undo after design exists.",
     "Add LSP notification and diagnostics after V2 LSP runtime exists.",
   ]) {

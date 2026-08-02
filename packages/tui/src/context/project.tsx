@@ -24,7 +24,6 @@ export const { use: useProject, provider: ProjectProvider } = createSimpleContex
         id: undefined as string | undefined,
         worktree: undefined as string | undefined,
         mainDir: undefined as string | undefined,
-        vcs: undefined as "git" | undefined,
       },
       instance: {
         path: defaultPath,
@@ -49,7 +48,6 @@ export const { use: useProject, provider: ProjectProvider } = createSimpleContex
         setStore("instance", "path", reconcile(instancePath.data || defaultPath))
         setStore("project", "id", project.data?.id)
         setStore("project", "worktree", project.data?.worktree)
-        setStore("project", "vcs", project.data?.vcs)
         setStore("project", "mainDir", directories?.data?.findLast((item) => item.strategy === undefined)?.directory)
       })
     }

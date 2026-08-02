@@ -51,6 +51,7 @@ import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
 import { canonicalSessionRoute, legacySessionRedirect, serverRouteKey } from "./utils/session-route"
+import { draftRouteKey } from "./context/draft-route"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
@@ -107,15 +108,20 @@ function ResolvedDraftRoute(props: { draftID: string }) {
     if (current && current.server !== server.key) server.setActive(current.server)
   })
 
-  // Key on the directory so retargeting the draft's project re-instantiates the
-  // SDK/data providers for the new directory while keeping the same draft id.
+  // A provider is local state for one draft in one directory. Both dimensions
+  // must re-instantiate it: drafts can share a directory and one draft can move.
   const directory = () => draft()?.directory
+  const scope = createMemo(() => {
+    const dir = directory()
+    if (!dir) return
+    return draftRouteKey(props.draftID, dir)
+  })
 
   return (
-    <Show when={directory()} keyed>
-      {(dir) => (
-        <SDKProvider directory={dir}>
-          <DirectoryDataProvider directory={dir} draftID={props.draftID}>
+    <Show when={scope()} keyed>
+      {(_scope) => (
+        <SDKProvider directory={directory()!}>
+          <DirectoryDataProvider directory={directory()!} draftID={props.draftID} model={draft()?.model}>
             <DraftProviders>
               <NewSession />
             </DraftProviders>

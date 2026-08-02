@@ -30,17 +30,7 @@ function runInflight(map: Map<string, Promise<void>>, key: string, task: () => P
   return promise
 }
 
-export const optimisticKey = (directory: string, id: string) => `${directory}\n${id}`
-
-export function selectDirectoryStore<T>(
-  source: string,
-  destination: string | undefined,
-  current: T,
-  child: (dir: string) => T,
-) {
-  if (!destination || destination === source) return current
-  return child(destination)
-}
+const keyFor = (directory: string, id: string) => `${directory}\n${id}`
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
@@ -75,14 +65,6 @@ type OptimisticRemoveInput = {
 type OptimisticItem = {
   message: Message
   parts: Part[]
-}
-
-export function createOptimisticRegistry() {
-  const state = new Map<string, Map<string, OptimisticItem>>()
-  return {
-    state,
-    clear: () => state.clear(),
-  }
 }
 
 type MessagePage = {
@@ -200,15 +182,17 @@ export const createDirSyncContext = (
   type Setter = Child[1]
 
   const current = createMemo(() => serverSync.child(directory, { mcp: true }))
-  const target = (targetDirectory?: string) =>
-    selectDirectoryStore(directory, targetDirectory, current(), (dir) => serverSync.child(dir))
+  const target = (directory?: string) => {
+    if (!directory || directory === directory) return current()
+    return serverSync.child(directory)
+  }
   const absolute = (path: string) => (current()[0].path.directory + "/" + path).replace("//", "/")
   const initialMessagePageSize = 80
   const historyMessagePageSize = 200
   const inflight = new Map<string, Promise<void>>()
   const inflightDiff = new Map<string, Promise<void>>()
   const inflightTodo = new Map<string, Promise<void>>()
-  const optimistic = serverSync.optimistic.state
+  const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const maxDirs = 30
   const seen = new Map<string, Set<string>>()
   const [meta, setMeta] = createStore({
@@ -226,7 +210,7 @@ export const createDirSyncContext = (
   }
 
   const setOptimistic = (directory: string, sessionID: string, item: OptimisticItem) => {
-    const key = optimisticKey(directory, sessionID)
+    const key = keyFor(directory, sessionID)
     const list = optimistic.get(key)
     if (list) {
       list.set(item.message.id, { message: item.message, parts: sortParts(item.parts) })
@@ -236,7 +220,7 @@ export const createDirSyncContext = (
   }
 
   const clearOptimistic = (directory: string, sessionID: string, messageID?: string) => {
-    const key = optimisticKey(directory, sessionID)
+    const key = keyFor(directory, sessionID)
     if (!messageID) {
       optimistic.delete(key)
       return
@@ -249,7 +233,7 @@ export const createDirSyncContext = (
   }
 
   const getOptimistic = (directory: string, sessionID: string) => [
-    ...(optimistic.get(optimisticKey(directory, sessionID))?.values() ?? []),
+    ...(optimistic.get(keyFor(directory, sessionID))?.values() ?? []),
   ]
 
   const seenFor = (directory: string) => {
@@ -280,7 +264,7 @@ export const createDirSyncContext = (
     setMeta(
       produce((draft) => {
         for (const sessionID of sessionIDs) {
-          const key = optimisticKey(directory, sessionID)
+          const key = keyFor(directory, sessionID)
           delete draft.limit[key]
           delete draft.cursor[key]
           delete draft.complete[key]
@@ -340,7 +324,7 @@ export const createDirSyncContext = (
     before?: string
     mode?: "replace" | "prepend"
   }) => {
-    const key = optimisticKey(input.directory, input.sessionID)
+    const key = keyFor(input.directory, input.sessionID)
     if (meta.loading[key]) return
 
     setMeta("loading", key, true)
@@ -451,7 +435,7 @@ export const createDirSyncContext = (
       },
       async sync(sessionID: string, opts?: { force?: boolean }) {
         const [store, setStore] = serverSync.child(directory)
-        const key = optimisticKey(directory, sessionID)
+        const key = keyFor(directory, sessionID)
 
         touch(directory, setStore, sessionID)
 
@@ -529,7 +513,7 @@ export const createDirSyncContext = (
         touch(directory, setStore, sessionID)
         if (store.session_diff[sessionID] !== undefined && !opts?.force) return
 
-        const key = optimisticKey(directory, sessionID)
+        const key = keyFor(directory, sessionID)
         return runInflight(inflightDiff, key, () =>
           retry(() => client.session.diff({ sessionID })).then((diff) => {
             if (!tracked(directory, sessionID)) return
@@ -553,7 +537,7 @@ export const createDirSyncContext = (
           setStore("todo", sessionID, reconcile(cached, { key: "id" }))
         }
 
-        const key = optimisticKey(directory, sessionID)
+        const key = keyFor(directory, sessionID)
         return runInflight(inflightTodo, key, () =>
           retry(() => client.session.todo({ sessionID })).then((todo) => {
             if (!tracked(directory, sessionID)) return
@@ -566,20 +550,20 @@ export const createDirSyncContext = (
       history: {
         more(sessionID: string) {
           const store = current()[0]
-          const key = optimisticKey(directory, sessionID)
+          const key = keyFor(directory, sessionID)
           if (store.message[sessionID] === undefined) return false
           if (meta.limit[key] === undefined) return false
           if (meta.complete[key]) return false
           return !!meta.cursor[key]
         },
         loading(sessionID: string) {
-          const key = optimisticKey(directory, sessionID)
+          const key = keyFor(directory, sessionID)
           return meta.loading[key] ?? false
         },
         async loadMore(sessionID: string, count?: number) {
           const [, setStore] = serverSync.child(directory)
           touch(directory, setStore, sessionID)
-          const key = optimisticKey(directory, sessionID)
+          const key = keyFor(directory, sessionID)
           const step = count ?? historyMessagePageSize
           if (meta.loading[key]) return
           if (meta.complete[key]) return

@@ -265,69 +265,6 @@ describe("RequestExecutor", () => {
     ),
   )
 
-  it.effect("honors request retry budgets without retrying non-retryable 4xx", () =>
-    Effect.gen(function* () {
-      const run = (responses: Response[], retries: number) =>
-        Effect.gen(function* () {
-          const attempts = yield* Ref.make(0)
-          const result = yield* RequestExecutor.Service.use((executor) => executor.execute(request, retries)).pipe(
-            Effect.exit,
-            Effect.provide(countedResponsesLayer(attempts, responses)),
-          )
-          return { result, attempts: yield* Ref.get(attempts) }
-        })
-
-      const recovered = yield* run(
-        [
-          new Response("busy", { status: 503, headers: { "retry-after-ms": "0" } }),
-          new Response("ok", { status: 200 }),
-        ],
-        1,
-      )
-      expect(recovered.result._tag).toBe("Success")
-      expect(recovered.attempts).toBe(2)
-
-      const exhausted = yield* run(
-        [
-          new Response("busy", { status: 503, headers: { "retry-after-ms": "0" } }),
-          new Response("should not run", { status: 200 }),
-        ],
-        0,
-      )
-      expect(exhausted.result._tag).toBe("Failure")
-      expect(exhausted.attempts).toBe(1)
-
-      const rejected = yield* run(
-        [new Response("invalid", { status: 400 }), new Response("should not run", { status: 200 })],
-        2,
-      )
-      expect(rejected.result._tag).toBe("Failure")
-      expect(rejected.attempts).toBe(1)
-    }),
-  )
-
-  it.effect("cancels before a delayed retry starts", () =>
-    Effect.gen(function* () {
-      const attempts = yield* Ref.make(0)
-      return yield* Effect.gen(function* () {
-        const executor = yield* RequestExecutor.Service
-        const fiber = yield* executor.execute(request, 2).pipe(Effect.forkChild)
-        yield* Effect.yieldNow
-        expect(yield* Ref.get(attempts)).toBe(1)
-        yield* Fiber.interrupt(fiber)
-        yield* TestClock.adjust(60_000)
-        expect(yield* Ref.get(attempts)).toBe(1)
-      }).pipe(
-        Effect.provide(
-          countedResponsesLayer(attempts, [
-            new Response("busy", { status: 503 }),
-            new Response("should not run", { status: 200 }),
-          ]),
-        ),
-      )
-    }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
-  )
-
   it.effect("marks 504 and 529 status responses retryable", () =>
     Effect.gen(function* () {
       const failWith = (status: number) =>

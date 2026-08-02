@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
@@ -8,7 +9,6 @@ import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
-import { SessionAutocomplete } from "@/session/autocomplete"
 import { SessionControl } from "@/session/control"
 import { SessionRevert } from "@/session/revert"
 import { SessionSideQuestion } from "@/session/side-question"
@@ -19,7 +19,7 @@ import { Todo } from "@/session/todo"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { Observability } from "@slopcode-ai/core/observability"
+import { NamedError } from "@slopcode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -28,7 +28,6 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
-  AutocompletePayload,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -45,8 +44,6 @@ import {
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import { errorMessage } from "@/util/error"
-import { Config } from "@/config/config"
-import { Flag } from "@slopcode-ai/core/flag/flag"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -68,8 +65,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
-    const autocompleteSvc = yield* SessionAutocomplete.Service
-    const config = yield* Config.Service
     const controlSvc = yield* SessionControl.Service
     const sideSvc = yield* SessionSideQuestion.Service
     const revertSvc = yield* SessionRevert.Service
@@ -80,6 +75,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
+    const events = yield* EventV2Bridge.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -95,24 +91,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const status = Effect.fn("SessionHttpApi.status")(function* () {
-      const result = yield* statusSvc.list()
-      for (const item of yield* controlSvc.statuses()) {
-        result.delete(item.sessionID)
-        if (item.status.type === "busy") result.set(item.sessionID, { type: "busy" })
-        if (item.status.type === "retrying")
-          result.set(item.sessionID, {
-            type: "retry",
-            attempt: item.status.attempt,
-            message: item.status.message,
-            next: item.status.nextAt,
-          })
-      }
-      return Object.fromEntries(result)
+      return Object.fromEntries(yield* statusSvc.list())
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
+
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
     })
@@ -139,44 +124,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       query: typeof MessagesQuery.Type
     }) {
       if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
-      const before = ctx.query.before
-        ? yield* Effect.try({
-            try: () => MessageV2.cursor.decode(ctx.query.before!),
-            catch: () => new HttpApiError.BadRequest({}),
-          })
-        : undefined
-      const projected = yield* controlSvc
-        .messages(ctx.params.sessionID)
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      if (projected) {
-        if (ctx.query.limit === undefined || ctx.query.limit === 0) return projected
-        const rows = projected
-          .filter(
-            (item) =>
-              !before ||
-              item.info.time.created < before.time ||
-              (item.info.time.created === before.time && item.info.id < before.id),
-          )
-          .toSorted(
-            (left, right) =>
-              right.info.time.created - left.info.time.created || right.info.id.localeCompare(left.info.id),
-          )
-        const more = rows.length > ctx.query.limit
-        const selected = rows.slice(0, ctx.query.limit)
-        const items = selected.toReversed()
-        const tail = selected.at(-1)
-        if (!more || !tail) return items
-        const cursor = MessageV2.cursor.encode({ id: tail.info.id, time: tail.info.time.created })
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
-        url.searchParams.set("limit", ctx.query.limit.toString())
-        url.searchParams.set("before", cursor)
-        return HttpServerResponse.jsonUnsafe(items, {
-          headers: {
-            "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
-            Link: `<${url.toString()}>; rel="next"`,
-            "X-Next-Cursor": cursor,
-          },
+      if (ctx.query.before) {
+        const before = ctx.query.before
+        yield* Effect.try({
+          try: () => MessageV2.cursor.decode(before),
+          catch: () => new HttpApiError.BadRequest({}),
         })
       }
       yield* requireSession(ctx.params.sessionID)
@@ -211,14 +163,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      const projected = yield* controlSvc
-        .messages(ctx.params.sessionID)
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      if (projected)
-        return (
-          projected.find((item) => item.info.id === ctx.params.messageID) ?? (yield* new HttpApiError.BadRequest({}))
-        )
-      yield* requireSession(ctx.params.sessionID)
       return yield* SessionError.mapStorageNotFound(
         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )
@@ -368,10 +312,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      const compatible = yield* controlSvc
-        .messages(ctx.params.sessionID)
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      if (!compatible) yield* requireSession(ctx.params.sessionID)
+      yield* requireSession(ctx.params.sessionID)
       const message = yield* controlSvc
         .prompt({
           ...ctx.payload,
@@ -383,56 +324,24 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
-    const autocomplete = Effect.fn("SessionHttpApi.autocomplete")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof AutocompletePayload.Type
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      const model = `${ctx.payload.model.providerID}/${ctx.payload.model.modelID}`
-      const settings = SessionAutocomplete.settings((yield* config.get()).autocomplete)
-      if (Flag.SLOPCODE_DISABLE_AUTOCOMPLETE || !settings.enabled) return { completion: "", model }
-      return yield* autocompleteSvc
-        .complete({
-          sessionID: ctx.params.sessionID,
-          requestID: ctx.payload.requestID,
-          model: ctx.payload.model,
-          prefix: ctx.payload.prefix,
-          settings,
-        })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-    })
-
-    const abortAutocomplete = Effect.fn("SessionHttpApi.abortAutocomplete")(function* (ctx: {
-      params: { sessionID: SessionID; requestID: string }
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      return yield* autocompleteSvc.abort(ctx.params.sessionID, ctx.params.requestID)
-    })
-
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      if (
-        !(yield* controlSvc.messages(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({}))))
+      yield* requireSession(ctx.params.sessionID)
+      yield* controlSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
+            yield* events.publish(Session.Event.Error, {
+              sessionID: ctx.params.sessionID,
+              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+            })
+          }),
+        ),
+        Effect.forkIn(scope, { startImmediately: true }),
       )
-        yield* requireSession(ctx.params.sessionID)
-      return yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          const admitted = yield* controlSvc
-            .admit({ ...ctx.payload, sessionID: ctx.params.sessionID })
-            .pipe(Effect.catchCause(() => Effect.fail(new HttpApiError.BadRequest({}))))
-          if (admitted.owner === "v1" && admitted.resume)
-            yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
-              Effect.tapCause((cause) =>
-                Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause }),
-              ),
-              Effect.ignore,
-              Effect.forkIn(scope, { startImmediately: true }),
-            )
-          return HttpApiSchema.NoContent.make()
-        }),
-      )
+      return HttpApiSchema.NoContent.make()
     })
 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
@@ -452,7 +361,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       const instance = yield* InstanceState.context
       const workspaceID = yield* InstanceState.workspaceID
-      const stream = yield* Observability.preserveStream(
+      return HttpServerResponse.stream(
         sideSvc.ask({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
           Stream.provideService(InstanceRef, instance),
           Stream.provideService(WorkspaceRef, workspaceID),
@@ -467,15 +376,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Stream.pipeThroughChannel(Sse.encode()),
           Stream.encodeText,
         ),
-      )
-      return HttpServerResponse.stream(stream, {
-        contentType: "text/event-stream",
-        headers: {
-          "Cache-Control": "no-cache, no-transform",
-          "X-Accel-Buffering": "no",
-          "X-Content-Type-Options": "nosniff",
+        {
+          contentType: "text/event-stream",
+          headers: {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+          },
         },
-      })
+      )
     })
 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
@@ -504,12 +413,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PermissionResponsePayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const request = yield* permissionSvc.get(ctx.params.permissionID)
-      if (!request || request.sessionID !== ctx.params.sessionID)
-        return yield* new PermissionNotFoundError({
-          requestID: String(ctx.params.permissionID),
-          message: `Permission request not found: ${ctx.params.permissionID}`,
-        })
       yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
         Effect.catchTag("Permission.NotFoundError", (error) =>
           Effect.fail(
@@ -574,8 +477,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("share", share)
       .handle("unshare", unshare)
       .handle("summarize", summarize)
-      .handle("autocomplete", autocomplete)
-      .handle("abortAutocomplete", abortAutocomplete)
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)

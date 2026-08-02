@@ -1,69 +1,47 @@
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
-import { LocationServiceMap, withPluginHost } from "@slopcode-ai/core/location-layer"
-import { PluginPackage } from "@slopcode-ai/core/plugin/package"
-import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import * as Socket from "effect/unstable/socket/Socket"
 import { Layer, Option } from "effect"
 import { Api } from "./api"
 import { ServerAuth } from "./auth"
-import { makeHandlers } from "./handlers"
+import { handlers } from "./handlers"
 import { authorizationLayer } from "./middleware/authorization"
+import { routeLocationLayer } from "./middleware/route-location"
 import { schemaErrorLayer } from "./middleware/schema-error"
-import { PluginServer } from "./plugin"
 
-export function createRoutes(
-  password?: string,
-  host?: Layer.Layer<PluginPackage.Host>,
-  locations?: Layer.Layer<LocationServiceMap>,
-  events: Layer.Layer<EventV2.Service> = EventV2.defaultLayer,
-  database: Layer.Layer<Database.Service> = Database.defaultLayer,
-  saved?: Layer.Layer<PermissionSaved.Service>,
-) {
+type RouteRequirements =
+  | HttpRouter.HttpRouter
+  | HttpRouter.Request<"Error", unknown>
+  | HttpRouter.Request<"GlobalError", unknown>
+  | HttpRouter.Request<"Requires", unknown>
+  | HttpRouter.Request<"GlobalRequires", never>
+
+export function createRoutes(password?: string) {
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(makeHandlers(database, saved)),
+    Layer.provide(handlers),
     Layer.provide(authorizationLayer),
+    Layer.provide(routeLocationLayer),
     Layer.provide(schemaErrorLayer),
     Layer.provide(
       password
         ? ServerAuth.Config.layer({ username: "slopcode", password: Option.some(password) })
         : ServerAuth.Config.defaultLayer,
     ),
-    Layer.provide(locations ?? (host ? withPluginHost(host) : LocationServiceMap.layer)),
-    Layer.provide(database),
-    Layer.provide(events),
+    Layer.provide(LocationServiceMap.layer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(EventV2.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Socket.layerWebSocketConstructorGlobal),
   )
 }
 
 export const routes = createRoutes()
 
-export function webHandler(options?: {
-  readonly baseUrl?: URL | (() => URL)
-  readonly password?: string
-  readonly events?: EventV2.Interface
-}) {
-  let handler: ReturnType<typeof HttpRouter.toWebHandler>["handler"] | undefined
-  const plugins = PluginServer.runtime({
-    baseUrl: options?.baseUrl ?? new URL("http://localhost"),
-    fetch: (request) => {
-      if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
-      const next = request instanceof Request ? new Request(request) : new Request(request)
-      const authorization = ServerAuth.header(
-        options?.password ? { username: "slopcode", password: options.password } : undefined,
-      )
-      if (authorization) next.headers.set("authorization", authorization)
-      return handler(next, undefined as never)
-    },
-  })
-  const routes = createRoutes(
-    options?.password,
-    plugins.layer,
-    undefined,
-    options?.events ? Layer.succeed(EventV2.Service, EventV2.Service.of(options.events)) : EventV2.defaultLayer,
+export const webHandler = () =>
+  HttpRouter.toWebHandler(
+    routes.pipe(Layer.provide(HttpServer.layerServices)) as Layer.Layer<never, never, RouteRequirements>,
+    { disableLogger: true },
   )
-  const app = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), { disableLogger: true })
-  handler = app.handler
-  return Object.assign(app, { pluginHost: plugins, workspace: plugins.workspace })
-}

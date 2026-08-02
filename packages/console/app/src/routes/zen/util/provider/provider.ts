@@ -33,20 +33,6 @@ export type UsageInfo = {
   cacheWrite1hTokens?: number
 }
 
-const finiteToken = (value: number | undefined) =>
-  typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
-
-export function normalizeInputUsage(input: number | undefined, read: number | undefined, write: number | undefined) {
-  const total = finiteToken(input)
-  const cached = Math.min(total, finiteToken(read))
-  const written = Math.min(total - cached, finiteToken(write))
-  return {
-    inputTokens: total - cached - written,
-    cacheReadTokens: read === undefined ? undefined : cached,
-    cacheWriteTokens: write === undefined ? undefined : written,
-  }
-}
-
 export type ProviderHelper = (input: {
   reqModel: string
   providerModel: string

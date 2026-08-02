@@ -35,7 +35,7 @@ slopcode использует [AI SDK](https://ai-sdk.dev/) и [Models.dev](http
 
 ```json title="slopcode.json" {6}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -57,7 +57,7 @@ SlopCode Zen — это список моделей, предоставленн�
 Если вы новичок, мы рекомендуем начать с SlopCode Zen.
 :::
 
-1. Запустите команду `/connect` в TUI, выберите `SlopCode Zen` и перейдите по адресу [slopcode.ai/auth](https://slopcode.ai/zen).
+1. Запустите команду `/connect` в TUI, выберите `SlopCode Zen` и перейдите по адресу [slopcode.dev/auth](https://slopcode.dev/zen).
 
    ```txt
    /connect
@@ -89,7 +89,7 @@ SlopCode Zen — это список моделей, предоставленн�
 SlopCode Go — это недорогой план подписки, обеспечивающий надежный доступ к популярным открытым моделям кодирования, предоставляемым командой slopcode, которые были
 протестированы и проверены на хорошую работу с slopcode.
 
-1. Запустите команду `/connect` в TUI, выберите `SlopCode Go` и перейдите по адресу [slopcode.ai/auth](https://slopcode.ai/zen).
+1. Запустите команду `/connect` в TUI, выберите `SlopCode Go` и перейдите по адресу [slopcode.dev/auth](https://slopcode.dev/zen).
 
    ```txt
    /connect
@@ -194,7 +194,7 @@ SlopCode Go — это недорогой план подписки, обесп�
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -221,7 +221,7 @@ SlopCode Go — это недорогой план подписки, обесп�
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -265,7 +265,7 @@ SlopCode Go — это недорогой план подписки, обесп�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -327,7 +327,7 @@ SlopCode Go — это недорогой план подписки, обесп�
 
 ```json title="slopcode.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -555,7 +555,7 @@ Cloudflare AI Gateway позволяет вам получать доступ к
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "cloudflare-ai-gateway": {
          "models": {
@@ -761,7 +761,7 @@ slopcode использует небольшую модель для некот�
 
 ```json
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "small_model": "gitlab/duo-chat-haiku-4-5",
   "share": "disabled"
 }
@@ -823,7 +823,7 @@ export GITLAB_OAUTH_CLIENT_ID=your_application_id_here
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -840,7 +840,7 @@ export GITLAB_OAUTH_CLIENT_ID=your_application_id_here
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "plugin": ["slopcode-gitlab-plugin"]
 }
 ```
@@ -1023,7 +1023,7 @@ export GITLAB_OAUTH_CLIENT_ID=your_application_id_here
 
 ```jsonc title="~/.config/slopcode/slopcode.jsonc"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1051,7 +1051,7 @@ Helicone поддерживает пользовательские заголо�
 
 ```jsonc title="~/.config/slopcode/slopcode.jsonc"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1105,7 +1105,7 @@ npm install -g slopcode-helicone-session
 
 ```json title="slopcode.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1172,7 +1172,7 @@ IO.NET предлагает 17 моделей, оптимизированных 
 
 ```json title="slopcode.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1293,7 +1293,7 @@ Ollama может автоматически настроиться для slopc
 
 ```json title="slopcode.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1455,7 +1455,7 @@ SlopCode Zen — это список протестированных и про�
 
    ```json title="slopcode.json" {6}
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1470,7 +1470,7 @@ SlopCode Zen — это список протестированных и про�
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1719,7 +1719,7 @@ Vercel AI Gateway позволяет получать доступ к модел
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1829,7 +1829,7 @@ Vercel AI Gateway позволяет получать доступ к модел
 
    ```json title="slopcode.json" {6}
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "zenmux": {
          "models": {
@@ -1897,7 +1897,7 @@ Vercel AI Gateway позволяет получать доступ к модел
 
    ```json title="slopcode.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://slopcode.ai/config.json",
+     "$schema": "https://slopcode.dev/config.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -1935,7 +1935,7 @@ Vercel AI Gateway позволяет получать доступ к модел
 
 ```json title="slopcode.json" {9,11,17-20}
 {
-  "$schema": "https://slopcode.ai/config.json",
+  "$schema": "https://slopcode.dev/config.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

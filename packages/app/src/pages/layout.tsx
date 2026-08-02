@@ -61,6 +61,7 @@ import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { useDialog } from "@slopcode-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@slopcode-ai/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
+import { LAYOUT_KEYBINDS } from "@/context/command-keybinds"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
 import { HelpButton } from "@/components/help-button"
@@ -996,7 +997,7 @@ export default function Layout(props: ParentProps) {
         id: "sidebar.toggle",
         title: language.t("command.sidebar.toggle"),
         category: language.t("command.category.view"),
-        keybind: "mod+b",
+        keybind: LAYOUT_KEYBINDS.sidebar,
         onSelect: () => layout.sidebar.toggle(),
       },
       {
@@ -1129,7 +1130,7 @@ export default function Layout(props: ParentProps) {
         id: "theme.cycle",
         title: language.t("command.theme.cycle"),
         category: language.t("command.category.theme"),
-        keybind: "mod+shift+t",
+        keybind: LAYOUT_KEYBINDS.theme,
         onSelect: () => cycleTheme(1),
       },
     ]
@@ -2345,7 +2346,7 @@ export default function Layout(props: ParentProps) {
       settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
       helpLabel={() => language.t("sidebar.help")}
-      onOpenHelp={() => platform.openLink("https://slopcode.ai/desktop-feedback")}
+      onOpenHelp={() => platform.openLink("https://slopcode.dev/desktop-feedback")}
       renderPanel={() =>
         mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
       }

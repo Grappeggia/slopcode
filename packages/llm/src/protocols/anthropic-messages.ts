@@ -503,16 +503,15 @@ const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (re
 
 const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (request: LLMRequest) {
   const toolChoice = request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined
-  const definitions = yield* ProviderShared.functionToolDefinitions("Anthropic Messages", request)
   const generation = request.generation
   // Allocate the 4-breakpoint budget in invalidation order: tools → system →
   // messages. Tools live highest in the cache hierarchy, so when callers
   // over-mark we keep their tool hints and shed the message-tail ones first.
   const breakpoints = Cache.newBreakpoints(ANTHROPIC_BREAKPOINT_CAP)
   const tools =
-    definitions.length === 0 || request.toolChoice?.type === "none"
+    request.tools.length === 0 || request.toolChoice?.type === "none"
       ? undefined
-      : definitions.map((tool) => lowerTool(breakpoints, tool))
+      : request.tools.map((tool) => lowerTool(breakpoints, tool))
   const system =
     request.system.length === 0
       ? undefined

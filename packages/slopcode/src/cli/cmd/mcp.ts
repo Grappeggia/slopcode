@@ -78,9 +78,10 @@ function validRemoteUrl(value: string) {
 function displayUrl(value: string) {
   try {
     const url = new URL(value)
-    if (url.username) url.username = "redacted"
-    if (url.password) url.password = "redacted"
-    for (const name of new Set(url.searchParams.keys())) url.searchParams.set(name, "redacted")
+    url.username = ""
+    url.password = ""
+    url.search = ""
+    url.hash = ""
     return url.toString()
   } catch {
     return "[invalid URL]"
@@ -179,7 +180,7 @@ export const McpListCommand = effectCmd({
         hint = "\n    " + status.error
       }
 
-      const typeHint = serverConfig.type === "remote" ? serverConfig.url : serverConfig.command.join(" ")
+      const typeHint = serverConfig.type === "remote" ? displayUrl(serverConfig.url) : serverConfig.command.join(" ")
       prompts.log.info(
         `${statusIcon} ${name} ${UI.Style.TEXT_DIM}${statusText}${hint}\n    ${UI.Style.TEXT_DIM}${typeHint}`,
       )
@@ -228,11 +229,10 @@ export const McpAuthCommand = effectCmd({
         const authStatus = auth[name]
         const icon = getAuthStatusIcon(authStatus)
         const statusText = getAuthStatusText(authStatus)
-        const url = cfg.url
         return {
           label: `${icon} ${name} (${statusText})`,
           value: name,
-          hint: url,
+          hint: displayUrl(cfg.url),
         }
       })
 
@@ -305,7 +305,7 @@ export const McpAuthCommand = effectCmd({
   "mcp": {
     "${serverName}": {
       "type": "remote",
-      "url": "${serverConfig.url}",
+      "url": "${displayUrl(serverConfig.url)}",
       "oauth": {
         "clientId": "your-client-id",
         "clientSecret": "your-client-secret"
@@ -720,7 +720,7 @@ export const McpDebugCommand = effectCmd({
         Effect.all({
           authStatus: mcp.getAuthStatus(serverName),
           entry: auth.get({ instance: ctx.directory, name: serverName }, serverConfig.url),
-        }),
+        }).pipe(Effect.provideService(InstanceRef, ctx)),
       )
       const oauthConfig = typeof serverConfig.oauth === "object" ? serverConfig.oauth : undefined
       const url = new URL(serverConfig.url)
@@ -729,11 +729,16 @@ export const McpDebugCommand = effectCmd({
         entry?.tokens?.accessToken,
         entry?.tokens?.refreshToken,
         entry?.clientInfo?.clientSecret,
+        ...Object.values(serverConfig.headers ?? {}),
         url.username,
         url.password,
         ...url.searchParams.values(),
+        url.hash.slice(1),
       ].filter((value): value is string => !!value)
-      const safe = (value: string) => secrets.reduce((result, secret) => result.replaceAll(secret, "[redacted]"), value)
+      const safe = (value: string) =>
+        secrets
+          .toSorted((a, b) => b.length - a.length)
+          .reduce((result, secret) => result.replaceAll(secret, "[redacted]"), value)
 
       prompts.log.info(`Server: ${serverName}`)
       prompts.log.info(`URL: ${displayUrl(serverConfig.url)}`)

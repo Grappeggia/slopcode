@@ -12,7 +12,6 @@ const lock = Semaphore.makeUnsafe(1)
 
 export type Migration = {
   id: string
-  strict?: true
   up: (tx: Transaction) => Effect.Effect<void, unknown>
 }
 
@@ -85,17 +84,6 @@ export function applyOnly(db: Database, input: Migration[]) {
 
     for (const migration of input) {
       if (completed.has(migration.id)) continue
-      if (migration.strict) {
-        yield* db.transaction((tx) =>
-          Effect.gen(function* () {
-            yield* migration.up(tx)
-            yield* tx.run(
-              sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-            )
-          }),
-        )
-        continue
-      }
       yield* migration.up(db as unknown as Transaction).pipe(Effect.catchCause(() => Effect.void))
       yield* db.run(
         sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,

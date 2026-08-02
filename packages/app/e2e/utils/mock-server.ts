@@ -1,4 +1,4 @@
-import type { Page, Request, Route } from "@playwright/test"
+import type { Page, Route } from "@playwright/test"
 
 const emptyList = new Set([
   "/skill",
@@ -19,14 +19,6 @@ export interface MockServerConfig {
   sessions: ({ id: string } & Record<string, unknown>)[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
   events?: () => unknown[]
-  handlers?: {
-    agents?: () => Record<string, unknown>[] | Promise<Record<string, unknown>[]>
-    sessionCreate?: (request: Request) => Record<string, unknown> | Promise<Record<string, unknown>>
-    sessionDelete?: (request: Request) => Record<string, unknown> | Promise<Record<string, unknown>>
-    promptAsync?: (
-      request: Request,
-    ) => { body?: unknown; status?: number } | Promise<{ body?: unknown; status?: number }>
-  }
 }
 
 export async function mockSlopCodeServer(page: Page, config: MockServerConfig) {
@@ -54,15 +46,6 @@ export async function mockSlopCodeServer(page: Page, config: MockServerConfig) {
     const path = url.pathname
     if (path === "/global/event" || path === "/event") return sse(route, config.events?.())
     if (path === "/global/health") return json(route, { healthy: true })
-    if (path === "/agent" && config.handlers?.agents) return json(route, await config.handlers.agents())
-    if (path === "/session" && route.request().method() === "POST" && config.handlers?.sessionCreate)
-      return json(route, await config.handlers.sessionCreate(route.request()))
-    if (/^\/session\/[^/]+$/.test(path) && route.request().method() === "DELETE" && config.handlers?.sessionDelete)
-      return json(route, await config.handlers.sessionDelete(route.request()))
-    if (/^\/session\/[^/]+\/prompt_async$/.test(path) && config.handlers?.promptAsync) {
-      const result = await config.handlers.promptAsync(route.request())
-      return json(route, result.body ?? {}, undefined, result.status)
-    }
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
     if (path in staticRoutes) return json(route, staticRoutes[path])
@@ -87,9 +70,9 @@ export async function mockSlopCodeServer(page: Page, config: MockServerConfig) {
   })
 }
 
-function json(route: Route, body: unknown, headers?: Record<string, string>, status = 200) {
+function json(route: Route, body: unknown, headers?: Record<string, string>) {
   return route.fulfill({
-    status,
+    status: 200,
     contentType: "application/json",
     headers: {
       "access-control-allow-origin": "*",

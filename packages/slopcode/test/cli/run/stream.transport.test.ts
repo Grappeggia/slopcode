@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { createSlopcodeClient, SlopcodeClient, type GlobalEvent } from "@slopcode-ai/sdk/v2"
+import { SlopcodeClient, type GlobalEvent } from "@slopcode-ai/sdk/v2"
 import { createSessionTransport } from "@/cli/cmd/run/stream.transport"
 import type { FooterApi, FooterEvent, LocalReplayRow, RunFilePart, StreamCommit } from "@/cli/cmd/run/types"
 
@@ -40,15 +40,6 @@ async function waitFor<T>(check: () => T | undefined, timeout = 1_000): Promise<
   }
 
   throw new Error("timed out waiting for value")
-}
-
-function bound<T>(task: Promise<T>, label: string) {
-  return Promise.race([
-    task,
-    Bun.sleep(1_000).then(() => {
-      throw new Error(`${label} timed out`)
-    }),
-  ])
 }
 
 function busy(sessionID = "session-1") {
@@ -458,37 +449,6 @@ function sdk(
   spyOn(client.question, "list").mockImplementation(questions)
 
   return client
-}
-
-function httpSdk(stream: EventStream, route: (request: Request) => Response | Promise<Response>) {
-  const client = createSlopcodeClient({
-    baseUrl: "https://slopcode.test",
-    fetch: (async (request: Request) => {
-      const path = new URL(request.url).pathname
-      if (
-        path === "/session/session-1/message" ||
-        path === "/session/session-1/children" ||
-        path === "/permission" ||
-        path === "/question"
-      ) {
-        return Response.json([])
-      }
-
-      return route(request)
-    }) as unknown as typeof globalThis.fetch,
-  })
-  spyOn(client.global, "event").mockImplementation(() => globalSse(wrapGlobalStream(stream)))
-  return client
-}
-
-function httpError(message: string) {
-  return Response.json(
-    {
-      name: "BadRequest",
-      data: { message },
-    },
-    { status: 400 },
-  )
 }
 
 describe("run stream transport", () => {
@@ -1414,9 +1374,7 @@ describe("run stream transport", () => {
       expect(
         await waitFor(() => {
           const item = ui.events.findLast((event) => event.type === "stream.view")
-          return item?.type === "stream.view" &&
-            item.view.type === "permission" &&
-            item.view.requests[0]?.id === "perm-1"
+          return item?.type === "stream.view" && item.view.type === "permission" && item.view.request.id === "perm-1"
             ? item
             : undefined
         }),
@@ -1424,17 +1382,15 @@ describe("run stream transport", () => {
         type: "stream.view",
         view: {
           type: "permission",
-          requests: [
-            expect.objectContaining({
-              id: "perm-1",
-              metadata: {
-                input: {
-                  filePath: "src/run/subagent-data.ts",
-                  diff: "@@ -1 +1 @@",
-                },
+          request: expect.objectContaining({
+            id: "perm-1",
+            metadata: {
+              input: {
+                filePath: "src/run/subagent-data.ts",
+                diff: "@@ -1 +1 @@",
               },
-            }),
-          ],
+            },
+          }),
         },
       })
     } finally {
@@ -2108,272 +2064,6 @@ describe("run stream transport", () => {
     } finally {
       src.close()
       await transport.close()
-    }
-  })
-
-  test("rejects generated prompt and command failures and accepts a later turn", async () => {
-    const src = eventFeed()
-    const ui = footer()
-    let prompts = 0
-    const client = httpSdk(src.stream, (request) => {
-      const path = new URL(request.url).pathname
-      if (path === "/session/session-1/status" || path === "/session/status") {
-        return Response.json({})
-      }
-
-      if (path === "/session/session-1/prompt_async") {
-        prompts += 1
-        queueMicrotask(() => {
-          src.push(busy())
-          src.push(idle())
-        })
-        return prompts === 1 ? httpError("prompt admission failed") : new Response(undefined, { status: 204 })
-      }
-
-      if (path === "/session/session-1/command") {
-        return httpError("command submission failed")
-      }
-
-      throw new Error(`unexpected request: ${request.method} ${path}`)
-    })
-    const transport = await createSessionTransport({
-      sdk: client,
-      sessionID: "session-1",
-      thinking: true,
-      limits: () => ({}),
-      footer: ui.api,
-    })
-
-    try {
-      await expect(
-        transport.runPromptTurn({
-          agent: undefined,
-          model: undefined,
-          variant: undefined,
-          prompt: { text: "fail prompt", parts: [] },
-          files: [],
-          includeFiles: false,
-        }),
-      ).rejects.toThrow("prompt admission failed")
-
-      await expect(
-        transport.runPromptTurn({
-          agent: undefined,
-          model: undefined,
-          variant: undefined,
-          prompt: {
-            text: "/forecast",
-            parts: [],
-            command: { name: "forecast", arguments: "" },
-          },
-          files: [],
-          includeFiles: false,
-        }),
-      ).rejects.toThrow("command submission failed")
-
-      await expect(
-        transport.runPromptTurn({
-          agent: undefined,
-          model: undefined,
-          variant: undefined,
-          prompt: { text: "retry prompt", parts: [] },
-          files: [],
-          includeFiles: false,
-        }),
-      ).resolves.toBeUndefined()
-      expect(prompts).toBe(2)
-    } finally {
-      src.close()
-      await transport.close()
-    }
-  })
-
-  test("rejects generated shell agent lookup failures and accepts a later shell turn", async () => {
-    const src = eventFeed()
-    const ui = footer()
-    let agents = 0
-    let shells = 0
-    const client = httpSdk(src.stream, (request) => {
-      const path = new URL(request.url).pathname
-      if (path === "/session/status") return Response.json({})
-      if (path === "/agent") {
-        agents += 1
-        return agents === 1
-          ? httpError("shell agent lookup failed")
-          : Response.json([{ name: "build", mode: "primary", hidden: false }])
-      }
-      if (path === "/session/session-1/shell") {
-        shells += 1
-        return new Response(undefined, { status: 204 })
-      }
-      throw new Error(`unexpected request: ${request.method} ${path}`)
-    })
-    const transport = await createSessionTransport({
-      sdk: client,
-      sessionID: "session-1",
-      thinking: true,
-      limits: () => ({}),
-      footer: ui.api,
-    })
-    const ctrl = new AbortController()
-    const first = transport.runPromptTurn({
-      agent: undefined,
-      model: undefined,
-      variant: undefined,
-      prompt: { text: "first shell", parts: [], mode: "shell" },
-      files: [],
-      includeFiles: false,
-      signal: ctrl.signal,
-    })
-
-    try {
-      await expect(bound(first, "shell agent lookup rejection")).rejects.toMatchObject({
-        message: "shell agent lookup failed",
-        cause: {
-          status: 400,
-          body: {
-            name: "BadRequest",
-            data: { message: "shell agent lookup failed" },
-          },
-        },
-      })
-      await expect(
-        bound(
-          transport.runPromptTurn({
-            agent: undefined,
-            model: undefined,
-            variant: undefined,
-            prompt: { text: "second shell", parts: [], mode: "shell" },
-            files: [],
-            includeFiles: false,
-          }),
-          "shell retry",
-        ),
-      ).resolves.toBeUndefined()
-      expect(agents).toBe(2)
-      expect(shells).toBe(1)
-    } finally {
-      ctrl.abort()
-      await first.catch(() => {})
-      src.close()
-      await transport.close()
-    }
-  })
-
-  test("rejects generated shell network failures and accepts a later shell turn", async () => {
-    const src = eventFeed()
-    const ui = footer()
-    let shells = 0
-    const fault = new Error("shell transport disconnected")
-    const client = httpSdk(src.stream, (request) => {
-      const path = new URL(request.url).pathname
-      if (path === "/session/status") return Response.json({})
-      if (path === "/session/session-1/shell") {
-        shells += 1
-        if (shells === 1) throw fault
-        return new Response(undefined, { status: 204 })
-      }
-      throw new Error(`unexpected request: ${request.method} ${path}`)
-    })
-    const transport = await createSessionTransport({
-      sdk: client,
-      sessionID: "session-1",
-      thinking: true,
-      limits: () => ({}),
-      footer: ui.api,
-    })
-    const ctrl = new AbortController()
-    const first = transport.runPromptTurn({
-      agent: "build",
-      model: undefined,
-      variant: undefined,
-      prompt: { text: "first shell", parts: [], mode: "shell" },
-      files: [],
-      includeFiles: false,
-      signal: ctrl.signal,
-    })
-
-    try {
-      await expect(bound(first, "shell network rejection")).rejects.toBe(fault)
-      await expect(
-        bound(
-          transport.runPromptTurn({
-            agent: "build",
-            model: undefined,
-            variant: undefined,
-            prompt: { text: "second shell", parts: [], mode: "shell" },
-            files: [],
-            includeFiles: false,
-          }),
-          "shell retry",
-        ),
-      ).resolves.toBeUndefined()
-      expect(shells).toBe(2)
-    } finally {
-      ctrl.abort()
-      await first.catch(() => {})
-      src.close()
-      await transport.close()
-    }
-  })
-
-  test("uses the polling fallback when generated status requests fail", async () => {
-    const src = eventFeed()
-    const ui = footer()
-    let healthy = false
-    let calls = 0
-    let settled = false
-    const client = httpSdk(src.stream, (request) => {
-      const path = new URL(request.url).pathname
-      if (path === "/session/session-1/prompt_async") {
-        queueMicrotask(() => src.push(assistant("msg-status")))
-        return new Response(undefined, { status: 204 })
-      }
-
-      if (path === "/session/status") {
-        calls += 1
-        return healthy ? Response.json({}) : httpError("status unavailable")
-      }
-
-      throw new Error(`unexpected request: ${request.method} ${path}`)
-    })
-    const transport = await createSessionTransport({
-      sdk: client,
-      sessionID: "session-1",
-      thinking: true,
-      limits: () => ({}),
-      footer: ui.api,
-    })
-    const turn = transport
-      .runPromptTurn({
-        agent: undefined,
-        model: undefined,
-        variant: undefined,
-        prompt: { text: "keep running", parts: [] },
-        files: [],
-        includeFiles: false,
-      })
-      .then(() => {
-        settled = true
-      })
-
-    try {
-      await waitFor(() => (calls > 0 ? true : undefined))
-      await Bun.sleep(20)
-      expect(settled).toBe(false)
-
-      healthy = true
-      await Promise.race([
-        turn,
-        Bun.sleep(1_000).then(() => {
-          throw new Error("turn timed out after status recovered")
-        }),
-      ])
-      expect(calls).toBeGreaterThanOrEqual(2)
-    } finally {
-      src.close()
-      await transport.close()
-      await turn.catch(() => {})
     }
   })
 

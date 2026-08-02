@@ -2,12 +2,11 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { ConfigV1 } from "@slopcode-ai/core/v1/config/config"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
-import { and, eq, gt } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@slopcode-ai/core/event"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
-import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@slopcode-ai/core/util/error"
@@ -28,10 +27,7 @@ import { Memory } from "../../src/memory/memory"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { PartTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
-import { ProjectTable } from "@slopcode-ai/core/project/sql"
-import { EventSequenceTable, EventTable } from "@slopcode-ai/core/event/sql"
-import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { SessionMessageTable } from "@slopcode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
@@ -46,7 +42,6 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
-import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
@@ -62,7 +57,6 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
-import { AbsolutePath } from "@slopcode-ai/core/schema"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -115,26 +109,28 @@ function errorTool(parts: SessionV1.Part[]) {
   return part?.state.status === "error" ? (part as ErrorToolPart) : undefined
 }
 
-const mcpService = MCP.Service.of({
-  status: () => Effect.succeed({}),
-  clients: () => Effect.succeed({}),
-  tools: () => Effect.succeed({}),
-  prompts: () => Effect.succeed({}),
-  resources: () => Effect.succeed({}),
-  add: () => Effect.succeed({ status: { status: "disabled" as const } }),
-  connect: () => Effect.void,
-  disconnect: () => Effect.void,
-  getPrompt: () => Effect.succeed(undefined),
-  readResource: () => Effect.succeed(undefined),
-  startAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
-  authenticate: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
-  finishAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
-  removeAuth: () => Effect.void,
-  supportsOAuth: () => Effect.succeed(false),
-  hasStoredTokens: () => Effect.succeed(false),
-  getAuthStatus: () => Effect.succeed("not_authenticated" as const),
-})
-const mcp = Layer.succeed(MCP.Service, mcpService)
+const mcp = Layer.succeed(
+  MCP.Service,
+  MCP.Service.of({
+    status: () => Effect.succeed({}),
+    clients: () => Effect.succeed({}),
+    tools: () => Effect.succeed({}),
+    prompts: () => Effect.succeed({}),
+    resources: () => Effect.succeed({}),
+    add: () => Effect.succeed({ status: { status: "disabled" as const } }),
+    connect: () => Effect.void,
+    disconnect: () => Effect.void,
+    getPrompt: () => Effect.succeed(undefined),
+    readResource: () => Effect.succeed(undefined),
+    startAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+    authenticate: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+    finishAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+    removeAuth: () => Effect.void,
+    supportsOAuth: () => Effect.succeed(false),
+    hasStoredTokens: () => Effect.succeed(false),
+    getAuthStatus: () => Effect.succeed("not_authenticated" as const),
+  }),
+)
 
 const lsp = Layer.succeed(
   LSP.Service,
@@ -168,13 +164,7 @@ const blockingProcessor = Layer.succeed(
   }),
 )
 
-type PromptOptions = {
-  processor?: "blocking"
-  plugin?: Layer.Layer<Plugin.Service>
-  mcp?: Layer.Layer<MCP.Service>
-}
-
-function makePrompt(input?: PromptOptions) {
+function makePrompt(input?: { processor?: "blocking" }) {
   const deps = Layer.mergeAll(
     Session.defaultLayer,
     Snapshot.defaultLayer,
@@ -183,17 +173,16 @@ function makePrompt(input?: PromptOptions) {
     AgentSvc.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
-    input?.plugin ?? Plugin.defaultLayer,
+    Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
     lsp,
-    input?.mcp ?? mcp,
+    mcp,
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     Memory.defaultLayer,
     status,
     Database.defaultLayer,
-    SessionRuntime.defaultLayer,
     EventV2Bridge.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
@@ -226,69 +215,33 @@ function makePrompt(input?: PromptOptions) {
     Layer.provideMerge(deps),
   )
   return SessionPrompt.layer.pipe(
-    Layer.provideMerge(SessionRevert.defaultLayer),
-    Layer.provideMerge(Image.defaultLayer),
-    Layer.provideMerge(summary),
+    Layer.provide(SessionRevert.defaultLayer),
+    Layer.provide(Image.defaultLayer),
+    Layer.provide(summary),
     Layer.provideMerge(run),
     Layer.provideMerge(compact),
     Layer.provideMerge(proc),
     Layer.provideMerge(registry),
     Layer.provideMerge(trunc),
-    Layer.provideMerge(Instruction.defaultLayer),
-    Layer.provideMerge(SystemPrompt.defaultLayer),
-    Layer.provideMerge(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(Instruction.defaultLayer),
+    Layer.provide(SystemPrompt.defaultLayer),
+    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provideMerge(deps),
-    Layer.provideMerge(summary),
+    Layer.provide(summary),
   )
 }
 
-function makeHttp(input?: PromptOptions) {
+function makeHttp(input?: { processor?: "blocking" }) {
   return Layer.mergeAll(TestLLMServer.layer, makePrompt(input))
 }
 
-function makeHttpNoLLMServer(input?: PromptOptions) {
+function makeHttpNoLLMServer(input?: { processor?: "blocking" }) {
   return makePrompt(input)
 }
 
 const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
-const admissionGates: Array<() => Effect.Effect<void>> = []
-const admissionMutations: Array<(output: unknown) => void> = []
-let admissionCalls = 0
-let admissionMcpReads = 0
-let admissionMcpFails = false
-const admissionPlugin = Layer.mock(Plugin.Service)({
-  trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) =>
-    name === "chat.message"
-      ? Effect.sync(() => admissionCalls++).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              admissionMutations.shift()?.(output)
-            }),
-          ),
-          Effect.andThen(Effect.suspend(() => admissionGates.shift()?.() ?? Effect.void)),
-          Effect.as(output),
-        )
-      : Effect.succeed(output),
-  list: () => Effect.succeed([]),
-  init: () => Effect.void,
-})
-const admissionMcp = Layer.succeed(
-  MCP.Service,
-  MCP.Service.of({
-    ...mcpService,
-    readResource: () => {
-      admissionMcpReads++
-      if (admissionMcpFails) throw new Error("resource failed")
-      return Effect.succeed({ contents: [{ uri: "resource://test", text: "resource" }] })
-    },
-  }),
-)
-const admissionServer = testEffect(makeHttpNoLLMServer({ plugin: admissionPlugin, mcp: admissionMcp }))
-const terminalRaceServer = testEffect(
-  makeHttpNoLLMServer({ processor: "blocking", plugin: admissionPlugin, mcp: admissionMcp }),
-)
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
@@ -352,7 +305,7 @@ const ensureDir = Effect.fn("test.ensureDir")(function* (dir: string) {
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
   yield* writeText(
     path.join(dir, "slopcode.json"),
-    JSON.stringify({ $schema: "https://slopcode.ai/config.json", ...config }),
+    JSON.stringify({ $schema: "https://slopcode.dev/config.json", ...config }),
   )
 })
 
@@ -483,823 +436,6 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   return { prompt, run, sessions, chat }
 })
 
-function buildPrompt<E, R>(layer: Layer.Layer<SessionPrompt.Service, E, R>) {
-  return Effect.gen(function* () {
-    const scope = yield* Scope.make()
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-    return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionPrompt.Service)
-  })
-}
-
-function buildDatabase<E, R>(layer: Layer.Layer<Database.Service, E, R>) {
-  return Effect.gen(function* () {
-    const scope = yield* Scope.make()
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-    return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), Database.Service)
-  })
-}
-
-function buildEvents<E, R>(layer: Layer.Layer<EventV2Bridge.Service, E, R>) {
-  return Effect.gen(function* () {
-    const scope = yield* Scope.make()
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-    return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), EventV2Bridge.Service)
-  })
-}
-
-type Requirements<L> = L extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
-type PromptRequirements = Requirements<typeof SessionPrompt.layer>
-
-noLLMServer.instance(
-  "prompt guard rejects before persisting a user message",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, sessions, chat } = yield* boot()
-
-      expect(
-        Exit.isFailure(
-          yield* prompt
-            .prompt(
-              {
-                sessionID: chat.id,
-                agent: "build",
-                noReply: true,
-                parts: [{ type: "text", text: "must not persist" }],
-              },
-              Effect.fail("runtime changed"),
-            )
-            .pipe(Effect.exit),
-        ),
-      ).toBe(true)
-      expect(yield* sessions.messages({ sessionID: chat.id })).toEqual([])
-    }),
-  { config: cfg },
-)
-
-for (const change of ["owner", "state", "epoch"] as const) {
-  noLLMServer.instance(
-    `prompt admission serializes ${change} transitions after validation`,
-    () =>
-      Effect.gen(function* () {
-        const { prompt, sessions, chat } = yield* boot()
-        const { db } = yield* Database.Service
-        const runtime = yield* SessionRuntime.Service
-        const old = yield* user(chat.id, "old")
-        yield* sessions.setRevert({
-          sessionID: chat.id,
-          revert: { messageID: old.id },
-          summary: { additions: 0, deletions: 0, files: 0 },
-        })
-        const checked = yield* Deferred.make<void>()
-        const release = yield* Deferred.make<void>()
-        const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(
-          Effect.tap(() =>
-            Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
-          ),
-          Effect.asVoid,
-        )
-        const admitted = yield* prompt
-          .prompt(
-            {
-              sessionID: chat.id,
-              agent: "build",
-              noReply: true,
-              parts: [{ type: "text", text: change }],
-            },
-            guard,
-          )
-          .pipe(Effect.forkChild)
-        yield* Deferred.await(checked)
-        const transition = yield* runtime
-          .assign({
-            sessionID: chat.id,
-            ...(change === "owner" ? { owner: "v2" as const } : {}),
-            ...(change === "state" ? { state: "migrating" as const } : {}),
-            expectedOwner: "v1",
-            expectedEpoch: 0,
-          })
-          .pipe(Effect.forkChild)
-
-        yield* Effect.sleep("20 millis")
-        expect(transition.pollUnsafe()).toBeUndefined()
-        yield* Deferred.succeed(release, undefined)
-        const message = yield* Fiber.join(admitted)
-        expect((yield* sessions.messages({ sessionID: chat.id })).map((item) => item.info.id)).toEqual([
-          message.info.id,
-        ])
-        expect((yield* sessions.get(chat.id)).revert).toBeUndefined()
-        expect(yield* Fiber.join(transition)).toMatchObject({
-          owner: change === "owner" ? "v2" : "v1",
-          state: change === "state" ? "migrating" : "ready",
-          epoch: 1,
-        })
-        expect(
-          yield* db
-            .select({ agent: SessionTable.agent, model: SessionTable.model })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, chat.id))
-            .get()
-            .pipe(Effect.orDie),
-        ).toMatchObject({ agent: "build", model: { providerID: "test", id: "test-model" } })
-      }),
-    { config: cfg },
-  )
-}
-
-for (const change of ["owner", "state", "epoch"] as const) {
-  admissionServer.instance(
-    `prompt admission leaves no mutation when the ${change} transition wins`,
-    () =>
-      Effect.gen(function* () {
-        const { prompt, sessions, chat } = yield* boot()
-        const { db } = yield* Database.Service
-        const runtime = yield* SessionRuntime.Service
-        const old = yield* user(chat.id, "old")
-        yield* sessions.setRevert({
-          sessionID: chat.id,
-          revert: { messageID: old.id },
-          summary: { additions: 0, deletions: 0, files: 0 },
-        })
-        const messages = yield* sessions.messages({ sessionID: chat.id })
-        const before = yield* db
-          .select({ agent: SessionTable.agent, model: SessionTable.model })
-          .from(SessionTable)
-          .where(eq(SessionTable.id, chat.id))
-          .get()
-          .pipe(Effect.orDie)
-        const release = yield* Deferred.make<void>()
-        admissionCalls = 0
-        const admitted = yield* Deferred.await(release).pipe(
-          Effect.andThen(
-            prompt.prompt(
-              {
-                sessionID: chat.id,
-                agent: "build",
-                model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
-                noReply: true,
-                parts: [{ type: "text", text: change }],
-              },
-              runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid),
-            ),
-          ),
-          Effect.forkChild,
-        )
-        yield* runtime.assign({
-          sessionID: chat.id,
-          ...(change === "owner" ? { owner: "v2" as const } : {}),
-          ...(change === "state" ? { state: "migrating" as const } : {}),
-          expectedOwner: "v1",
-          expectedEpoch: 0,
-        })
-        yield* Deferred.succeed(release, undefined)
-
-        expect(Exit.isFailure(yield* Fiber.await(admitted))).toBe(true)
-        expect(yield* sessions.messages({ sessionID: chat.id })).toEqual(messages)
-        expect((yield* sessions.get(chat.id)).revert).toEqual({ messageID: old.id })
-        expect(
-          yield* db
-            .select({ agent: SessionTable.agent, model: SessionTable.model })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, chat.id))
-            .get()
-            .pipe(Effect.orDie),
-        ).toEqual(before)
-        expect(admissionCalls).toBe(0)
-      }),
-    { config: cfg },
-  )
-}
-
-for (const change of ["owner", "state", "epoch"] as const) {
-  admissionServer.instance(
-    `prompt continues after admission when the ${change} transition follows`,
-    () =>
-      Effect.gen(function* () {
-        const { prompt, sessions, chat } = yield* boot()
-        const events = yield* EventV2Bridge.Service
-        const runtime = yield* SessionRuntime.Service
-        const admitted = yield* Deferred.make<void>()
-        const release = yield* Deferred.make<void>()
-        admissionCalls = 0
-        admissionMcpReads = 0
-        const unsubscribe = yield* events.listen((event) =>
-          event.type === "internal.v1.prompt.requested"
-            ? Deferred.succeed(admitted, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
-            : Effect.void,
-        )
-        yield* Effect.addFinalizer(() => unsubscribe)
-        const fiber = yield* prompt
-          .prompt(
-            {
-              sessionID: chat.id,
-              messageID: MessageID.make(`msg_admitted_${change}`),
-              agent: "build",
-              noReply: true,
-              parts: [
-                { type: "text", text: change },
-                {
-                  type: "file",
-                  mime: "text/plain",
-                  filename: "resource.txt",
-                  url: "mcp://resource",
-                  source: {
-                    type: "resource",
-                    clientName: "test",
-                    uri: "resource://test",
-                    text: { value: "resource", start: 0, end: 8 },
-                  },
-                },
-              ],
-            },
-            runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid),
-          )
-          .pipe(Effect.forkChild)
-        yield* Deferred.await(admitted)
-        expect(admissionMcpReads).toBe(0)
-        expect(admissionCalls).toBe(0)
-        yield* runtime.assign({
-          sessionID: chat.id,
-          ...(change === "owner" ? { owner: "v2" as const } : {}),
-          ...(change === "state" ? { state: "migrating" as const } : {}),
-          expectedOwner: "v1",
-          expectedEpoch: 0,
-        })
-        yield* Deferred.succeed(release, undefined)
-
-        const message = yield* Fiber.join(fiber)
-        expect(String(message.info.id)).toBe(`msg_admitted_${change}`)
-        expect(admissionMcpReads).toBe(1)
-        expect(admissionCalls).toBe(1)
-        expect((yield* sessions.messages({ sessionID: chat.id })).map((item) => item.info.id)).toEqual([
-          message.info.id,
-        ])
-      }),
-    { config: cfg },
-  )
-}
-
-admissionServer.instance(
-  "prompt admission retries are idempotent and reject conflicting identity",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, sessions, chat } = yield* boot()
-      const { db } = yield* Database.Service
-      const events = yield* EventV2Bridge.Service
-      const runtime = yield* SessionRuntime.Service
-      const messageID = MessageID.make("msg_admission_retry")
-      const input = {
-        sessionID: chat.id,
-        messageID,
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text" as const, text: "same" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      let notifications = 0
-      const unsubscribe = yield* events.listen((event) =>
-        event.type === "internal.v1.prompt.requested"
-          ? Effect.sync(() => {
-              notifications++
-            })
-          : Effect.void,
-      )
-      yield* Effect.addFinalizer(() => unsubscribe)
-
-      const first = yield* prompt.prompt(input, guard)
-      yield* runtime.assign({ sessionID: chat.id, state: "migrating", expectedOwner: "v1", expectedEpoch: 0 })
-      const retry = yield* prompt.prompt(input, guard)
-      const conflict = yield* prompt
-        .prompt({ ...input, parts: [{ type: "text", text: "different" }] }, guard)
-        .pipe(Effect.exit)
-
-      expect(retry).toEqual(first)
-      expect(Exit.isFailure(conflict)).toBe(true)
-      expect(admissionCalls).toBe(1)
-      expect(notifications).toBe(1)
-      expect((yield* sessions.messages({ sessionID: chat.id })).map((item) => item.info.id)).toEqual([messageID])
-      expect(
-        (yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, chat.id))
-          .all()
-          .pipe(Effect.orDie)).filter((event) => event.type === "internal.v1.prompt.requested.1"),
-      ).toEqual([
-        expect.objectContaining({
-          aggregate_id: chat.id,
-          data: expect.objectContaining({ messageID, sessionID: chat.id, identity: expect.any(String) }),
-        }),
-      ])
-      expect(
-        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, chat.id)).all().pipe(Effect.orDie))
-          .filter((event) => event.type.startsWith("internal.v1.prompt."))
-          .map((event) => event.type)
-          .toSorted(),
-      ).toEqual(["internal.v1.prompt.completed.1", "internal.v1.prompt.prepared.1", "internal.v1.prompt.requested.1"])
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "concurrent exact prompt retries do not duplicate preparation side effects",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const runtime = yield* SessionRuntime.Service
-      const checked = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_concurrent_retry"),
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text" as const, text: "same" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      admissionGates.push(() =>
-        Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
-      )
-      const first = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* Deferred.await(checked)
-      const retry = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      expect(admissionCalls).toBe(1)
-      expect(retry.pollUnsafe()).toBeUndefined()
-      yield* Effect.sleep("650 millis")
-      expect(retry.pollUnsafe()).toBeUndefined()
-      yield* Deferred.succeed(release, undefined)
-
-      expect(yield* Fiber.join(retry)).toEqual(yield* Fiber.join(first))
-      expect(admissionCalls).toBe(1)
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "independent prompt layers sharing one database coordinate exact retries",
-  () =>
-    Effect.gen(function* () {
-      const { chat } = yield* boot()
-      const context = (yield* Effect.context()) as Context.Context<PromptRequirements>
-      const layer = SessionPrompt.layer.pipe(Layer.provide(Layer.succeedContext(context)))
-      const firstPrompt = yield* buildPrompt(layer)
-      const retryPrompt = yield* buildPrompt(layer)
-      const checked = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_shared_layers"),
-        agent: "build",
-        model: ref,
-        noReply: true,
-        parts: [{ type: "text" as const, text: "shared" }],
-      }
-      admissionCalls = 0
-      admissionGates.push(() =>
-        Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
-      )
-      const first = yield* firstPrompt.prompt(input).pipe(Effect.forkChild)
-      yield* Deferred.await(checked)
-      const retry = yield* retryPrompt.prompt(input).pipe(Effect.forkChild)
-      yield* Effect.sleep("650 millis")
-
-      expect(retry.pollUnsafe()).toBeUndefined()
-      expect(admissionCalls).toBe(1)
-      yield* Deferred.succeed(release, undefined)
-      const original = yield* Fiber.join(first)
-      expect(yield* Fiber.join(retry)).toEqual(original)
-      expect(admissionCalls).toBe(1)
-
-      const after = yield* buildPrompt(layer)
-      expect(yield* after.prompt(input)).toEqual(original)
-      expect(admissionCalls).toBe(1)
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "same prompt ID on separate databases has independent ownership",
-  () =>
-    Effect.gen(function* () {
-      const { chat } = yield* boot()
-      const context = (yield* Effect.context()) as Context.Context<PromptRequirements>
-      const firstDatabase = yield* buildDatabase(Database.layerFromPath(":memory:"))
-      const secondDatabase = yield* buildDatabase(Database.layerFromPath(":memory:"))
-      yield* Effect.forEach([firstDatabase, secondDatabase], (database) =>
-        Effect.gen(function* () {
-          yield* database.db
-            .insert(ProjectTable)
-            .values({ id: chat.projectID!, worktree: AbsolutePath.make(chat.directory), sandboxes: [] })
-            .run()
-          yield* database.db
-            .insert(SessionTable)
-            .values({
-              id: chat.id,
-              project_id: chat.projectID,
-              slug: chat.slug,
-              directory: chat.directory,
-              title: chat.title,
-              version: chat.version,
-              runtime: "v1",
-              runtime_state: "ready",
-              runtime_epoch: 0,
-              agent: "build",
-              model: { providerID: ref.providerID, id: ref.modelID },
-            })
-            .run()
-        }),
-      )
-      const eventLayer = (database: typeof firstDatabase) =>
-        EventV2Bridge.layer.pipe(
-          Layer.provide(EventV2.layer.pipe(Layer.provide(Layer.succeed(Database.Service, database)))),
-        )
-      const firstEvents = yield* buildEvents(eventLayer(firstDatabase))
-      const secondEvents = yield* buildEvents(eventLayer(secondDatabase))
-      const firstPrompt = yield* buildPrompt(
-        SessionPrompt.layer.pipe(
-          Layer.provide(
-            Layer.succeedContext(
-              Context.add(Context.add(context, Database.Service, firstDatabase), EventV2Bridge.Service, firstEvents),
-            ),
-          ),
-        ),
-      )
-      const secondPrompt = yield* buildPrompt(
-        SessionPrompt.layer.pipe(
-          Layer.provide(
-            Layer.succeedContext(
-              Context.add(Context.add(context, Database.Service, secondDatabase), EventV2Bridge.Service, secondEvents),
-            ),
-          ),
-        ),
-      )
-      const firstChecked = yield* Deferred.make<void>()
-      const secondChecked = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_separate_databases"),
-        agent: "build",
-        model: ref,
-        noReply: true,
-        parts: [{ type: "text" as const, text: "separate" }],
-      }
-      admissionCalls = 0
-      admissionGates.push(
-        () => Deferred.succeed(firstChecked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
-        () => Deferred.succeed(secondChecked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
-      )
-      const first = yield* firstPrompt.prompt(input, Effect.void).pipe(Effect.forkChild)
-      yield* Deferred.await(firstChecked)
-      const second = yield* secondPrompt.prompt(input, Effect.void).pipe(Effect.forkChild)
-      yield* Deferred.await(secondChecked)
-
-      expect(admissionCalls).toBe(2)
-      yield* Deferred.succeed(release, undefined)
-      yield* Fiber.join(first)
-      yield* Fiber.join(second)
-      expect(admissionCalls).toBe(2)
-    }),
-  { config: cfg },
-)
-
-terminalRaceServer.instance(
-  "concurrent exact retry joins the admitted reply instead of launching another loop",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const events = yield* EventV2Bridge.Service
-      const runtime = yield* SessionRuntime.Service
-      const completed = yield* Deferred.make<void>()
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_terminal_retry"),
-        agent: "build",
-        parts: [{ type: "text" as const, text: "reply" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      const unsubscribe = yield* events.listen((event) =>
-        event.type === "internal.v1.prompt.completed"
-          ? Deferred.succeed(completed, undefined).pipe(Effect.asVoid)
-          : Effect.void,
-      )
-      yield* Effect.addFinalizer(() => unsubscribe)
-      const first = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* Deferred.await(completed)
-      const retry = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-
-      expect(first.pollUnsafe()).toBeUndefined()
-      expect(retry.pollUnsafe()).toBeUndefined()
-      expect(admissionCalls).toBe(1)
-      yield* prompt.cancel(chat.id)
-      yield* Fiber.join(first)
-      yield* Fiber.join(retry)
-    }),
-  { config: cfg },
-)
-
-terminalRaceServer.instance(
-  "exact replay repairs a durable V1 admission whose loop was never launched",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const runtime = yield* SessionRuntime.Service
-      const status = yield* SessionStatus.Service
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_repair_loop"),
-        agent: "build",
-        parts: [{ type: "text" as const, text: "repair" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-
-      expect(yield* prompt.admit(input, guard)).toMatchObject({
-        message: { info: { id: input.messageID } },
-        resume: true,
-      })
-      const replay = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* pollWithTimeout(
-        status.get(chat.id).pipe(Effect.map((value) => (value.type === "busy" ? true : undefined))),
-        "replayed admission did not launch its missing loop",
-      )
-
-      expect(admissionCalls).toBe(1)
-      yield* prompt.cancel(chat.id)
-      yield* Fiber.join(replay)
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "prompt preparation failure settles a durable terminal failure without retrying side effects",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const { db } = yield* Database.Service
-      const runtime = yield* SessionRuntime.Service
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_plugin_failure"),
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text" as const, text: "fail" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      admissionGates.push(() => Effect.die("plugin failed"))
-
-      const first = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-      yield* runtime.assign({ sessionID: chat.id, state: "migrating", expectedOwner: "v1", expectedEpoch: 0 })
-      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-      const terminal = (yield* db
-        .select()
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, chat.id))
-        .all()
-        .pipe(Effect.orDie)).filter((event) => event.type === "internal.v1.prompt.failed.1")
-
-      expect(Exit.isFailure(first)).toBe(true)
-      expect(Exit.isFailure(retry)).toBe(true)
-      if (Exit.isFailure(first) && Exit.isFailure(retry)) {
-        expect(Cause.squash(first.cause)).toMatchObject({
-          _tag: "SessionPrompt.AdmissionFailed",
-          reason: "preparation",
-        })
-        expect(Cause.squash(retry.cause)).toMatchObject({
-          _tag: "SessionPrompt.AdmissionFailed",
-          reason: "preparation",
-        })
-      }
-      expect(admissionCalls).toBe(1)
-      expect(terminal).toEqual([expect.objectContaining({ data: expect.objectContaining({ reason: "preparation" }) })])
-
-      const recoveredID = MessageID.make("msg_admission_plugin_recovered")
-      const recovered = yield* prompt.prompt({ ...input, messageID: recoveredID })
-      expect(recovered.info.id).toBe(recoveredID)
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "interrupted prompt preparation settles failure before the fiber exits",
-  () =>
-    Effect.gen(function* () {
-      const { chat } = yield* boot()
-      const context = (yield* Effect.context()) as Context.Context<PromptRequirements>
-      const layer = SessionPrompt.layer.pipe(Layer.provide(Layer.succeedContext(context)))
-      const ownerPrompt = yield* buildPrompt(layer)
-      const retryPrompt = yield* buildPrompt(layer)
-      const { db } = yield* Database.Service
-      const runtime = yield* SessionRuntime.Service
-      const checked = yield* Deferred.make<void>()
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_interrupted"),
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text" as const, text: "interrupt" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      admissionGates.push(() => Deferred.succeed(checked, undefined).pipe(Effect.andThen(Effect.never), Effect.asVoid))
-      const fiber = yield* ownerPrompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* Deferred.await(checked)
-      const waiting = yield* retryPrompt.prompt(input, guard).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      expect(waiting.pollUnsafe()).toBeUndefined()
-
-      yield* Fiber.interrupt(fiber)
-      const retry = yield* Fiber.await(waiting)
-      const terminalPrompt = yield* buildPrompt(layer)
-      const terminalRetry = yield* terminalPrompt.prompt(input, guard).pipe(Effect.exit)
-      const terminal = (yield* db
-        .select()
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, chat.id))
-        .all()
-        .pipe(Effect.orDie)).find((event) => event.type === "internal.v1.prompt.failed.1")
-
-      expect(terminal?.data).toMatchObject({ reason: "preparation" })
-      expect(Exit.isFailure(retry)).toBe(true)
-      if (Exit.isFailure(retry)) expect(Cause.squash(retry.cause)).toMatchObject({ reason: "preparation" })
-      expect(Exit.isFailure(terminalRetry)).toBe(true)
-      if (Exit.isFailure(terminalRetry)) {
-        expect(Cause.squash(terminalRetry.cause)).toMatchObject({ reason: "preparation" })
-      }
-      expect(admissionCalls).toBe(1)
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "prompt resource failure settles once without retrying the read or plugin",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const runtime = yield* SessionRuntime.Service
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_resource_failure"),
-        agent: "build",
-        noReply: true,
-        parts: [
-          {
-            type: "file" as const,
-            mime: "text/plain",
-            filename: "resource.txt",
-            url: "mcp://resource",
-            source: {
-              type: "resource" as const,
-              clientName: "test",
-              uri: "resource://test",
-              text: { value: "resource", start: 0, end: 8 },
-            },
-          },
-        ],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      admissionMcpReads = 0
-      admissionMcpFails = true
-      yield* Effect.addFinalizer(() => Effect.sync(() => (admissionMcpFails = false)).pipe(Effect.asVoid))
-
-      const first = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-
-      expect(Exit.isFailure(first)).toBe(true)
-      expect(Exit.isFailure(retry)).toBe(true)
-      if (Exit.isFailure(first) && Exit.isFailure(retry)) {
-        expect(Cause.squash(first.cause)).toMatchObject({ reason: "preparation" })
-        expect(Cause.squash(retry.cause)).toMatchObject({ reason: "preparation" })
-      }
-      expect(admissionMcpReads).toBe(1)
-      expect(admissionCalls).toBe(0)
-    }),
-  { config: cfg },
-)
-
-admissionServer.instance(
-  "prompt persistence failure after preparation settles a typed terminal failure",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const runtime = yield* SessionRuntime.Service
-      const input = {
-        sessionID: chat.id,
-        messageID: MessageID.make("msg_admission_persistence_failure"),
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text" as const, text: "persist" }],
-      }
-      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-      admissionCalls = 0
-      admissionMutations.push((output) => {
-        ;(output as { message: { model: unknown } }).message.model = {}
-      })
-
-      const first = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-
-      expect(Exit.isFailure(first)).toBe(true)
-      expect(Exit.isFailure(retry)).toBe(true)
-      if (Exit.isFailure(first) && Exit.isFailure(retry)) {
-        expect(Cause.squash(first.cause)).toMatchObject({ reason: "persistence" })
-        expect(Cause.squash(retry.cause)).toMatchObject({ reason: "persistence" })
-      }
-      expect(admissionCalls).toBe(1)
-    }),
-  { config: cfg },
-)
-
-for (const window of ["requested", "prepared", "message", "parts"] as const) {
-  admissionServer.instance(
-    `prompt recovery settles the ${window} crash window without rerunning side effects`,
-    () =>
-      Effect.gen(function* () {
-        const { prompt, chat } = yield* boot()
-        const { db } = yield* Database.Service
-        const runtime = yield* SessionRuntime.Service
-        const messageID = MessageID.make(`msg_admission_crash_${window}`)
-        const input = {
-          sessionID: chat.id,
-          messageID,
-          agent: "build",
-          noReply: true,
-          parts: [{ type: "text" as const, text: window }],
-        }
-        const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
-        admissionCalls = 0
-        const original = yield* prompt.prompt(input, guard)
-        const rows = yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, chat.id))
-          .all()
-          .pipe(Effect.orDie)
-        const cutoff = rows.findLast((event) => {
-          if (window === "requested") return event.type === "internal.v1.prompt.requested.1"
-          if (window === "prepared") return event.type === "internal.v1.prompt.prepared.1"
-          if (window === "message") return event.type === "message.updated.1"
-          return event.type === "message.part.updated.1"
-        })
-        if (!cutoff) return yield* Effect.die(`Missing ${window} crash cutoff`)
-        yield* db
-          .delete(EventTable)
-          .where(and(eq(EventTable.aggregate_id, chat.id), gt(EventTable.seq, cutoff.seq)))
-          .run()
-          .pipe(Effect.orDie)
-        yield* db
-          .update(EventSequenceTable)
-          .set({ seq: cutoff.seq })
-          .where(eq(EventSequenceTable.aggregate_id, chat.id))
-          .run()
-          .pipe(Effect.orDie)
-        if (window === "requested" || window === "prepared") {
-          yield* db
-            .delete(SessionMessageTable)
-            .where(eq(SessionMessageTable.id, SessionMessage.ID.make(messageID)))
-            .run()
-            .pipe(Effect.orDie)
-        }
-        if (window !== "parts") {
-          yield* db.delete(PartTable).where(eq(PartTable.message_id, messageID)).run().pipe(Effect.orDie)
-        }
-
-        const recovered = yield* prompt.prompt(input, guard).pipe(Effect.exit)
-        const terminal = (yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, chat.id))
-          .all()
-          .pipe(Effect.orDie)).filter((event) =>
-          ["internal.v1.prompt.completed.1", "internal.v1.prompt.failed.1"].includes(event.type),
-        )
-
-        expect(admissionCalls).toBe(1)
-        if (window === "parts") {
-          expect(Exit.isSuccess(recovered)).toBe(true)
-          if (Exit.isSuccess(recovered)) expect(recovered.value).toEqual(original)
-          expect(terminal.map((event) => event.type)).toEqual(["internal.v1.prompt.completed.1"])
-          return
-        }
-        expect(Exit.isFailure(recovered)).toBe(true)
-        if (Exit.isFailure(recovered)) {
-          expect(Cause.squash(recovered.cause)).toMatchObject({
-            _tag: "SessionPrompt.AdmissionFailed",
-            reason: "unknown",
-          })
-        }
-        expect(terminal.map((event) => event.type)).toEqual(["internal.v1.prompt.failed.1"])
-      }),
-    { config: cfg },
-  )
-}
-
 // Loop semantics
 
 noLLMServer.instance(
@@ -1415,41 +551,6 @@ it.instance("loop surfaces content-filter finishes as session errors", () =>
     expect(result.parts).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "text", text: "partial response" })]),
     )
-  }),
-)
-
-it.instance("loop publishes an unexpected runtime ownership failure exactly once", () =>
-  Effect.gen(function* () {
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const events = yield* EventV2Bridge.Service
-    const { db } = yield* Database.Service
-    const chat = yield* sessions.create({ title: "Pinned" })
-    const errors: unknown[] = []
-    const off = yield* events.listen((event) => {
-      if (event.type !== Session.Event.Error.type) return Effect.void
-      if (
-        typeof event.data === "object" &&
-        event.data !== null &&
-        "sessionID" in event.data &&
-        event.data.sessionID === chat.id
-      )
-        errors.push(event)
-      return Effect.void
-    })
-    yield* prompt.prompt({
-      sessionID: chat.id,
-      agent: "build",
-      noReply: true,
-      parts: [{ type: "text", text: "persist before runtime failure" }],
-    })
-    yield* db.update(SessionTable).set({ runtime: "v2" }).where(eq(SessionTable.id, chat.id)).run()
-
-    const exit = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.exit)
-    yield* off
-
-    expect(Exit.isFailure(exit)).toBeTrue()
-    expect(errors).toHaveLength(1)
   }),
 )
 
@@ -1866,7 +967,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  30_000,
+  10_000,
 )
 
 it.instance(
@@ -1894,67 +995,6 @@ it.instance(
 )
 
 // Cancel semantics
-
-it.instance(
-  "coordinated cancel releases the database before awaiting runner finalizers",
-  () =>
-    Effect.gen(function* () {
-      const { prompt, run, chat } = yield* boot()
-      const runtime = yield* SessionRuntime.Service
-      const { db } = yield* Database.Service
-      const running = yield* Deferred.make<void>()
-      const finalized = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const work = Deferred.succeed(running, undefined).pipe(
-        Effect.andThen(Effect.never),
-        Effect.ensuring(
-          db
-            .update(SessionTable)
-            .set({ title: "cancel-finalized" })
-            .where(eq(SessionTable.id, chat.id))
-            .run()
-            .pipe(
-              Effect.orDie,
-              Effect.andThen(Deferred.succeed(finalized, undefined)),
-              Effect.andThen(Deferred.await(release)),
-            ),
-        ),
-      )
-      const active = yield* run.ensureRunning(chat.id, Effect.die("interrupted"), work).pipe(Effect.forkChild)
-      yield* Deferred.await(running)
-      const current = yield* runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready" })
-      const cancellation = yield* prompt
-        .cancel(chat.id, (take) =>
-          runtime
-            .claim({ sessionID: chat.id, owner: "v1", state: "ready", epoch: current.epoch }, take)
-            .pipe(Effect.asVoid),
-        )
-        .pipe(Effect.forkChild)
-
-      yield* Deferred.await(finalized)
-      expect(cancellation.pollUnsafe()).toBeUndefined()
-      yield* prompt.cancel(chat.id)
-      const transition = yield* runtime.assign({
-        sessionID: chat.id,
-        state: "migrating",
-        expectedOwner: "v1",
-        expectedEpoch: current.epoch,
-      })
-      expect(transition).toMatchObject({ owner: "v1", state: "migrating", epoch: current.epoch + 1 })
-      expect(
-        yield* db.select({ title: SessionTable.title }).from(SessionTable).where(eq(SessionTable.id, chat.id)).get(),
-      ).toEqual({ title: "cancel-finalized" })
-
-      yield* Deferred.succeed(release, undefined)
-      yield* Fiber.join(cancellation)
-      yield* Fiber.await(active)
-      yield* prompt.cancel(chat.id)
-      expect(
-        yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, chat.id)).get(),
-      ).toEqual({ id: chat.id })
-    }),
-  5_000,
-)
 
 it.instance(
   "cancel interrupts loop and resolves with an assistant message",

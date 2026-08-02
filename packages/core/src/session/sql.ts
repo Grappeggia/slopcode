@@ -62,7 +62,6 @@ export const SessionTable = sqliteTable(
   },
   (table) => [
     index("session_project_idx").on(table.project_id),
-    uniqueIndex("session_id_project_idx").on(table.id, table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
   ],
@@ -166,23 +165,6 @@ export const SessionInputTable = sqliteTable(
     uniqueIndex("session_input_session_admitted_seq_idx").on(table.session_id, table.admitted_seq),
     uniqueIndex("session_input_session_promoted_seq_idx").on(table.session_id, table.promoted_seq),
   ],
-)
-
-export const SessionExecutionStatusTable = sqliteTable(
-  "session_execution_status",
-  {
-    session_id: text()
-      .$type<SessionSchema.ID>()
-      .primaryKey()
-      .references(() => SessionTable.id, { onDelete: "cascade" }),
-    activity_id: text().$type<SessionMessage.ID>().notNull(),
-    root_id: text().$type<SessionMessage.ID>().notNull(),
-    owner: text().$type<"v2">().notNull(),
-    epoch: integer().notNull(),
-    seq: integer().notNull(),
-    data: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
-  },
-  (table) => [index("session_execution_status_owner_state_idx").on(table.owner, table.epoch, table.session_id)],
 )
 
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {

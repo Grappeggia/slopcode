@@ -366,8 +366,8 @@ function ApiMethod(props: ApiMethodProps) {
     <DialogPrompt
       title={props.title}
       placeholder="API key"
-      description={() =>
-        ({
+      description={
+        {
           slopcode: (
             <box gap={1}>
               <text fg={theme.textMuted}>
@@ -375,7 +375,7 @@ function ApiMethod(props: ApiMethodProps) {
                 key.
               </text>
               <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://slopcode.ai/zen</span> to get a key
+                Go to <span style={{ fg: theme.primary }}>https://slopcode.dev/zen</span> to get a key
               </text>
             </box>
           ),
@@ -386,11 +386,11 @@ function ApiMethod(props: ApiMethodProps) {
                 with generous usage limits.
               </text>
               <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://slopcode.ai/go</span> and enable SlopCode Go
+                Go to <span style={{ fg: theme.primary }}>https://slopcode.dev/go</span> and enable SlopCode Go
               </text>
             </box>
           ),
-        })[props.providerID] ?? undefined
+        }[props.providerID] ?? undefined
       }
       onConfirm={async (value) => {
         if (!value) return

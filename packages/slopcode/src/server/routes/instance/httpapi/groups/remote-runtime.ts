@@ -1,4 +1,6 @@
 import { Schema } from "effect"
+import { PtyID } from "@slopcode-ai/core/pty/schema"
+import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
@@ -51,7 +53,9 @@ export const RemoteAgentConfig = Schema.Struct({
   profile: Schema.optional(SafeConfigValue),
   sandbox: Schema.optional(Schema.Literals(["read-only", "workspace-write", "danger-full-access"])),
   approval: Schema.optional(Schema.Literals(["untrusted", "on-failure", "on-request", "never"])),
-  permissionMode: Schema.optional(Schema.Literals(["default", "acceptEdits", "plan", "bypassPermissions"])),
+  permissionMode: Schema.optional(
+    Schema.Literals(["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]),
+  ),
 })
 
 export const RemoteAgent = Schema.Literals(["codex-cli", "opencode-cli", "claude-code"])
@@ -61,6 +65,11 @@ export const RemoteAgentPrompt = Schema.Struct({
   prompt: Schema.String.check(Schema.isMinLength(1))
     .check(Schema.isMaxLength(MAX_CODEX_PROMPT_LENGTH))
     .check(Schema.isPattern(/^[^\0]*$/)),
+  config: Schema.optional(RemoteAgentConfig),
+})
+
+export const RemoteAgentSessionCreate = Schema.Struct({
+  agent: RemoteAgent,
   config: Schema.optional(RemoteAgentConfig),
 })
 
@@ -94,6 +103,12 @@ export const RemoteAgentResult = Schema.Struct({
   exitCode: Schema.optional(Schema.Number.check(Schema.isInt())),
 })
 
+export const RemoteAgentSession = Schema.Struct({
+  ptyID: PtyID,
+  directory: BoundedPath,
+  ...PtyTicket.ConnectToken.fields,
+})
+
 export const RemoteAgentCommand = Schema.Struct({
   name: BoundedCommandName,
   description: Schema.optional(BoundedCommandDescription),
@@ -112,6 +127,7 @@ export const RemoteRuntimePaths = {
   browse: "/remote/ssh/browse",
   prompt: "/remote/agent/prompt",
   catalog: "/remote/agent/catalog",
+  session: "/remote/agent/session",
 } as const
 
 export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
@@ -143,6 +159,19 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
               "Run the fixed Codex, OpenCode, or Claude Code CLI executable selected by the caller in a bounded folder within the current authenticated instance directory with bounded output and allowlisted configuration.",
           }),
         ),
+        HttpApiEndpoint.post("session", RemoteRuntimePaths.session, {
+          query: RemoteAgentPromptQuery,
+          payload: RemoteAgentSessionCreate,
+          success: described(RemoteAgentSession, "Interactive remote agent session"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "remote.agent.session",
+            summary: "Open an interactive remote agent session",
+            description:
+              "Start the selected fixed agent CLI in a bounded remote folder and return a single-use PTY WebSocket ticket.",
+          }),
+        ),
         HttpApiEndpoint.get("catalog", RemoteRuntimePaths.catalog, {
           query: RemoteAgentCatalogQuery,
           success: described(RemoteAgentCatalog, "Remote agent version and command catalog"),
@@ -170,10 +199,12 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
 export type RemoteAgentConfig = typeof RemoteAgentConfig.Type
 export type RemoteAgent = typeof RemoteAgent.Type
 export type RemoteAgentPrompt = typeof RemoteAgentPrompt.Type
+export type RemoteAgentSessionCreate = typeof RemoteAgentSessionCreate.Type
 export type RemoteAgentPromptQuery = typeof RemoteAgentPromptQuery.Type
 export type RemoteAgentCatalogQuery = typeof RemoteAgentCatalogQuery.Type
 export type RemoteBrowseQuery = typeof RemoteBrowseQuery.Type
 export type RemoteBrowseResult = typeof RemoteBrowseResult.Type
 export type RemoteAgentResult = typeof RemoteAgentResult.Type
+export type RemoteAgentSession = typeof RemoteAgentSession.Type
 export type RemoteAgentCommand = typeof RemoteAgentCommand.Type
 export type RemoteAgentCatalog = typeof RemoteAgentCatalog.Type

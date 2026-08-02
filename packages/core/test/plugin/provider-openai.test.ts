@@ -1,14 +1,11 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber } from "effect"
+import { Effect } from "effect"
 import { Catalog } from "@slopcode-ai/core/catalog"
 import { Integration } from "@slopcode-ai/core/integration"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { OpenAIPlugin } from "@slopcode-ai/core/plugin/provider/openai"
-import { browser } from "@slopcode-ai/core/plugin/provider/openai-auth"
-import { getUsage } from "@slopcode-ai/core/plugin/provider/openai-usage"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
-import { Credential } from "@slopcode-ai/core/credential"
 import { fakeSelectorSdk, it, model, provider } from "./provider-helper"
 
 function add(plugin: PluginV2.Interface, integrations: Integration.Interface) {
@@ -19,131 +16,6 @@ function add(plugin: PluginV2.Interface, integrations: Integration.Interface) {
 }
 
 describe("OpenAIPlugin", () => {
-  it.live("refreshes V2 OAuth while preserving method and metadata", () =>
-    Effect.gen(function* () {
-      const original = globalThis.fetch
-      globalThis.fetch = async () =>
-        Response.json({
-          access_token: `e30.${Buffer.from(JSON.stringify({ chatgpt_account_id: "account-new" })).toString("base64url")}.signature`,
-          expires_in: 60,
-        })
-      yield* Effect.addFinalizer(() => Effect.sync(() => void (globalThis.fetch = original)))
-      const methodID = Integration.MethodID.make("chatgpt-browser")
-      const refreshed = yield* browser.refresh!(
-        new Credential.OAuth({
-          type: "oauth",
-          methodID,
-          access: "expired",
-          refresh: "refresh-preserved",
-          expires: 0,
-          metadata: { accountID: "account-old", workspace: "work" },
-        }),
-      )
-
-      expect(refreshed).toMatchObject({
-        type: "oauth",
-        methodID,
-        access: expect.any(String),
-        refresh: "refresh-preserved",
-        metadata: { accountID: "account-new", workspace: "work" },
-      })
-    }),
-  )
-
-  it.live("aborts interrupted V2 OAuth refreshes and retries", () =>
-    Effect.gen(function* () {
-      const original = globalThis.fetch
-      let started: (() => void) | undefined
-      const ready = new Promise<void>((resolve) => {
-        started = resolve
-      })
-      let calls = 0
-      let aborts = 0
-      globalThis.fetch = async (_input, init) => {
-        calls++
-        if (calls > 1) return Response.json({ access_token: "access-retried", expires_in: 60 })
-        return new Promise((_resolve, reject) => {
-          started!()
-          init?.signal?.addEventListener(
-            "abort",
-            () => {
-              aborts++
-              reject(init.signal?.reason)
-            },
-            { once: true },
-          )
-        })
-      }
-      yield* Effect.addFinalizer(() => Effect.sync(() => void (globalThis.fetch = original)))
-      const value = new Credential.OAuth({
-        type: "oauth",
-        methodID: Integration.MethodID.make("chatgpt-browser"),
-        access: "expired",
-        refresh: "refresh-aborted",
-        expires: 0,
-      })
-      const interrupted = yield* browser.refresh!(value).pipe(Effect.forkChild)
-      yield* Effect.promise(() => ready)
-      yield* Fiber.interrupt(interrupted)
-
-      expect(aborts).toBe(1)
-      expect((yield* browser.refresh!(value)).access).toBe("access-retried")
-      expect(calls).toBe(2)
-    }),
-  )
-
-  it.live("keeps a shared refresh alive when one waiter cancels", () =>
-    Effect.gen(function* () {
-      const original = globalThis.fetch
-      let started: (() => void) | undefined
-      const ready = new Promise<void>((resolve) => {
-        started = resolve
-      })
-      let release: ((response: Response) => void) | undefined
-      let calls = 0
-      let aborts = 0
-      globalThis.fetch = async (input, init) => {
-        if (!String(input).endsWith("/oauth/token")) return Response.json({ plan_type: "plus" })
-        calls++
-        return new Promise((resolve, reject) => {
-          release = resolve
-          started!()
-          init?.signal?.addEventListener(
-            "abort",
-            () => {
-              aborts++
-              reject(init.signal?.reason)
-            },
-            { once: true },
-          )
-        })
-      }
-      yield* Effect.addFinalizer(() => Effect.sync(() => void (globalThis.fetch = original)))
-      const value = new Credential.OAuth({
-        type: "oauth",
-        methodID: Integration.MethodID.make("chatgpt-browser"),
-        access: "expired",
-        refresh: "refresh-shared-cancel",
-        expires: 0,
-      })
-      const interrupted = yield* browser.refresh!(value).pipe(Effect.forkChild)
-      yield* Effect.promise(() => ready)
-      const saved: unknown[] = []
-      const usage = getUsage(
-        { type: "oauth", access: "expired", refresh: value.refresh, expires: 0 },
-        async (auth) => void saved.push(auth),
-        { now: () => 1000 },
-      )
-      yield* Fiber.interrupt(interrupted)
-
-      expect(aborts).toBe(0)
-      release!(Response.json({ access_token: "access-shared", refresh_token: "refresh-next", expires_in: 60 }))
-      expect((yield* Effect.promise(() => usage)).status).toBe("oauth")
-      expect(calls).toBe(1)
-      expect(saved).toEqual([{ type: "oauth", access: "access-shared", refresh: "refresh-next", expires: 61_000 }])
-    }),
-  )
-
   it.effect("registers browser and headless ChatGPT OAuth methods", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service

@@ -13,9 +13,9 @@
 // All state logic lives in question.shared.ts as a pure state machine.
 // This component just renders it and dispatches keyboard events.
 /** @jsxImportSource @opentui/solid */
-import { CliRenderEvents, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
-import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import type { TextareaRenderable } from "@opentui/core"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js"
 import type { QuestionRequest } from "@slopcode-ai/sdk/v2"
 import {
   createQuestionBodyState,
@@ -40,7 +40,6 @@ import {
   questionTabs,
   questionTotal,
 } from "./question.shared"
-import { footerPanelExpandedMinimum } from "./footer.height"
 import { footerWidthPolicy } from "./footer.width"
 import type { RunFooterTheme } from "./theme"
 import type { QuestionReject, QuestionReply } from "./types"
@@ -51,7 +50,6 @@ export function RunQuestionBody(props: {
   onReply: (input: QuestionReply) => void | Promise<void>
   onReject: (input: QuestionReject) => void | Promise<void>
 }) {
-  const renderer = useRenderer()
   const dims = useTerminalDimensions()
   const [state, setState] = createSignal(createQuestionBodyState(props.request.id))
   const single = createMemo(() => questionSingle(props.request))
@@ -62,15 +60,6 @@ export function RunQuestionBody(props: {
   const picked = createMemo(() => questionPicked(state()))
   const disabled = createMemo(() => state().submitting)
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
-  const height = createMemo(() => {
-    dims()
-    return renderer.height
-  })
-  const compact = createMemo(
-    () =>
-      narrow() &&
-      height() < footerPanelExpandedMinimum({ type: "question", narrow: true, single: questionSingle(props.request) }),
-  )
   const verb = createMemo(() => {
     if (confirm()) {
       return "submit"
@@ -87,128 +76,9 @@ export function RunQuestionBody(props: {
     return "confirm"
   })
   let area: TextareaRenderable | undefined
-  let scroll: ScrollBoxRenderable | undefined
-  const row = (tab: number, selected: number) => `run-question-${props.request.id}-${tab}-${selected}`
-  const context = createMemo(() => `${props.request.id}:${state().tab}`)
-  const target = createMemo(() => (confirm() ? undefined : row(state().tab, state().selected)))
-  let generation = 0
-  let layout = ""
-  let disposed = false
-  let resize: { id: string; generation: number } | undefined
-  let rendered: { layout: string; id: string | undefined; visible: boolean } | undefined
-  let prior: typeof rendered
-  const frames = new Set<number>()
-  const exposed = new Set<string>()
-  const geometry = () => `${dims().width}:${dims().height}:${height()}`
-
-  const shown = (selected: number) => {
-    const body = scroll
-    if (!body || body.isDestroyed) return false
-    const item = body.content.findDescendantById(row(state().tab, selected))
-    if (!item) return false
-    return item.y >= body.viewport.y && item.y < body.viewport.y + body.viewport.height
-  }
-
-  const expose = () => {
-    if (disposed) return
-    exposed.clear()
-    if (confirm()) return
-    Array.from({ length: questionTotal(props.request, state()) }, (_, selected) => selected)
-      .filter(shown)
-      .forEach((selected) => exposed.add(row(state().tab, selected)))
-    const id = target()
-    const next = { layout: geometry(), id, visible: Boolean(id && exposed.has(id)) }
-    if (rendered?.layout !== next.layout) prior = rendered
-    rendered = next
-    const pending = resize
-    resize = undefined
-    if (!pending || generation !== pending.generation || target() !== pending.id) return
-    if (!exposed.has(pending.id)) follow(pending.id)
-  }
-
-  const reveal = (id: string) => {
-    const body = scroll
-    if (!body || body.isDestroyed) return
-    const item = body.content.findDescendantById(id)
-    if (!item) return
-    if (item.y < body.viewport.y) {
-      body.scrollBy(item.y - body.viewport.y)
-      return
-    }
-    const bottom = body.viewport.y + body.viewport.height
-    if (item.y >= bottom) body.scrollBy(item.y - bottom + 1)
-  }
-
-  const defer = (fn: () => void) => {
-    if (disposed) return
-    let frame: number | undefined
-    let complete = false
-    frame = requestAnimationFrame(() => {
-      complete = true
-      if (frame !== undefined) frames.delete(frame)
-      if (!disposed) fn()
-    })
-    if (!complete && frame !== undefined) frames.add(frame)
-  }
-
-  renderer.on(CliRenderEvents.FRAME, expose)
-  onCleanup(() => {
-    disposed = true
-    generation++
-    resize = undefined
-    frames.forEach(cancelAnimationFrame)
-    frames.clear()
-    renderer.off(CliRenderEvents.FRAME, expose)
-    area = undefined
-    scroll = undefined
-  })
-
-  const follow = (id: string) => {
-    if (disposed) return
-    exposed.clear()
-    const current = ++generation
-    const run = () => {
-      if (!disposed && current === generation && target() === id) reveal(id)
-    }
-    run()
-    defer(() => {
-      run()
-      defer(run)
-    })
-  }
 
   createEffect(() => {
     setState((prev) => questionSync(prev, props.request.id))
-  })
-
-  createEffect(() => {
-    context()
-    exposed.clear()
-    generation++
-    scroll?.scrollTo(0)
-  })
-
-  createEffect(() => {
-    const next = geometry()
-    const resized = layout !== "" && layout !== next
-    layout = next
-    const id = target()
-    if (resized) {
-      const before = rendered?.layout === next ? prior : rendered
-      if (!id || before?.id !== id || !before.visible) {
-        resize = undefined
-        return
-      }
-      if (rendered?.layout === next) {
-        resize = undefined
-        if (!rendered.visible) follow(id)
-        return
-      }
-      resize = { id, generation }
-      return
-    }
-    if (!id || (exposed.has(id) && shown(state().selected))) return
-    follow(id)
   })
 
   const setTab = (tab: number) => {
@@ -216,9 +86,7 @@ export function RunQuestionBody(props: {
   }
 
   const move = (dir: -1 | 1) => {
-    const next = questionMove(state(), props.request, dir)
-    setState(next)
-    follow(row(next.tab, next.selected))
+    setState((prev) => questionMove(prev, props.request, dir))
   }
 
   const beginReply = async (input: QuestionReply) => {
@@ -255,17 +123,10 @@ export function RunQuestionBody(props: {
     void beginReply(next.reply)
   }
 
-  const activate = (selected: number) => {
+  const choose = (selected: number) => {
     const base = state()
     const cur = questionSetSelected(base, selected)
-    const id = row(base.tab, selected)
-    if (!exposed.has(id) || !shown(selected)) {
-      setState(cur)
-      follow(id)
-      return
-    }
     const next = questionSelect(cur, props.request)
-    follow(id)
     if (next.state !== base) {
       setState(next.state)
     }
@@ -282,7 +143,17 @@ export function RunQuestionBody(props: {
   }
 
   const select = () => {
-    activate(state().selected)
+    const cur = state()
+    const next = questionSelect(cur, props.request)
+    if (next.state !== cur) {
+      setState(next.state)
+    }
+
+    if (!next.reply) {
+      return
+    }
+
+    void beginReply(next.reply)
   }
 
   const submit = () => {
@@ -291,31 +162,6 @@ export function RunQuestionBody(props: {
 
   const reject = () => {
     void beginReject(questionReject(props.request))
-  }
-
-  const scrollContent = (name: string, lines: boolean) => {
-    if (name === "home" || name === "end") {
-      exposed.clear()
-      generation++
-      scroll?.scrollTo(name === "home" ? 0 : scroll.scrollHeight)
-      return true
-    }
-
-    const amount =
-      name === "pageup"
-        ? -(scroll?.height ?? 0)
-        : name === "pagedown"
-          ? (scroll?.height ?? 0)
-          : lines && (name === "up" || name === "k")
-            ? -1
-            : lines && (name === "down" || name === "j")
-              ? 1
-              : undefined
-    if (amount === undefined) return false
-    exposed.clear()
-    generation++
-    scroll?.scrollBy(amount)
-    return true
   }
 
   useKeyboard((event) => {
@@ -354,11 +200,6 @@ export function RunQuestionBody(props: {
       return
     }
 
-    if (scrollContent(event.name, questionConfirm(props.request, cur))) {
-      event.preventDefault()
-      return
-    }
-
     if (questionConfirm(props.request, cur)) {
       if (event.name === "return") {
         submit()
@@ -377,7 +218,7 @@ export function RunQuestionBody(props: {
     const max = Math.min(total, 9)
     const digit = Number(event.name)
     if (!Number.isNaN(digit) && digit >= 1 && digit <= max) {
-      activate(digit - 1)
+      choose(digit - 1)
       event.preventDefault()
       return
     }
@@ -423,7 +264,6 @@ export function RunQuestionBody(props: {
 
       area.focus()
       area.cursorOffset = area.plainText.length
-      scroll?.scrollChildIntoView(row(state().tab, state().selected))
     })
   })
 
@@ -431,10 +271,10 @@ export function RunQuestionBody(props: {
     <box width="100%" height="100%" flexDirection="column">
       <box
         flexDirection="column"
-        gap={narrow() ? 0 : 1}
+        gap={1}
         paddingLeft={1}
         paddingRight={3}
-        paddingTop={compact() ? 0 : 1}
+        paddingTop={1}
         flexGrow={1}
         flexShrink={1}
         backgroundColor={props.theme.surface}
@@ -487,10 +327,6 @@ export function RunQuestionBody(props: {
                     foregroundColor: props.theme.line,
                   },
                 }}
-                ref={(item: ScrollBoxRenderable) => {
-                  scroll = item
-                  item.scrollTo(0)
-                }}
               >
                 <box width="100%" flexDirection="column" gap={1}>
                   <box paddingLeft={1}>
@@ -517,29 +353,25 @@ export function RunQuestionBody(props: {
             </box>
           }
         >
-          <box width="100%" flexGrow={1} flexShrink={1} paddingLeft={1}>
-            <scrollbox
-              width="100%"
-              height="100%"
-              verticalScrollbarOptions={{
-                trackOptions: {
-                  backgroundColor: props.theme.surface,
-                  foregroundColor: props.theme.line,
-                },
-              }}
-              ref={(item: ScrollBoxRenderable) => {
-                scroll = item
-                item.scrollTo(0)
-              }}
-            >
-              <box width="100%" flexDirection="column" gap={narrow() ? 0 : 1}>
-                <box flexShrink={0}>
-                  <text fg={props.theme.text} wrapMode="word">
-                    {info()?.question}
-                    {info()?.multiple ? " (select all that apply)" : ""}
-                  </text>
-                </box>
+          <box width="100%" flexGrow={1} flexShrink={1} paddingLeft={1} gap={1}>
+            <box>
+              <text fg={props.theme.text} wrapMode="word">
+                {info()?.question}
+                {info()?.multiple ? " (select all that apply)" : ""}
+              </text>
+            </box>
 
+            <box flexGrow={1} flexShrink={1}>
+              <scrollbox
+                width="100%"
+                height="100%"
+                verticalScrollbarOptions={{
+                  trackOptions: {
+                    backgroundColor: props.theme.surface,
+                    foregroundColor: props.theme.line,
+                  },
+                }}
+              >
                 <box width="100%" flexDirection="column">
                   <For each={info()?.options ?? []}>
                     {(item, index) => {
@@ -547,10 +379,8 @@ export function RunQuestionBody(props: {
                       const hit = () => state().answers[state().tab]?.includes(item.label) ?? false
                       return (
                         <box
-                          id={row(state().tab, index())}
                           flexDirection="column"
                           gap={0}
-                          flexShrink={0}
                           onMouseOver={() => {
                             if (!disabled()) {
                               mark(index())
@@ -563,7 +393,7 @@ export function RunQuestionBody(props: {
                           }}
                           onMouseUp={() => {
                             if (!disabled()) {
-                              activate(index())
+                              choose(index())
                             }
                           }}
                         >
@@ -594,10 +424,8 @@ export function RunQuestionBody(props: {
 
                   <Show when={questionCustom(props.request, state())}>
                     <box
-                      id={row(state().tab, info()?.options.length ?? 0)}
                       flexDirection="column"
                       gap={0}
-                      flexShrink={0}
                       onMouseOver={() => {
                         if (!disabled()) {
                           mark(info()?.options.length ?? 0)
@@ -610,7 +438,7 @@ export function RunQuestionBody(props: {
                       }}
                       onMouseUp={() => {
                         if (!disabled()) {
-                          activate(info()?.options.length ?? 0)
+                          choose(info()?.options.length ?? 0)
                         }
                       }}
                     >
@@ -677,8 +505,8 @@ export function RunQuestionBody(props: {
                     </box>
                   </Show>
                 </box>
-              </box>
-            </scrollbox>
+              </scrollbox>
+            </box>
           </box>
         </Show>
       </box>
@@ -703,7 +531,7 @@ export function RunQuestionBody(props: {
         >
           <box
             flexDirection={narrow() ? "column" : "row"}
-            gap={compact() ? 0 : narrow() ? 1 : 2}
+            gap={narrow() ? 1 : 2}
             flexShrink={0}
             width={narrow() ? "100%" : undefined}
           >

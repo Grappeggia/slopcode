@@ -5,15 +5,12 @@ import { Headers, HttpClientRequest } from "effect/unstable/http"
 import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
-  isCustomToolDefinition,
-  isFunctionToolDefinition,
   LLMError,
   type ContentPart,
   type LLMRequest,
   type MediaPart,
   type ToolFileContent,
   type TextPart,
-  type ToolDefinition,
   type ToolResultPart,
 } from "../schema"
 import { isRecord } from "../utils/record"
@@ -110,25 +107,6 @@ export const subtractTokens = (total: number | undefined, subtrahend: number | u
   return Math.max(0, total - subtrahend)
 }
 
-const finiteToken = (value: number | undefined) =>
-  typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
-
-export const normalizeInputTokens = (
-  input: number | undefined,
-  read: number | undefined,
-  write: number | undefined,
-) => {
-  const inputTokens = finiteToken(input)
-  const cached = Math.min(inputTokens, finiteToken(read))
-  const written = Math.min(inputTokens - cached, finiteToken(write))
-  return {
-    inputTokens,
-    nonCachedInputTokens: inputTokens - cached - written,
-    cacheReadInputTokens: read === undefined ? undefined : cached,
-    cacheWriteInputTokens: write === undefined ? undefined : written,
-  }
-}
-
 /**
  * Sum a list of optional token counts, returning `undefined` only when
  * every value is `undefined` (so we don't fabricate a `0`). Used by
@@ -208,22 +186,6 @@ export const wrappedSystemUpdate = Effect.fn("ProviderShared.wrappedSystemUpdate
  */
 export const parseToolInput = (route: string, name: string, raw: string) =>
   parseJson(route, raw || "{}", `Invalid JSON input for ${route} tool call ${name}`)
-
-export const functionToolDefinitions = Effect.fn("ProviderShared.functionToolDefinitions")(function* (
-  route: string,
-  request: LLMRequest,
-) {
-  const custom = request.tools.find(isCustomToolDefinition)
-  const part = request.messages
-    .flatMap((message) => message.content)
-    .find((item) => {
-      if (item.type !== "tool-call" && item.type !== "tool-result") return false
-      return item.toolType === "custom"
-    })
-  if (custom || part || request.toolChoice?.toolType === "custom")
-    return yield* invalidRequest(`${route} does not support custom tools`)
-  return request.tools.filter(isFunctionToolDefinition)
-})
 
 export const IMAGE_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const
 export const MAX_MEDIA_ENCODED_BYTES = 8 * 1024 * 1024

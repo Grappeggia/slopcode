@@ -75,36 +75,6 @@ Here are all available slash commands:
 
 ---
 
-### btw
-
-Ask a quick question without interrupting your main session. Include the question after the command, or run `/btw` to open an empty side composer.
-
-```text frame="none"
-/btw Which file defines the API routes?
-```
-
-```text frame="none"
-/btw
-```
-
-After an answer, use the same composer to ask follow-ups. Every question reloads the latest main-session context and adds the newest completed side turns, while the agent, model, and variant selected when you opened the panel stay pinned. The visible transcript remains complete when older or oversized context must be omitted, and the panel marks what was not carried.
-
-Requests carry up to 32 completed side turns and 64,000 characters per question or answer. Carried answers are whitespace-normalized before this bound, while the visible and copyable transcript keeps the full answer. Oversized current questions are rejected locally so they can be shortened and retried. The selected model's input limit is also enforced: the immediately preceding side turn, latest meaningful main-session group, and applicable compaction summary are required; older side turns and main history may be omitted, and a request fails before generation if required content or a read continuation cannot fit.
-
-Side questions can read at most five unique, regular UTF-8 text files per question. Repeated reads of the same file count once, and the limit resets for every follow-up.
-
-Reads require an exact, known workspace-relative path or a named configured reference already allowed by your read permissions. They never prompt for access and cannot search, list directories, edit files, or run commands.
-
-Secure side reads work on Linux and macOS and fail closed on other platforms.
-
-GitLab workflow models currently fail closed for `/btw` because their hosted workflow tools cannot safely provide an isolated private local reader. Other GitLab chat models remain supported.
-
-If a question fails, times out, or its stream ends early, press **Enter** to retry it. Completed turns remain available, but any partial answer from the failed attempt is dropped.
-
-Press **Esc** to abort active work, close the panel, and discard its transcript. Side questions, answers, and reads are never saved to your main history.
-
----
-
 ### connect
 
 Add a provider to SlopCode. Allows you to select from available providers and add their API keys.
@@ -387,7 +357,7 @@ You can customize TUI behavior through `tui.json` (or `tui.jsonc`).
 
 ```json title="tui.json"
 {
-  "$schema": "https://slopcode.ai/tui.json",
+  "$schema": "https://slopcode.dev/tui.json",
   "theme": "slopcode",
   "leader_timeout": 2000,
   "keybinds": {

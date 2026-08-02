@@ -1,5 +1,5 @@
 import type { JsonSchema, LLMRequest, ProviderMetadata } from "@slopcode-ai/llm"
-import { CacheHint, LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@slopcode-ai/llm"
+import { LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@slopcode-ai/llm"
 import {
   AmazonBedrock,
   Anthropic,
@@ -32,7 +32,6 @@ export type RequestInput = {
   readonly maxOutputTokens?: number
   readonly providerOptions?: LLMRequest["providerOptions"]
   readonly headers?: Record<string, string>
-  readonly retries?: number
 }
 
 const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
@@ -48,17 +47,9 @@ const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
 const partProviderMetadata = (part: Record<string, unknown>) =>
   providerMetadata(part.providerMetadata) ?? providerMetadata(part.providerOptions)
 
-const cacheHint = (value: unknown) => {
-  if (!isRecord(value) || value.type !== "ephemeral") return undefined
-  if (value.ttlSeconds !== undefined && (typeof value.ttlSeconds !== "number" || !Number.isFinite(value.ttlSeconds)))
-    return undefined
-  return new CacheHint({ type: "ephemeral", ttlSeconds: value.ttlSeconds })
-}
-
 const textPart = (part: Record<string, unknown>) => ({
   type: "text" as const,
   text: typeof part.text === "string" ? part.text : "",
-  cache: cacheHint(part.cache),
   providerMetadata: partProviderMetadata(part),
 })
 
@@ -112,18 +103,7 @@ const content = (value: ModelMessage["content"]) =>
   typeof value === "string" ? [{ type: "text" as const, text: value }] : value.map(contentPart)
 
 const messages = (input: readonly ModelMessage[]) => {
-  const system = input.flatMap((message) => {
-    if (message.role !== "system") return []
-    const value: unknown = message.content
-    if (typeof value === "string") return [SystemPart.make(value)]
-    if (!Array.isArray(value)) return []
-    return value.flatMap((part: unknown) => {
-      if (!isRecord(part) || part.type !== "text") return []
-      return [
-        { type: "text" as const, text: typeof part.text === "string" ? part.text : "", cache: cacheHint(part.cache) },
-      ]
-    })
-  })
+  const system = input.flatMap((message) => (message.role === "system" ? [SystemPart.make(message.content)] : []))
   const messages = input.flatMap((message) => {
     if (message.role === "system") return []
     return [
@@ -165,11 +145,6 @@ const generation = (input: RequestInput) => {
 const baseURL = (input: Provider.Model | RequestInput) =>
   "model" in input ? (input.baseURL ?? (input.model.api.url || undefined)) : input.api.url || undefined
 
-const scrubHeaders = (value: Record<string, string> | undefined) =>
-  Object.fromEntries(
-    Object.entries(value ?? {}).filter(([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints"),
-  )
-
 const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
   if (url) return url
   throw new Error(`Native LLM request adapter requires a base URL for ${model.providerID}/${model.id}`)
@@ -178,15 +153,10 @@ const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
 export const model = (input: Provider.Model | RequestInput, headers?: Record<string, string>) => {
   const model = "model" in input ? input.model : input
   const url = baseURL(input)
-  const modelHeaders = scrubHeaders(model.headers)
-  const requestHeaders = scrubHeaders(headers)
   const options = {
     ...("model" in input && input.apiKey ? { apiKey: input.apiKey } : {}),
     ...(url ? { baseURL: url } : {}),
-    headers:
-      Object.keys({ ...modelHeaders, ...requestHeaders }).length === 0
-        ? undefined
-        : { ...modelHeaders, ...requestHeaders },
+    headers: Object.keys({ ...model.headers, ...headers }).length === 0 ? undefined : { ...model.headers, ...headers },
     limits: {
       context: model.limit.context,
       output: model.limit.output,
@@ -220,7 +190,6 @@ export const request = (input: RequestInput) => {
     toolChoice: input.toolChoice,
     generation: generation(input),
     providerOptions: input.providerOptions,
-    http: { retries: input.retries },
   })
 }
 

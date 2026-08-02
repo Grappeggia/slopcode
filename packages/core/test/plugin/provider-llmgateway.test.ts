@@ -42,7 +42,7 @@ describe("LLMGatewayPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("llmgateway"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://slopcode.ai/",
+        "HTTP-Referer": "https://slopcode.dev/",
         "X-Title": "slopcode",
         "X-Source": "slopcode",
       })

@@ -6,21 +6,16 @@ type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
   readonly $ref?: string
   readonly anyOf?: ReadonlyArray<OpenApiSchema>
-  readonly oneOf?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
   readonly properties?: Record<string, OpenApiSchema>
   readonly required?: readonly string[]
-  readonly items?: OpenApiSchema
-  readonly maxLength?: number
-  readonly maxItems?: number
 }
 type OpenApiResponse = {
   readonly description?: string
   readonly content?: Record<string, { readonly schema?: OpenApiSchema }>
 }
 type OpenApiOperation = {
-  readonly description?: string
   readonly parameters?: ReadonlyArray<{
     readonly name: string
     readonly in: string
@@ -76,52 +71,6 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
-  test("keeps function tool calls on the public V1 object schema", () => {
-    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const payload = spec.components.schemas.GlobalEvent?.properties?.payload
-    const called = payload?.anyOf?.find((schema) => schema.properties?.type?.enum?.includes("session.next.tool.called"))
-
-    expect(called?.properties?.properties?.properties?.input?.type).toBe("object")
-    expect(called?.properties?.properties?.properties).not.toHaveProperty("toolType")
-    expect(
-      spec.components.schemas.SyncEventSessionNextToolCalled?.properties?.syncEvent?.properties?.type?.enum,
-    ).toEqual(["session.next.tool.called.1"])
-  })
-
-  test("documents the complete side-question SSE event union", () => {
-    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const operation = spec.paths["/session/{sessionID}/side-question"]?.post
-    const schema = operation?.responses?.["200"]?.content?.["text/event-stream"]?.schema
-    const union = schema?.$ref ? spec.components.schemas[componentName(schema.$ref)] : schema
-    const variants = [...(union?.anyOf ?? []), ...(union?.oneOf ?? [])].map((item) =>
-      item.$ref ? spec.components.schemas[componentName(item.$ref)] : item,
-    )
-
-    expect(operation?.description).toContain("completed turns")
-    expect(operation?.description).toContain("read")
-    expect(variants.map((item) => item?.properties?.type?.enum?.[0])).toEqual([
-      "status",
-      "read",
-      "usage",
-      "text",
-      "error",
-      "done",
-    ])
-  })
-
-  test("documents bounded side-question turns and text", () => {
-    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const body =
-      spec.paths["/session/{sessionID}/side-question"]?.post?.requestBody?.content?.["application/json"]?.schema
-    const turns = body?.properties?.turns
-    const turn = turns?.items?.$ref ? spec.components.schemas[componentName(turns.items.$ref)] : turns?.items
-
-    expect(body?.properties?.question?.maxLength).toBe(64_000)
-    expect(turns?.maxItems).toBe(32)
-    expect(turn?.properties?.question?.maxLength).toBe(64_000)
-    expect(turn?.properties?.answer?.maxLength).toBe(64_000)
-  })
-
   test("documents nested legacy global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SyncEventSessionCreated
@@ -167,6 +116,16 @@ describe("PublicApi OpenAPI v2 errors", () => {
     ]) {
       expect(spec.paths[path]?.post?.requestBody?.required, path).toBe(true)
     }
+  })
+
+  test("requires MCP OAuth callback state and code", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const operation = spec.paths["/mcp/{name}/auth/callback"]?.post
+    const schema = operation?.requestBody?.content?.["application/json"]?.schema
+
+    expect(operation?.requestBody?.required).toBe(true)
+    expect(schema?.required).toEqual(["state", "code"])
+    expect(operation?.responses?.["404"]).toBeUndefined()
   })
 
   test("documents integration discovery and connection routes", () => {
@@ -258,22 +217,17 @@ describe("PublicApi OpenAPI v2 errors", () => {
     }
   })
 
-  test("documents v2 manual compaction errors", () => {
+  test("documents v2 unfinished session mutation errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const responses = spec.paths["/api/session/{sessionID}/compact"]?.post?.responses
 
-    expect(componentNames(responses?.["400"])).toContain("InvalidRequestError")
-    expect(componentNames(responses?.["409"])).toContain("ConflictError")
-    expect(componentNames(responses?.["500"]).some((name) => /^UnknownError\d*$/.test(name))).toBeTrue()
-    expect(responses?.["503"]).toBeUndefined()
-  })
-
-  test("documents v2 wait execution errors", () => {
-    const responses = (OpenApi.fromApi(PublicApi) as OpenApiSpec).paths["/api/session/{sessionID}/wait"]?.post
-      ?.responses
-
-    expect(componentName(responseRef(responses?.["500"]) ?? "")).toMatch(/^UnknownError\d*$/)
-    expect(responses?.["503"]).toBeUndefined()
+    for (const route of [
+      ["post", "/api/session/{sessionID}/compact"],
+      ["post", "/api/session/{sessionID}/wait"],
+    ] as const) {
+      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["503"]) ?? "")).toBe(
+        "ServiceUnavailableError",
+      )
+    }
   })
 
   test("documents v2 session read data errors", () => {

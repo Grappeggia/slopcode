@@ -4,7 +4,7 @@ import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { Image } from "@/image/image"
@@ -23,7 +23,7 @@ import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 
-import { Provider } from "@/provider/provider"
+import type { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
 import { Snapshot } from "../../src/snapshot"
 import { ProviderTest } from "../fake/provider"
@@ -85,14 +85,6 @@ function createModel(opts: {
     api: { npm: opts.npm ?? "@ai-sdk/anthropic" },
     options: {},
   } as Provider.Model
-}
-
-function model(id: string, providerID = "test") {
-  return {
-    ...createModel({ context: 100_000, output: 32_000 }),
-    id: ModelV2.ID.make(id),
-    providerID: ProviderV2.ID.make(providerID),
-  }
 }
 
 const wide = () => ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000 }) })
@@ -217,18 +209,11 @@ function fake(
   } satisfies SessionProcessorModule.SessionProcessor.Handle
 }
 
-function layer(result: "continue" | "compact", setup?: Deferred.Deferred<void>) {
+function layer(result: "continue" | "compact") {
   return Layer.succeed(
     SessionProcessorModule.SessionProcessor.Service,
     SessionProcessorModule.SessionProcessor.Service.of({
-      create: Effect.fn("TestSessionProcessor.create")((input) => {
-        const handle = fake(input, result)
-        if (!setup) return Effect.succeed(handle)
-        return Effect.sync(() => Deferred.doneUnsafe(setup, Effect.void)).pipe(
-          Effect.andThen(Effect.never),
-          Effect.as(handle),
-        )
-      }),
+      create: Effect.fn("TestSessionProcessor.create")((input) => Effect.succeed(fake(input, result))),
     }),
   )
 }
@@ -272,13 +257,10 @@ const itCompaction = testEffect(compactionEnv)
 
 type CompactionProcessOptions = {
   result?: "continue" | "compact"
-  setup?: Deferred.Deferred<void>
   llm?: Layer.Layer<LLM.Service>
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
-  processor?: Layer.Layer<SessionProcessorModule.SessionProcessor.Service>
-  agent?: Layer.Layer<Agent.Service>
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -288,23 +270,21 @@ function withCompaction(options?: CompactionProcessOptions) {
 function compactionProcessLayer(options?: CompactionProcessOptions) {
   const events = EventV2Bridge.defaultLayer
   const status = SessionStatus.layer.pipe(Layer.provide(events))
-  const processor =
-    options?.processor ??
-    (options?.llm
-      ? SessionProcessorModule.SessionProcessor.layer.pipe(
-          Layer.provide(summary),
-          Layer.provide(Image.defaultLayer),
-          Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
-          Layer.provide(status),
-        )
-      : layer(options?.result ?? "continue", options?.setup))
+  const processor = options?.llm
+    ? SessionProcessorModule.SessionProcessor.layer.pipe(
+        Layer.provide(summary),
+        Layer.provide(Image.defaultLayer),
+        Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+        Layer.provide(status),
+      )
+    : layer(options?.result ?? "continue")
   return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
     Layer.provide(SessionNs.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(options?.llm ?? LLM.defaultLayer),
     Layer.provide(Permission.defaultLayer),
-    Layer.provide(options?.agent ?? Agent.defaultLayer),
+    Layer.provide(Agent.defaultLayer),
     Layer.provide(options?.plugin ?? Plugin.defaultLayer),
     Layer.provide(status),
     Layer.provide(events),
@@ -371,6 +351,20 @@ function reply(
       }),
     )
   }
+}
+
+function plugin(ready: Deferred.Deferred<void>) {
+  return Layer.mock(Plugin.Service)({
+    trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) => {
+      if (name !== "experimental.session.compacting") return Effect.succeed(output)
+      return Effect.sync(() => Deferred.doneUnsafe(ready, Effect.void)).pipe(
+        Effect.andThen(Effect.never),
+        Effect.as(output),
+      )
+    },
+    list: () => Effect.succeed([]),
+    init: () => Effect.void,
+  })
 }
 
 function autocontinue(enabled: boolean) {
@@ -912,606 +906,6 @@ describe("session.compaction.process", () => {
     }).pipe(withCompaction({ result: "compact" })),
   )
 
-  describe("historical model recovery", () => {
-    const historical = model("historical")
-    const current = model("current")
-
-    function recovery(input: {
-      fail: (model: Provider.Model) => SessionV1.Assistant["error"] | undefined
-      missing?: boolean
-      explicit?: boolean
-      context?: boolean
-      usage?: boolean
-      stall?: Deferred.Deferred<void>
-      cause?: (model: Provider.Model) => unknown
-      text?: string | false
-      finish?: SessionV1.Assistant["finish"] | false
-      returned?: Deferred.Deferred<void>
-      fallback?: Deferred.Deferred<void>
-      change?: Provider.Model
-      tokens?: (model: Provider.Model, tokens: SessionV1.Assistant["tokens"]) => void
-      result?: SessionProcessorModule.SessionProcessor.Result
-      createEscape?: "fail" | "die"
-      processEscape?: "fail" | "die"
-      conversionEscape?: boolean
-    }) {
-      const attempts: Array<{ model: string; retry: boolean | undefined }> = []
-      const sessions: SessionID[] = []
-      let store: SessionNs.Interface | undefined
-      const provider = ProviderTest.fake({
-        model: current,
-        info: ProviderTest.info({ models: { historical, current } }, current),
-        getModel: Effect.fn("TestProvider.getModel")(function* (providerID, modelID) {
-          if (providerID !== "test" || (input.missing && modelID === historical.id)) {
-            return yield* new Provider.ModelNotFoundError({ providerID, modelID })
-          }
-          if (modelID === historical.id) {
-            return input.context ? { ...historical, limit: { ...historical.limit, context: 0 } } : historical
-          }
-          if (modelID === current.id && input.fallback) {
-            Deferred.doneUnsafe(input.fallback, Effect.void)
-            return yield* Effect.never
-          }
-          if (modelID === current.id) return current
-          if (modelID === input.change?.id) return input.change
-          return yield* new Provider.ModelNotFoundError({ providerID, modelID })
-        }),
-      })
-      const processor = Layer.succeed(
-        SessionProcessorModule.SessionProcessor.Service,
-        SessionProcessorModule.SessionProcessor.Service.of({
-          create: ((item: Parameters<SessionProcessorModule.SessionProcessor.Interface["create"]>[0]) => {
-            if (input.createEscape === "fail") return Effect.fail(new Error("create escaped"))
-            if (input.createEscape === "die") return Effect.die(new Error("create defect"))
-            return Effect.succeed({
-              message: item.assistantMessage,
-              failure: input.cause?.(item.model),
-              updateToolCall: () => Effect.succeed(undefined),
-              completeToolCall: () => Effect.void,
-              process: () =>
-                Effect.gen(function* () {
-                  attempts.push({ model: item.model.id, retry: item.retry })
-                  if (input.text !== false) {
-                    yield* store!.updatePart({
-                      id: PartID.ascending(),
-                      messageID: item.assistantMessage.id,
-                      sessionID: item.sessionID,
-                      type: "text",
-                      text: input.text ?? `partial-${item.model.id}`,
-                    })
-                  }
-                  if (input.processEscape === "fail") return yield* Effect.fail(new Error("process escaped"))
-                  if (input.processEscape === "die") return yield* Effect.die(new Error("process defect"))
-                  if (input.stall) {
-                    Deferred.doneUnsafe(input.stall, Effect.void)
-                    return yield* Effect.never
-                  }
-                  item.assistantMessage.error = input.fail(item.model)
-                  if (item.assistantMessage.error) return "stop" as const
-                  if (input.finish !== false) item.assistantMessage.finish = input.finish ?? "stop"
-                  if (input.usage !== false || item.model.id === current.id) item.assistantMessage.tokens.input = 1
-                  yield* store!.updateMessage(item.assistantMessage)
-                  input.tokens?.(item.model, item.assistantMessage.tokens)
-                  if (input.change && item.model.id === current.id) {
-                    yield* store!.updateMessage({
-                      id: MessageID.ascending(),
-                      role: "user",
-                      sessionID: item.sessionID,
-                      agent: "build",
-                      model: { providerID: input.change.providerID, modelID: input.change.id },
-                      time: { created: Date.now() },
-                    })
-                  }
-                  if (input.returned) Deferred.doneUnsafe(input.returned, Effect.void)
-                  return input.result ?? ("continue" as const)
-                }),
-            })
-          }) as never,
-        }),
-      )
-      const agent = input.explicit
-        ? Layer.mock(Agent.Service)({
-            get: () =>
-              Effect.succeed({
-                name: "compaction",
-                mode: "primary",
-                native: true,
-                hidden: true,
-                prompt: "",
-                permission: [],
-                options: {},
-                model: { providerID: current.providerID, modelID: current.id },
-              }),
-            list: () => Effect.succeed([]),
-            defaultInfo: () => Effect.die("unused"),
-            defaultAgent: () => Effect.die("unused"),
-            generate: () => Effect.die("unused"),
-          })
-        : Agent.defaultLayer
-      const plugin = input.conversionEscape
-        ? Layer.mock(Plugin.Service)({
-            trigger: (name: string, _input: unknown, output: { messages?: SessionV1.WithParts[] }) =>
-              Effect.sync(() => {
-                if (name !== "experimental.chat.messages.transform" || !output.messages) return output
-                output.messages.push({
-                  info: {
-                    id: MessageID.ascending(),
-                    role: "assistant",
-                    parentID: MessageID.ascending(),
-                    sessionID: SessionID.make("ses_conversion"),
-                    mode: "compaction",
-                    agent: "compaction",
-                    path: { cwd: "/tmp", root: "/tmp" },
-                    cost: 0,
-                    tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-                    modelID: historical.id,
-                    providerID: historical.providerID,
-                    time: { created: Date.now() },
-                  },
-                  parts: [
-                    {
-                      id: PartID.ascending(),
-                      messageID: MessageID.ascending(),
-                      sessionID: SessionID.make("ses_conversion"),
-                      type: "tool",
-                      callID: "bad",
-                      tool: Symbol("bad"),
-                      state: {
-                        status: "completed",
-                        input: {},
-                        output: "bad",
-                        title: "bad",
-                        metadata: {},
-                        time: { start: Date.now(), end: Date.now() },
-                        attachments: [{ mime: "image/png", url: 1 }],
-                      },
-                    },
-                  ],
-                } as never)
-                return output
-              }),
-            list: () => Effect.succeed([]),
-            init: () => Effect.void,
-          } as never)
-        : undefined
-      const layer = compactionProcessLayer({ provider, processor, agent, plugin })
-      return { attempts, sessions, layer, bind: (value: SessionNs.Interface) => (store = value) }
-    }
-
-    function run(setup: ReturnType<typeof recovery>, auto = true, same = false) {
-      return Effect.gen(function* () {
-        const ssn = yield* SessionNs.Service
-        setup.bind(ssn)
-        const selected = same ? historical : current
-        const info = yield* ssn.create({ model: { id: selected.id, providerID: selected.providerID } })
-        setup.sessions.push(info.id)
-        const parent = yield* ssn.updateMessage({
-          id: MessageID.ascending(),
-          role: "user",
-          sessionID: info.id,
-          agent: "build",
-          model: { providerID: historical.providerID, modelID: historical.id },
-          time: { created: Date.now() },
-        })
-        yield* ssn.updatePart({
-          id: PartID.ascending(),
-          messageID: parent.id,
-          sessionID: info.id,
-          type: "compaction",
-          auto,
-        })
-        yield* ssn.updateMessage({
-          id: MessageID.ascending(),
-          role: "user",
-          sessionID: info.id,
-          agent: "build",
-          model: { providerID: selected.providerID, modelID: selected.id },
-          time: { created: Date.now() },
-        })
-        const result = yield* SessionCompaction.use.process({
-          parentID: parent.id,
-          messages: yield* ssn.messages({ sessionID: info.id }),
-          sessionID: info.id,
-          auto,
-        })
-        return { result, messages: yield* ssn.messages({ sessionID: info.id }) }
-      }).pipe(Effect.provide(setup.layer))
-    }
-
-    itCompaction.instance("falls back once after a typed model-not-found and removes its provisional parts", () => {
-      const setup = recovery({
-        fail: (item) =>
-          item.id === historical.id
-            ? new SessionV1.APIError({
-                message: "unavailable",
-                statusCode: 404,
-                isRetryable: false,
-                responseBody: '{"error":{"code":"model_not_found"}}',
-              }).toObject()
-            : undefined,
-      })
-      return Effect.gen(function* () {
-        const output = yield* run(setup)
-        expect(setup.attempts).toEqual([
-          { model: historical.id, retry: false },
-          { model: current.id, retry: false },
-        ])
-        const summaries = output.messages.filter((item) => item.info.role === "assistant" && item.info.summary)
-        expect(summaries).toHaveLength(1)
-        expect(summaries[0]?.info).toMatchObject({ modelID: current.id, providerID: current.providerID })
-        expect(summaries[0]?.parts.map((part) => (part.type === "text" ? part.text : part.type))).toEqual([
-          `partial-${current.id}`,
-        ])
-        const followup = output.messages.find(
-          (item) =>
-            item.info.role === "user" &&
-            item.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
-        )
-        expect(followup?.info.role === "user" ? followup.info.model : undefined).toMatchObject({
-          modelID: current.id,
-          providerID: current.providerID,
-        })
-      })
-    })
-
-    itCompaction.instance("falls back after a typed processor model-not-found failure", () => {
-      const setup = recovery({
-        cause: (item) =>
-          item.id === historical.id
-            ? new Provider.ModelNotFoundError({ providerID: historical.providerID, modelID: historical.id })
-            : undefined,
-        fail: () => undefined,
-      })
-      return run(setup).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])),
-        ),
-      )
-    })
-
-    itCompaction.instance("missing historical lookup counts as the original attempt", () => {
-      const setup = recovery({ missing: true, fail: () => undefined })
-      return Effect.gen(function* () {
-        const output = yield* run(setup)
-        expect(setup.attempts).toEqual([{ model: current.id, retry: false }])
-        expect(output.messages.filter((item) => item.info.role === "assistant" && item.info.summary)).toHaveLength(1)
-      })
-    })
-
-    itCompaction.instance("falls back once for context, retry exhaustion, and 5xx", () => {
-      const errors = [
-        new SessionV1.ContextOverflowError({ message: "too large" }).toObject(),
-        new SessionV1.APIError({ message: "retry", isRetryable: true }).toObject(),
-        new SessionV1.APIError({ message: "server", statusCode: 503, isRetryable: false }).toObject(),
-      ]
-      return Effect.forEach(errors, (error) => {
-        const setup = recovery({ fail: (item) => (item.id === historical.id ? error : undefined) })
-        return run(setup).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])),
-          ),
-        )
-      })
-    })
-
-    itCompaction.instance("falls back when historical context or usage metadata is unusable", () =>
-      Effect.forEach(
-        [recovery({ context: true, fail: () => undefined }), recovery({ usage: false, fail: () => undefined })],
-        (setup) =>
-          run(setup).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])),
-            ),
-          ),
-      ),
-    )
-
-    itCompaction.instance("keeps authentication and content filtering terminal", () => {
-      const errors = [
-        new SessionV1.AuthError({ providerID: "test", message: "no" }).toObject(),
-        new SessionV1.ContentFilterError({ message: "blocked" }).toObject(),
-        new SessionV1.AbortedError({ message: "cancelled" }).toObject(),
-      ]
-      return Effect.forEach(errors, (error) => {
-        const setup = recovery({ fail: () => error })
-        return Effect.gen(function* () {
-          const output = yield* run(setup)
-          expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
-          expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
-        })
-      })
-    })
-
-    itCompaction.instance("normalizes retryable terminal API statuses and codes", () => {
-      const errors = [
-        new SessionV1.APIError({ message: "auth", statusCode: 401, isRetryable: true }).toObject(),
-        new SessionV1.APIError({ message: "billing", statusCode: 402, isRetryable: true }).toObject(),
-        new SessionV1.APIError({ message: "forbidden", statusCode: 403, isRetryable: true }).toObject(),
-        new SessionV1.APIError({
-          message: "typed auth",
-          statusCode: 500,
-          isRetryable: true,
-          responseBody: '{"error":{"code":"permission_denied"}}',
-        }).toObject(),
-        new SessionV1.APIError({
-          message: "quota",
-          statusCode: 429,
-          isRetryable: true,
-          responseBody: '{"error":{"code":"insufficient_quota"}}',
-        }).toObject(),
-        new SessionV1.APIError({
-          message: "quota metadata",
-          statusCode: 429,
-          isRetryable: true,
-          metadata: { code: "insufficient_quota" },
-        }).toObject(),
-        new SessionV1.APIError({
-          message: "free limit",
-          statusCode: 429,
-          isRetryable: true,
-          responseBody: '{"error":"FreeUsageLimitError"}',
-        }).toObject(),
-        new SessionV1.APIError({
-          message: "filtered",
-          statusCode: 429,
-          isRetryable: true,
-          responseBody: '{"error":{"code":"content_filter"}}',
-        }).toObject(),
-        new SessionV1.APIError({
-          message: "invalid",
-          statusCode: 429,
-          isRetryable: true,
-          responseBody: '{"error":{"code":"invalid_request_error"}}',
-        }).toObject(),
-        new SessionV1.APIError({
-          message: "cancelled",
-          statusCode: 429,
-          isRetryable: true,
-          responseBody: '{"error":{"code":"request_cancelled"}}',
-        }).toObject(),
-      ]
-      return Effect.forEach(errors, (error) => {
-        const setup = recovery({ fail: () => error })
-        return Effect.gen(function* () {
-          const output = yield* run(setup)
-          expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
-          expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
-        })
-      })
-    })
-
-    itCompaction.instance("distinguishes model usage limits from billing quota at 429", () => {
-      const eligible = recovery({
-        fail: (item) =>
-          item.id === historical.id
-            ? new SessionV1.APIError({
-                message: "model unavailable",
-                statusCode: 429,
-                isRetryable: false,
-                responseBody: '{"error":{"code":"model_usage_limit"}}',
-              }).toObject()
-            : undefined,
-      })
-      const terminal = recovery({
-        fail: () =>
-          new SessionV1.APIError({
-            message: "quota",
-            statusCode: 429,
-            isRetryable: true,
-            responseBody: '{"error":{"code":"billing_quota_exceeded"}}',
-          }).toObject(),
-      })
-      return Effect.gen(function* () {
-        yield* run(eligible)
-        yield* run(terminal)
-        expect(eligible.attempts.map((item) => item.model)).toEqual([historical.id, current.id])
-        expect(terminal.attempts.map((item) => item.model)).toEqual([historical.id])
-      })
-    })
-
-    itCompaction.instance("requires completed non-empty summary content and usable usage", () => {
-      const empty = recovery({ text: false, fail: () => undefined })
-      const unfinished = recovery({ finish: false, fail: () => undefined })
-      const noUsage = recovery({ usage: false, fail: () => undefined })
-      return Effect.gen(function* () {
-        const emptyOutput = yield* run(empty)
-        const unfinishedOutput = yield* run(unfinished)
-        const usageOutput = yield* run(noUsage)
-        expect(empty.attempts.map((item) => item.model)).toEqual([historical.id])
-        expect(unfinished.attempts.map((item) => item.model)).toEqual([historical.id])
-        expect(noUsage.attempts.map((item) => item.model)).toEqual([historical.id, current.id])
-        for (const output of [emptyOutput, unfinishedOutput]) {
-          expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
-        }
-        expect(usageOutput.messages.filter((item) => item.info.role === "assistant" && item.info.summary)).toHaveLength(
-          1,
-        )
-      })
-    })
-
-    itCompaction.instance("keeps zero-usage content filtering terminal", () => {
-      const setup = recovery({ finish: "content-filter", usage: false, result: "compact", fail: () => undefined })
-      return Effect.gen(function* () {
-        const output = yield* run(setup)
-        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
-        expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
-      })
-    })
-
-    itCompaction.instance("rejects malformed and negative usage components", () => {
-      const values = [
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.input = Number.NaN),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.output = Number.POSITIVE_INFINITY),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.reasoning = -1),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.cache.read = Number.NaN),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.cache.write = Number.NEGATIVE_INFINITY),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.cache.write = -1),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = Number.NaN),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = Number.POSITIVE_INFINITY),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = -1),
-        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = 0),
-        (tokens: SessionV1.Assistant["tokens"]) => {
-          tokens.input = Number.MAX_VALUE
-          tokens.output = Number.MAX_VALUE
-        },
-      ]
-      return Effect.forEach(values, (mutate) => {
-        const setup = recovery({
-          fail: () => undefined,
-          tokens: (item, tokens) => {
-            if (item.id === historical.id) mutate(tokens)
-          },
-        })
-        return Effect.gen(function* () {
-          const output = yield* run(setup)
-          expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])
-          expect(output.messages.filter((item) => item.info.role === "assistant" && item.info.summary)).toHaveLength(1)
-        })
-      })
-    })
-
-    itCompaction.instance("classifies and logs HTTP 402 as billing", () => {
-      const logs: unknown[] = []
-      const logger = Logger.make((options) => logs.push(options.message))
-      const setup = recovery({
-        fail: () => new SessionV1.APIError({ message: "payment", statusCode: 402, isRetryable: true }).toObject(),
-      })
-      return Effect.gen(function* () {
-        yield* run(setup).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })))
-        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
-        expect(logs.some((message) => JSON.stringify(message).includes('"failure":"billing"'))).toBe(true)
-      })
-    })
-
-    itCompaction.instance("does not recover manual compaction or an explicit compaction model", () =>
-      Effect.gen(function* () {
-        const manual = recovery({ fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject() })
-        yield* run(manual, false)
-        expect(manual.attempts.map((item) => item.model)).toEqual([historical.id])
-
-        const explicit = recovery({
-          explicit: true,
-          fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject(),
-        })
-        yield* run(explicit)
-        expect(explicit.attempts.map((item) => item.model)).toEqual([current.id])
-      }),
-    )
-
-    itCompaction.instance("does not duplicate an attempt when historical and current models match", () => {
-      const setup = recovery({ fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject() })
-      return run(setup, true, true).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => expect(setup.attempts).toEqual([{ model: historical.id, retry: undefined }])),
-        ),
-      )
-    })
-
-    itCompaction.instance("stops after a failed fallback and removes both provisional attempts", () => {
-      const setup = recovery({ fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject() })
-      return Effect.gen(function* () {
-        const output = yield* run(setup)
-        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])
-        expect(output.result).toBe("stop")
-        expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
-      })
-    })
-
-    itCompaction.instance("removes the interrupted provisional attempt without starting fallback", () =>
-      Effect.gen(function* () {
-        const stall = yield* Deferred.make<void>()
-        const setup = recovery({ stall, fail: () => undefined })
-        const fiber = yield* run(setup).pipe(Effect.forkChild)
-        yield* Deferred.await(stall)
-        yield* Fiber.interrupt(fiber)
-        const ssn = yield* SessionNs.Service
-        const summaries = (yield* ssn.messages({ sessionID: setup.sessions[0]! })).filter(
-          (item) => item.info.role === "assistant" && item.info.summary,
-        )
-        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
-        expect(summaries).toHaveLength(0)
-      }),
-    )
-
-    itCompaction.instance("cleans cancellation after processor return before terminal classification", () =>
-      Effect.gen(function* () {
-        const returned = yield* Deferred.make<void>()
-        const setup = recovery({ returned, text: false, fail: () => undefined })
-        const fiber = yield* run(setup).pipe(Effect.forkChild)
-        yield* Deferred.await(returned)
-        yield* Fiber.interrupt(fiber)
-        const ssn = yield* SessionNs.Service
-        expect(
-          (yield* ssn.messages({ sessionID: setup.sessions[0]! })).some(
-            (item) => item.info.role === "assistant" && item.info.summary,
-          ),
-        ).toBe(false)
-      }),
-    )
-
-    itCompaction.instance("cleans the first attempt before cancellation while resolving fallback", () =>
-      Effect.gen(function* () {
-        const fallback = yield* Deferred.make<void>()
-        const setup = recovery({
-          fallback,
-          fail: (item) =>
-            item.id === historical.id ? new SessionV1.ContextOverflowError({ message: "large" }).toObject() : undefined,
-        })
-        const fiber = yield* run(setup).pipe(Effect.forkChild)
-        yield* Deferred.await(fallback)
-        yield* Fiber.interrupt(fiber)
-        const ssn = yield* SessionNs.Service
-        expect(
-          (yield* ssn.messages({ sessionID: setup.sessions[0]! })).some(
-            (item) => item.info.role === "assistant" && item.info.summary,
-          ),
-        ).toBe(false)
-      }),
-    )
-
-    for (const item of [
-      { name: "processor creation failure", options: { createEscape: "fail" as const } },
-      { name: "processor creation defect", options: { createEscape: "die" as const } },
-      { name: "message conversion failure", options: { conversionEscape: true } },
-      { name: "processor failure", options: { processEscape: "fail" as const } },
-      { name: "processor defect", options: { processEscape: "die" as const } },
-    ]) {
-      itCompaction.instance(`removes provisional compaction ownership after ${item.name}`, () => {
-        const setup = recovery({ fail: () => undefined, ...item.options })
-        return Effect.gen(function* () {
-          yield* run(setup).pipe(Effect.exit)
-          const ssn = yield* SessionNs.Service
-          expect(
-            (yield* ssn.messages({ sessionID: setup.sessions[0]! })).filter(
-              (message) => message.info.role === "assistant" && message.info.summary,
-            ),
-          ).toEqual([])
-        })
-      })
-    }
-
-    itCompaction.instance("pins synthetic continuation to the successful fallback model", () => {
-      const third = model("third")
-      const setup = recovery({
-        change: third,
-        fail: (item) =>
-          item.id === historical.id ? new SessionV1.ContextOverflowError({ message: "large" }).toObject() : undefined,
-      })
-      return Effect.gen(function* () {
-        const output = yield* run(setup)
-        const followup = output.messages.find(
-          (item) =>
-            item.info.role === "user" &&
-            item.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
-        )
-        expect(followup?.info.role === "user" ? followup.info.model : undefined).toMatchObject({
-          providerID: current.providerID,
-          modelID: current.id,
-        })
-      })
-    })
-  })
-
   it.instance(
     "adds synthetic continue prompt when auto is enabled",
     Effect.gen(function* () {
@@ -1863,10 +1257,10 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "rolls back the summary assistant when aborted during processor setup",
+    "does not leave a summary assistant when aborted before processor setup",
     () =>
       Effect.gen(function* () {
-        const setup = yield* Deferred.make<void>()
+        const ready = yield* Deferred.make<void>()
         return yield* Effect.gen(function* () {
           const ssn = yield* SessionNs.Service
           const session = yield* ssn.create({})
@@ -1881,18 +1275,15 @@ describe("session.compaction.process", () => {
             })
             .pipe(Effect.forkChild)
 
-          yield* Deferred.await(setup)
-          const pending = yield* ssn.messages({ sessionID: session.id })
-          expect(pending.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(true)
-
+          yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
           yield* Fiber.interrupt(fiber)
-          const exit = yield* Fiber.await(fiber)
+          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
           const all = yield* ssn.messages({ sessionID: session.id })
 
           expect(Exit.isFailure(exit)).toBe(true)
           if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
           expect(all.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(false)
-        }).pipe(withCompaction({ setup }))
+        }).pipe(withCompaction({ plugin: plugin(ready) }))
       }),
     { git: true },
   )
@@ -2154,32 +1545,6 @@ describe("util.token.estimate", () => {
 })
 
 describe("SessionNs.getUsage", () => {
-  test("bounds malformed inclusive AI SDK cache usage before costing", () => {
-    const model = createModel({
-      context: 100_000,
-      output: 32_000,
-      cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
-    })
-    const oversized = SessionNs.getUsage({
-      model,
-      usage: usage({ inputTokens: 10, outputTokens: 0, cacheReadInputTokens: 12, cacheWriteInputTokens: 9 }),
-    })
-    expect(oversized.tokens).toMatchObject({ input: 0, cache: { read: 10, write: 0 } })
-    expect(oversized.cost).toBeGreaterThanOrEqual(0)
-
-    const malformed = SessionNs.getUsage({
-      model,
-      usage: usage({
-        inputTokens: Number.NaN,
-        outputTokens: 0,
-        cacheReadInputTokens: -4,
-        cacheWriteInputTokens: Number.POSITIVE_INFINITY,
-      }),
-    })
-    expect(malformed.tokens).toMatchObject({ input: 0, cache: { read: 0, write: 0 } })
-    expect(malformed.cost).toBe(0)
-  })
-
   test("normalizes standard usage to token format", () => {
     const model = createModel({ context: 100_000, output: 32_000 })
     const result = SessionNs.getUsage({

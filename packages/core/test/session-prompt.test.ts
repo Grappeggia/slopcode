@@ -1,10 +1,9 @@
 import { describe, expect } from "bun:test"
-import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
-import { eq, sql } from "drizzle-orm"
+import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
+import { eq } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { EventTable } from "@slopcode-ai/core/event/sql"
-import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { Project } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
@@ -17,15 +16,9 @@ import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
-import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
-import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
-import { ModelV2 } from "@slopcode-ai/core/model"
-import { MCP } from "@slopcode-ai/core/mcp"
-import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { testEffect } from "./lib/effect"
-import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -37,9 +30,6 @@ const interruptCalls: SessionV2.ID[] = []
 const interruptSeqs: Array<number | undefined> = []
 const wakeCalls: SessionV2.ID[] = []
 const wakeSeqs: Array<number | undefined> = []
-const waitCalls: SessionV2.ID[] = []
-const executionOrder: string[] = []
-let waitFailure: SessionRunner.StepLimitExceededError | undefined
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
@@ -53,22 +43,9 @@ const execution = Layer.succeed(
         interruptSeqs.push(seq)
       }),
     wake: (sessionID, seq) =>
-      Effect.yieldNow.pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            executionOrder.push("wake")
-            wakeCalls.push(sessionID)
-            wakeSeqs.push(seq)
-          }),
-        ),
-      ),
-    wait: (sessionID) =>
-      Effect.suspend(() => {
-        executionOrder.push("wait")
-        waitCalls.push(sessionID)
-        const failure = waitFailure
-        waitFailure = undefined
-        return failure ? Effect.fail(failure) : Effect.void
+      Effect.sync(() => {
+        wakeCalls.push(sessionID)
+        wakeSeqs.push(seq)
       }),
   }),
 )
@@ -78,7 +55,6 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
-  Layer.provide(locationServices),
 )
 const control = SessionControl.layer.pipe(Layer.provide(sessions), Layer.provide(runtime))
 const it = testEffect(Layer.mergeAll(database, events, projector, store, runtime, execution, sessions, control))
@@ -142,79 +118,6 @@ const interruptEvent = Database.Service.use(({ db }) =>
 )
 
 describe("SessionV2.prompt", () => {
-  it.effect("surfaces a retained terminal to a waiter created after restart", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const db = (yield* Database.Service).db
-      const status = yield* SessionExecutionStatus.make
-      const rootID = SessionMessage.ID.make("msg_durable_wait_terminal")
-      yield* db
-        .update(SessionTable)
-        .set({ runtime: "v2", runtime_state: "draining", runtime_epoch: 1 })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      yield* status.start({
-        sessionID,
-        owner: "v2",
-        runtimeState: "draining",
-        epoch: 1,
-        activityID: rootID,
-        rootID,
-        activity: "prompt",
-        phase: "preparing",
-      })
-      yield* status.fail({
-        sessionID,
-        owner: "v2",
-        runtimeState: "draining",
-        epoch: 1,
-        activityID: rootID,
-        rootID,
-        activity: "prompt",
-        phase: "settling",
-        code: "runner-failure",
-        message: "durable failure",
-        resultingEpoch: 2,
-      })
-
-      expect(yield* (yield* SessionV2.Service).wait(sessionID).pipe(Effect.flip)).toEqual(
-        new SessionExecutionStatus.DurableTerminalError({
-          sessionID,
-          code: "runner-failure",
-          message: "durable failure",
-        }),
-      )
-      const database = yield* Database.Service
-      const eventService = yield* EventV2.Service
-      const sessionStore = yield* SessionStore.Service
-      const rebuiltStatus = SessionExecutionStatus.layer.pipe(
-        Layer.provide(Layer.succeed(Database.Service, database)),
-        Layer.provide(Layer.succeed(EventV2.Service, eventService)),
-      )
-      const rebuilt = SessionV2.layer.pipe(
-        Layer.provide(rebuiltStatus),
-        Layer.provide(Layer.succeed(Database.Service, database)),
-        Layer.provide(Layer.succeed(EventV2.Service, eventService)),
-        Layer.provide(Layer.succeed(SessionStore.Service, sessionStore)),
-        Layer.provide(Project.defaultLayer),
-        Layer.provide(execution),
-        Layer.provide(locationServices),
-      )
-      expect(
-        yield* SessionV2.Service.use((service) => service.wait(sessionID)).pipe(
-          Effect.provide(Layer.fresh(rebuilt)),
-          Effect.flip,
-        ),
-      ).toEqual(
-        new SessionExecutionStatus.DurableTerminalError({
-          sessionID,
-          code: "runner-failure",
-          message: "durable failure",
-        }),
-      )
-    }),
-  )
   it.effect("delegates execution continuation through SessionExecution", () =>
     Effect.gen(function* () {
       yield* setup
@@ -224,63 +127,6 @@ describe("SessionV2.prompt", () => {
       yield* session.resume(sessionID)
       expect(executionCalls).toEqual([sessionID])
       expect(wakeCalls).toEqual([])
-    }),
-  )
-
-  it.effect("registers prompt execution before an immediate wait", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      executionOrder.length = 0
-      wakeCalls.length = 0
-      waitCalls.length = 0
-
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run then wait" }) })
-      yield* session.wait(sessionID)
-
-      expect(executionOrder).toEqual(["wake", "wait"])
-      expect(wakeCalls).toEqual([sessionID])
-      expect(waitCalls).toEqual([sessionID])
-    }),
-  )
-
-  it.effect("rejects a wait for a missing Session before execution", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      waitCalls.length = 0
-
-      const failure = yield* session.wait(SessionV2.ID.make("ses_missing_wait")).pipe(Effect.flip)
-
-      expect(failure._tag).toBe("Session.NotFoundError")
-      expect(waitCalls).toEqual([])
-    }),
-  )
-
-  it.effect("returns immediately when a recorded Session is idle", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      waitCalls.length = 0
-
-      yield* session.wait(sessionID)
-
-      expect(waitCalls).toEqual([sessionID])
-    }),
-  )
-
-  it.effect("propagates the runner failure observed while waiting", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      waitFailure = new SessionRunner.StepLimitExceededError({ sessionID, limit: 25 })
-
-      const failure = yield* session.wait(sessionID).pipe(Effect.flip)
-
-      expect(failure).toMatchObject({
-        _tag: "SessionRunner.StepLimitExceededError",
-        sessionID,
-        limit: 25,
-      })
     }),
   )
 
@@ -310,44 +156,6 @@ describe("SessionV2.prompt", () => {
       yield* session.interrupt(SessionV2.ID.make("ses_missing"))
       expect(interruptCalls).toEqual([SessionV2.ID.make("ses_missing")])
       expect(interruptSeqs).toEqual([undefined])
-    }),
-  )
-
-  it.effect("guards interruption before execution when the projected Session is missing", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const missing = SessionV2.ID.make("ses_missing_guarded")
-      interruptCalls.length = 0
-      interruptSeqs.length = 0
-
-      expect(yield* session.interrupt(missing, Effect.fail("runtime changed")).pipe(Effect.flip)).toBe(
-        "runtime changed",
-      )
-      expect(interruptCalls).toEqual([])
-      expect(interruptSeqs).toEqual([])
-    }),
-  )
-
-  it.effect("does not interrupt execution after a successful guard when the projected Session is missing", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const missing = SessionV2.ID.make("ses_missing_guarded_race")
-      const checked = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      interruptCalls.length = 0
-      interruptSeqs.length = 0
-      const fiber = yield* session
-        .interrupt(
-          missing,
-          Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
-        )
-        .pipe(Effect.forkChild)
-
-      yield* Deferred.await(checked)
-      yield* Deferred.succeed(release, undefined)
-      yield* Fiber.join(fiber)
-      expect(interruptCalls).toEqual([])
-      expect(interruptSeqs).toEqual([])
     }),
   )
 
@@ -524,30 +332,6 @@ describe("SessionV2.prompt", () => {
         .pipe(Effect.flip)
 
       expect(failure._tag).toBe("Session.PromptConflictError")
-    }),
-  )
-
-  it.effect("rejects conflicting steer formats while preserving independent queued contracts", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const structured = new Prompt({
-        text: "structured",
-        format: { type: "json_schema", schema: { type: "number" }, retry_count: 2 },
-      })
-      const first = yield* session.prompt({ sessionID, prompt: structured, resume: false })
-
-      expect(
-        yield* session
-          .prompt({ sessionID, prompt: new Prompt({ text: "conflicting text" }), resume: false })
-          .pipe(Effect.flip),
-      ).toMatchObject({ _tag: "Session.PromptFormatConflictError" })
-      expect(yield* session.prompt({ sessionID, prompt: structured, delivery: "queue", resume: false })).toMatchObject({
-        delivery: "queue",
-        prompt: { format: { type: "json_schema", retry_count: 2 } },
-      })
-      expect(yield* session.prompt({ id: first.id, sessionID, prompt: structured, resume: false })).toEqual(first)
-      expect(yield* admittedCount).toBe(2)
     }),
   )
 
@@ -827,58 +611,6 @@ describe("SessionV2.prompt", () => {
   )
 })
 
-describe("MCP.resolveAndAdmit", () => {
-  const mcp = (text: string) => ({ getPrompt: () => Effect.succeed(new Prompt({ text })) }) as unknown as MCP.Interface
-
-  it.effect("uses the real admission transaction for guard failure without admission or wake", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const id = SessionMessage.ID.make("msg_mcp_guard_failure")
-      wakeCalls.length = 0
-      const failure = yield* MCP.resolveAndAdmit(
-        mcp("guarded"),
-        yield* SessionV2.Service,
-        { name: "server:prompt", sessionID, id },
-        Effect.fail("runtime changed"),
-      ).pipe(Effect.flip)
-      expect(failure).toBe("runtime changed")
-      expect(yield* admitted(id)).toBeUndefined()
-      expect(wakeCalls).toEqual([])
-    }),
-  )
-
-  it.effect("preserves real prompt idempotency and conflict propagation", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const sessions = yield* SessionV2.Service
-      const id = SessionMessage.ID.make("msg_mcp_retry")
-      const first = yield* MCP.resolveAndAdmit(mcp("stable"), sessions, {
-        name: "server:prompt",
-        sessionID,
-        id,
-        resume: false,
-      })
-      expect(
-        yield* MCP.resolveAndAdmit(mcp("stable"), sessions, {
-          name: "server:prompt",
-          sessionID,
-          id,
-          resume: false,
-        }),
-      ).toEqual(first)
-      expect(yield* admittedCount).toBe(1)
-      expect(
-        yield* MCP.resolveAndAdmit(mcp("changed"), sessions, {
-          name: "server:prompt",
-          sessionID,
-          id,
-          resume: false,
-        }).pipe(Effect.flip),
-      ).toBeInstanceOf(SessionV2.PromptConflictError)
-    }),
-  )
-})
-
 describe("SessionControl", () => {
   it.effect("rejects V1-owned sessions before V2 prompt admission", () =>
     Effect.gen(function* () {
@@ -913,239 +645,6 @@ describe("SessionControl", () => {
       expect(admitted.prompt.text).toBe("Run through V2")
       expect(wakeCalls).toEqual([sessionID])
       expect(yield* admittedCount).toBe(1)
-    }),
-  )
-
-  it.effect("fences prompt, model, interrupt, compact, and shell at their event commit", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const { db } = yield* Database.Service
-      const runtime = yield* SessionRuntime.Service
-      const events = yield* EventV2.Service
-      const control = yield* SessionControl.Service
-      wakeCalls.length = 0
-      interruptCalls.length = 0
-      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
-      const changes = ["owner", "state", "epoch"] as const
-      let change: (typeof changes)[number] = "owner"
-      let commits = 0
-      yield* events.beforeCommit((event) => {
-        if (!("sessionID" in event.data) || event.data.sessionID !== sessionID) return Effect.void
-        commits++
-        return db
-          .update(SessionTable)
-          .set({
-            ...(change === "owner" ? { runtime: "v1" as const } : {}),
-            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
-            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
-          })
-          .where(eq(SessionTable.id, sessionID))
-          .run()
-          .pipe(Effect.orDie, Effect.asVoid)
-      })
-      const operations = [
-        () => control.prompt({ sessionID, prompt: new Prompt({ text: "race" }), resume: false }),
-        () =>
-          control.switchModel({
-            sessionID,
-            model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("target") }),
-          }),
-        () => control.interrupt(sessionID),
-        () => control.compact({ sessionID }),
-        () => control.shell({ sessionID, command: "true", resume: false }),
-      ]
-      for (change of changes)
-        for (const operation of operations) {
-          const failure = yield* operation().pipe(Effect.flip)
-          expect(failure).toMatchObject({
-            _tag: "SessionRuntime.Mismatch",
-            actualOwner: change === "owner" ? "v1" : "v2",
-            actualState: change === "state" ? "draining" : "ready",
-            actualEpoch: change === "epoch" ? 2 : 1,
-          })
-          expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
-        }
-      expect(commits).toBe(15)
-      expect(
-        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
-      ).toEqual([])
-      expect(yield* admittedCount).toBe(0)
-      expect(wakeCalls).toEqual([])
-      expect(interruptCalls).toEqual([])
-    }),
-  )
-
-  it.effect("fences exact prompt, shell, and compaction retries before wake", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const { db } = yield* Database.Service
-      const events = yield* EventV2.Service
-      const runtime = yield* SessionRuntime.Service
-      const sessions = yield* SessionV2.Service
-      wakeCalls.length = 0
-      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
-      const promptID = SessionMessage.ID.make("msg_guarded_prompt_retry")
-      const shellID = SessionMessage.ID.make("msg_guarded_shell_retry")
-      const compactID = SessionMessage.ID.make("msg_guarded_compaction_retry")
-      yield* SessionInput.admit(db, events, {
-        id: promptID,
-        sessionID,
-        prompt: new Prompt({ text: "retry" }),
-        delivery: "steer",
-      })
-      yield* SessionInput.admitShell(db, events, { id: shellID, sessionID, command: "true", resume: true })
-      yield* SessionInput.admitCompaction(db, events, { id: compactID, sessionID })
-      const changes = ["owner", "state", "epoch"] as const
-      let change: (typeof changes)[number] = "owner"
-      const transition = () =>
-        db
-          .update(SessionTable)
-          .set({
-            ...(change === "owner" ? { runtime: "v1" as const } : {}),
-            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
-            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
-          })
-          .where(eq(SessionTable.id, sessionID))
-          .run()
-          .pipe(Effect.orDie, Effect.asVoid)
-      const fenced = SessionRuntime.Service.of({
-        ...runtime,
-        assert: (input) =>
-          input.epoch === undefined ? runtime.assert(input).pipe(Effect.tap(transition)) : runtime.assert(input),
-      })
-      const layer = SessionControl.layer.pipe(
-        Layer.provide(Layer.succeed(SessionV2.Service, sessions)),
-        Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
-      )
-      const before = yield* db
-        .select()
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .all()
-        .pipe(Effect.orDie)
-      const scope = yield* Scope.make()
-      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
-      const operations = [
-        () => control.prompt({ id: promptID, sessionID, prompt: new Prompt({ text: "retry" }) }),
-        () => control.shell({ id: shellID, sessionID, command: "true" }),
-        () => control.compact({ id: compactID, sessionID }),
-      ]
-      for (change of changes)
-        for (const operation of operations) {
-          expect(yield* operation().pipe(Effect.flip)).toMatchObject({
-            _tag: "SessionRuntime.Mismatch",
-            actualOwner: change === "owner" ? "v1" : "v2",
-            actualState: change === "state" ? "draining" : "ready",
-            actualEpoch: change === "epoch" ? 2 : 1,
-          })
-          yield* db
-            .update(SessionTable)
-            .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
-            .where(eq(SessionTable.id, sessionID))
-            .run()
-            .pipe(Effect.orDie)
-        }
-
-      expect(
-        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
-      ).toEqual(before)
-      expect(wakeCalls).toEqual([])
-      expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
-    }),
-  )
-
-  it.effect("rechecks runtime after prompt, shell, and compaction publish collisions", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const databaseService = yield* Database.Service
-      const db = databaseService.db
-      const real = yield* EventV2.Service
-      const runtime = yield* SessionRuntime.Service
-      const storeService = yield* SessionStore.Service
-      const executionService = yield* SessionExecution.Service
-      wakeCalls.length = 0
-      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
-      const targets = new Set<SessionMessage.ID>()
-      let change: "owner" | "state" | "epoch" = "owner"
-      const transition = () =>
-        db
-          .update(SessionTable)
-          .set({
-            ...(change === "owner" ? { runtime: "v1" as const } : {}),
-            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
-            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
-          })
-          .where(eq(SessionTable.id, sessionID))
-          .run()
-          .pipe(Effect.orDie, Effect.asVoid)
-      const publish: EventV2.Interface["publish"] = (definition, data, options) => {
-        const id = "messageID" in data ? SessionMessage.ID.make(data.messageID) : undefined
-        if (!id || !targets.delete(id)) return real.publish(definition, data, options)
-        return real
-          .publish(definition, data, { ...options, commit: undefined })
-          .pipe(Effect.andThen(transition()), Effect.andThen(real.publish(definition, data, options)))
-      }
-      const collisionEvents = Layer.succeed(EventV2.Service, EventV2.Service.of({ ...real, publish }))
-      const collisionSessions = SessionV2.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            collisionEvents,
-            Layer.succeed(Database.Service, databaseService),
-            Layer.succeed(SessionStore.Service, storeService),
-            Layer.succeed(
-              Project.Service,
-              Project.Service.of({
-                resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
-                directories: () => Effect.succeed([]),
-                commit: () => Effect.void,
-              }),
-            ),
-            Layer.succeed(SessionExecution.Service, executionService),
-            Layer.mock(LocationServiceMap, { get: () => Layer.empty }),
-          ),
-        ),
-      )
-      const layer = SessionControl.layer.pipe(
-        Layer.provide(Layer.mergeAll(collisionSessions, Layer.succeed(SessionRuntime.Service, runtime))),
-      )
-      const scope = yield* Scope.make()
-      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
-      const changes = ["owner", "state", "epoch"] as const
-      const operations = [
-        (id: SessionMessage.ID) => control.prompt({ id, sessionID, prompt: new Prompt({ text: id }) }),
-        (id: SessionMessage.ID) => control.shell({ id, sessionID, command: "true", resume: false }),
-        (id: SessionMessage.ID) => control.compact({ id, sessionID }),
-      ]
-      for (change of changes)
-        for (const [index, operation] of operations.entries()) {
-          const id = SessionMessage.ID.make(`msg_collision_${change}_${index}`)
-          targets.add(id)
-          expect(yield* operation(id).pipe(Effect.flip)).toMatchObject({
-            _tag: "SessionRuntime.Mismatch",
-            actualOwner: change === "owner" ? "v1" : "v2",
-            actualState: change === "state" ? "draining" : "ready",
-            actualEpoch: change === "epoch" ? 2 : 1,
-          })
-          expect(
-            yield* index === 0
-              ? SessionInput.find(db, id)
-              : index === 1
-                ? SessionInput.findShell(db, id)
-                : SessionInput.findCompaction(db, id),
-          ).toBeDefined()
-          yield* db
-            .update(SessionTable)
-            .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
-            .where(eq(SessionTable.id, sessionID))
-            .run()
-            .pipe(Effect.orDie)
-        }
-
-      expect(targets.size).toBe(0)
-      expect(wakeCalls).toEqual([])
-      expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
     }),
   )
 })
