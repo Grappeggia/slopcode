@@ -9,7 +9,12 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk"
-import type { AgentOrchestrationAgentID, AgentOrchestrationCapability } from "@slopcode-ai/protocol"
+import {
+  AgentOrchestrationLimits,
+  type AgentOrchestrationAgentID,
+  type AgentOrchestrationCapability,
+} from "@slopcode-ai/protocol"
+import { contained } from "./workspace"
 
 export type ACPEvent =
   | { type: "output"; text: string; nativeID?: string }
@@ -60,20 +65,31 @@ export const launch: Launch = (agent, cwd) =>
   })
 
 const clipped = (value: string, size = 64 * 1024) => value.replaceAll("\u0000", "").slice(0, size)
-const text = (value: unknown) => (typeof value === "string" ? clipped(value) : "")
+const bytes = (value: string) => Buffer.byteLength(value)
+const safe = (value: string, size: number, fallback = "") => {
+  const clean = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
+  const output = [...clean].reduce(
+    (result, character) => (bytes(result) + bytes(character) <= size ? result + character : result),
+    "",
+  )
+  return output || fallback
+}
+const text = (value: unknown, size = AgentOrchestrationLimits.maxTextBytes, fallback = "") =>
+  typeof value === "string" ? safe(value, size, fallback) : fallback
 const status = (value: unknown): "pending" | "in_progress" | "completed" | "failed" =>
   value === "in_progress" || value === "completed" || value === "failed" ? value : "pending"
 const content = (value: unknown) => {
   if (!value || typeof value !== "object") return undefined
   const item = value as { type?: unknown; text?: unknown; uri?: unknown; name?: unknown }
   if (item.type === "text") return { text: text(item.text) }
-  if (item.type === "resource_link") return { path: text(item.uri), name: text(item.name) || "resource" }
+  if (item.type === "resource_link")
+    return { path: text(item.uri, AgentOrchestrationLimits.maxPathBytes), name: text(item.name, 256, "resource") }
   return undefined
 }
 const command = (value: unknown) => {
   if (!value || typeof value !== "object") return undefined
   const item = value as { command?: unknown }
-  return typeof item.command === "string" ? clipped(item.command, 4096) : undefined
+  return typeof item.command === "string" ? safe(item.command, 4096) : undefined
 }
 const questionOptions = (input: CreateElicitationRequest) => {
   if (input.mode !== "form") return undefined
@@ -83,10 +99,38 @@ const questionOptions = (input: CreateElicitationRequest) => {
       ? field.enum.filter((item): item is string => typeof item === "string")
       : [],
   )
-  return values.length ? values.slice(0, 32) : undefined
+  const output = values
+    .map((value) => text(value, 512))
+    .filter((value) => value.length > 0)
+    .filter((value, index, all) => all.indexOf(value) === index)
+    .slice(0, AgentOrchestrationLimits.maxQuestionOptions)
+  return output.length ? output : undefined
 }
 const questionField = (input: CreateElicitationRequest) =>
   input.mode === "form" ? Object.keys(input.requestedSchema.properties ?? {})[0] : undefined
+
+const wait = (child: ChildProcess, ms: number) =>
+  new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve()
+    const timer = setTimeout(resolve, ms)
+    child.once("exit", () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    child.once("error", () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+const stop = async (child: ChildProcess) => {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  child.kill("SIGTERM")
+  await wait(child, 250)
+  if (child.exitCode !== null || child.signalCode !== null) return
+  child.kill("SIGKILL")
+  await wait(child, 250)
+}
 
 export async function connect(input: {
   agent: AgentOrchestrationAgentID
@@ -97,23 +141,45 @@ export async function connect(input: {
   if (input.agent !== "slopcode" && input.agent !== "opencode")
     throw new Error(`agent ${input.agent} does not support ACP`)
   const child = (input.start ?? launch)(input.agent, input.cwd)
-  if (!child.stdin || !child.stdout || !child.stderr) throw new Error("ACP subprocess did not provide stdio")
+  if (!child.stdin || !child.stdout || !child.stderr) {
+    await stop(child)
+    throw new Error("ACP subprocess did not provide stdio")
+  }
   child.stderr.on("data", (chunk: Buffer) =>
-    process.stderr.write(`[remote-orchestrator/${input.agent}] ${clipped(chunk.toString(), 4096)}\n`),
+    process.stderr.write(`[remote-orchestrator/${input.agent}] ${safe(chunk.toString(), 4096)}\n`),
   )
   const approvals = new Map<string, (approved: boolean) => void>()
   const questions = new Map<string, (answer?: string) => void>()
   let nativeID = ""
+  const emit = (event: ACPEvent) => {
+    try {
+      input.emit(event)
+      return true
+    } catch (error) {
+      process.stderr.write(
+        `[remote-orchestrator/${input.agent}] dropped ACP event: ${safe(error instanceof Error ? error.message : "invalid event", 512, "invalid event")}\n`,
+      )
+      return false
+    }
+  }
+  const artifact = async (event: Omit<Extract<ACPEvent, { type: "artifact" }>, "path"> & { path: string }) => {
+    const value = await contained(input.cwd, event.path).catch(() => undefined)
+    if (!value) {
+      emit({ type: "unsupported", feature: "ACP artifact path outside workspace" })
+      return
+    }
+    emit({ ...event, path: value, name: text(event.name, 256, "artifact") })
+  }
 
   const client: Client = {
-    sessionUpdate(params: SessionNotification) {
+    async sessionUpdate(params: SessionNotification) {
       const update = params.update
       if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "user_message_chunk") {
         const item = content(update.content)
         if (item && "text" in item && item.text)
-          input.emit({ type: "output", text: item.text, nativeID: update.messageId ?? undefined })
+          emit({ type: "output", text: item.text, nativeID: update.messageId ?? undefined })
         if (item && "path" in item && item.path?.startsWith("/")) {
-          input.emit({
+          await artifact({
             type: "artifact",
             id: update.messageId ?? item.path,
             path: item.path,
@@ -126,12 +192,12 @@ export async function connect(input: {
       if (update.sessionUpdate === "agent_thought_chunk") {
         const item = content(update.content)
         if (item && "text" in item && item.text)
-          input.emit({ type: "reasoning", text: item.text, nativeID: update.messageId ?? undefined })
+          emit({ type: "reasoning", text: item.text, nativeID: update.messageId ?? undefined })
         return Promise.resolve()
       }
       if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
         const item = update
-        input.emit({
+        emit({
           type: "tool",
           id: item.toolCallId,
           title: text(item.title) || "Tool call",
@@ -140,11 +206,11 @@ export async function connect(input: {
         })
         for (const result of item.content ?? []) {
           if (result.type === "diff")
-            input.emit({ type: "artifact", id: item.toolCallId, name: "diff", path: result.path, kind: "diff" })
+            await artifact({ type: "artifact", id: item.toolCallId, name: "diff", path: result.path, kind: "diff" })
           if (result.type === "content") {
             const entry = content(result.content)
             if (entry && "path" in entry && entry.path?.startsWith("/")) {
-              input.emit({
+              await artifact({
                 type: "artifact",
                 id: item.toolCallId,
                 name: entry.name ?? "resource",
@@ -157,16 +223,22 @@ export async function connect(input: {
         return Promise.resolve()
       }
       if (update.sessionUpdate === "plan") {
-        input.emit({
+        emit({
           type: "plan",
           id: `${params.sessionId}:plan`,
-          content:
-            update.entries.map((item) => `- [${item.status === "completed" ? "x" : " "}] ${item.content}`).join("\n") ||
+          content: text(
+            update.entries
+              .map(
+                (item) => `- [${item.status === "completed" ? "x" : " "}] ${text(item.content, 2048, "Untitled step")}`,
+              )
+              .join("\n"),
+            AgentOrchestrationLimits.maxTextBytes,
             "Plan is empty.",
+          ),
         })
         return Promise.resolve()
       }
-      input.emit({ type: "unsupported", feature: update.sessionUpdate })
+      emit({ type: "unsupported", feature: text(update.sessionUpdate, 256, "ACP update") })
       return Promise.resolve()
     },
     requestPermission(params: RequestPermissionRequest) {
@@ -183,20 +255,23 @@ export async function connect(input: {
               : { outcome: { outcome: "cancelled" } },
           )
         })
-        input.emit({
-          type: "approval",
-          id,
-          title: text(params.toolCall.title) || "Approve tool call",
-          command: command(params.toolCall.rawInput),
-          cwd: params.toolCall.locations?.[0]?.path,
-          resolve: (approved) => approvals.get(id)?.(approved),
-        })
+        if (
+          !emit({
+            type: "approval",
+            id,
+            title: text(params.toolCall.title, 512, "Approve tool call"),
+            command: command(params.toolCall.rawInput),
+            cwd: params.toolCall.locations?.[0]?.path,
+            resolve: (approved) => approvals.get(id)?.(approved),
+          })
+        )
+          approvals.get(id)?.(false)
       })
     },
     unstable_createElicitation(params: CreateElicitationRequest) {
       return new Promise((resolve) => {
         if (params.mode !== "form") {
-          input.emit({ type: "unsupported", feature: "ACP URL elicitation" })
+          emit({ type: "unsupported", feature: "ACP URL elicitation" })
           resolve({ action: "decline" })
           return
         }
@@ -210,13 +285,16 @@ export async function connect(input: {
               : { action: "accept", content: field ? { [field]: answer } : undefined },
           )
         })
-        input.emit({
-          type: "question",
-          id,
-          prompt: clipped(params.message, 4096),
-          options: questionOptions(params),
-          resolve: (answer) => questions.get(id)?.(answer),
-        })
+        if (
+          !emit({
+            type: "question",
+            id,
+            prompt: text(params.message, 4096, "Input required"),
+            options: questionOptions(params),
+            resolve: (answer) => questions.get(id)?.(answer),
+          })
+        )
+          questions.get(id)?.(undefined)
       })
     },
   }
@@ -227,14 +305,21 @@ export async function connect(input: {
   )
   const connection = new ClientSideConnection(() => client, stream)
   connection.closed
-    .then(() => input.emit({ type: "retry", reason: "ACP connection closed; reconnect and retry the turn." }))
+    .then(() => emit({ type: "retry", reason: "ACP connection closed; reconnect and retry the turn." }))
     .catch(() => undefined)
-  const initialized = await connection.initialize({
-    protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: { elicitation: { form: {} } },
-    clientInfo: { name: "slopcode-remote-orchestrator", version: "v1" },
-  })
-  const created = await connection.newSession({ cwd: input.cwd, mcpServers: [] })
+  let initialized: Awaited<ReturnType<typeof connection.initialize>>
+  let created: Awaited<ReturnType<typeof connection.newSession>>
+  try {
+    initialized = await connection.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: { elicitation: { form: {} } },
+      clientInfo: { name: "slopcode-remote-orchestrator", version: "v1" },
+    })
+    created = await connection.newSession({ cwd: input.cwd, mcpServers: [] })
+  } catch (error) {
+    await stop(child)
+    throw error
+  }
   nativeID = created.sessionId
   const capabilities: AgentOrchestrationCapability[] = ["workspace", "sessions", "turns", "approvals"]
   if (initialized.agentCapabilities?.loadSession) capabilities.push("replay")
@@ -243,8 +328,7 @@ export async function connect(input: {
     capabilities,
     async turn(prompt) {
       const result = await connection.prompt({ sessionId: nativeID, prompt: [{ type: "text", text: prompt }] })
-      if (result.stopReason !== "end_turn")
-        input.emit({ type: "retry", reason: `ACP turn stopped: ${result.stopReason}` })
+      if (result.stopReason !== "end_turn") emit({ type: "retry", reason: `ACP turn stopped: ${result.stopReason}` })
     },
     approval(id, approved) {
       const handler = approvals.get(id)
@@ -261,8 +345,7 @@ export async function connect(input: {
     async close() {
       for (const handler of approvals.values()) handler(false)
       for (const handler of questions.values()) handler(undefined)
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM")
-      await new Promise<void>((resolve) => child.once("exit", () => resolve()))
+      await stop(child)
     },
   }
 }

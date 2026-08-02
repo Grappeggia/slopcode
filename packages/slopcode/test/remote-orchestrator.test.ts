@@ -71,7 +71,10 @@ describe("remote orchestrator", () => {
 
   test("uses fixed workspace/session/turn frames and only writes validated protocol JSON", async () => {
     const root = await temp()
+    await Bun.write(path.join(root, "fixture.md"), "fixture")
     const output: Frame[] = []
+    let approvals = 0
+    let questions = 0
     let emit: ((event: ACPEvent) => void) | undefined
     const adapter: Session = {
       nativeID: "fixture-session",
@@ -92,8 +95,8 @@ describe("remote orchestrator", () => {
         })
         emit?.({ type: "retry", reason: "fixture retry" })
       },
-      approval: () => true,
-      question: () => true,
+      approval: () => ++approvals === 1,
+      question: () => ++questions === 1,
       async close() {},
     }
     const bridge = new Bridge(
@@ -124,11 +127,68 @@ describe("remote orchestrator", () => {
         "interaction.approval.requested",
         "interaction.question.requested",
         "plan.available",
-        "artifact.created",
         "turn.retry",
       ]),
     )
     expect(() => output.forEach((item) => decode(item))).not.toThrow()
+    const approval = output.find((item) => item.kind === "event" && item.type === "interaction.approval.requested")
+    const question = output.find((item) => item.kind === "event" && item.type === "interaction.question.requested")
+    if (approval?.kind === "event" && approval.type === "interaction.approval.requested") {
+      await bridge.handle(
+        frame("interaction.approval.reply", {
+          sessionID,
+          interactionID: approval.interaction.id,
+          revision: 2,
+          decision: "approved",
+        }),
+      )
+      expect(approvals).toBe(0)
+      await bridge.handle(
+        frame("interaction.approval.reply", {
+          sessionID,
+          interactionID: approval.interaction.id,
+          revision: 1,
+          decision: "approved",
+        }),
+      )
+      await bridge.handle(
+        frame("interaction.approval.reply", {
+          sessionID,
+          interactionID: approval.interaction.id,
+          revision: 1,
+          decision: "approved",
+        }),
+      )
+      expect(approvals).toBe(1)
+    }
+    if (question?.kind === "event" && question.type === "interaction.question.requested") {
+      await bridge.handle(
+        frame("interaction.approval.reply", {
+          sessionID,
+          interactionID: question.interaction.id,
+          revision: 1,
+          decision: "approved",
+        }),
+      )
+      expect(questions).toBe(0)
+      await bridge.handle(
+        frame("interaction.question.reply", {
+          sessionID,
+          interactionID: question.interaction.id,
+          revision: 1,
+          answer: "yes",
+        }),
+      )
+      await bridge.handle(
+        frame("interaction.question.reply", {
+          sessionID,
+          interactionID: question.interaction.id,
+          revision: 1,
+          answer: "yes",
+        }),
+      )
+      expect(questions).toBe(1)
+    }
     await bridge.close()
   })
 

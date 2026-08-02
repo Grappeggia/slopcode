@@ -21,3 +21,10 @@
 - The complete `packages/slopcode` typecheck currently fails in the pre-existing Task 2 remote-job journal and HTTP route changes. It reports no errors from the Task 3 bridge, ACP adapter, CLI, or tests.
 - The ACP bridge deliberately advertises only negotiated baseline capabilities. URL elicitation and ACP update types without a lossless v1 mapping are surfaced as explicit unsupported output rather than simulated through a terminal.
 - Codex and Claude adapters, durable bridge replay, plan-save commits, and Android structured UI remain Tasks 4 and 5.
+
+## Correction commit
+
+- Pending interactions now record owning session, kind, revision, and native ID; stale, wrong-kind, wrong-session, and replayed replies are rejected before the adapter is invoked.
+- ACP artifacts are resolved through workspace `realpath` containment before they can become protocol artifacts. ACP-originated strings are control-stripped and UTF-8 byte-bounded before bridge projection.
+- ACP subprocess teardown is bounded, handles an already-exited child, escalates from `SIGTERM` to `SIGKILL`, and cleans up initialization/session-creation failures.
+- Focused bridge coverage now exercises stale approval, wrong-kind question, and replay replies.

@@ -14,6 +14,7 @@ class Fixture {
   }
 
   async prompt(params: { sessionId: string }) {
+    await Bun.write(path.join(process.cwd(), "fixture.ts"), "fixture")
     await this.connection.sessionUpdate({
       sessionId: params.sessionId,
       update: {

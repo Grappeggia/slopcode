@@ -12,8 +12,15 @@ import { contained, WorkspaceError } from "./workspace"
 
 const decode = Schema.decodeUnknownSync(AgentOrchestrationFrame)
 const bytes = (value: string) => Buffer.byteLength(value)
-const clean = (value: string, size = 2_000) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").slice(0, size)
-const native = (value: string) => clean(value, 512)
+const clean = (value: string, size = 2_000, fallback = "") => {
+  const normalized = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
+  const output = [...normalized].reduce(
+    (result, character) => (bytes(result) + bytes(character) <= size ? result + character : result),
+    "",
+  )
+  return output || fallback
+}
+const native = (value: string) => clean(value, 512, "native")
 const identifier = (prefix: string, value: string = randomUUID()) =>
   `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 48)}`
 const artifactPath = (root: string, value: string) =>
@@ -27,6 +34,13 @@ type Stored = {
   turnID?: string
 }
 
+type Interaction = {
+  sessionID: string
+  kind: "approval" | "question"
+  revision: number
+  nativeID: string
+}
+
 type Open = (input: {
   agent: AgentOrchestrationAgentID
   cwd: string
@@ -37,6 +51,7 @@ export class Bridge {
   readonly workspaces = new Map<string, string>()
   readonly sessions = new Map<string, Stored>()
   readonly native = new Map<string, string>()
+  readonly interactions = new Map<string, Interaction>()
   #sequence = 0
   #closed = false
 
@@ -48,7 +63,24 @@ export class Bridge {
 
   private out(frame: unknown) {
     if (this.#closed) return
-    this.write(decode(frame))
+    try {
+      this.write(decode(frame))
+    } catch (error) {
+      this.write(
+        decode({
+          version: "v1",
+          kind: "error",
+          type: "error",
+          code: "internal",
+          message: clean(
+            error instanceof Error ? error.message : "invalid bridge event",
+            2_000,
+            "invalid bridge event",
+          ),
+          retryable: false,
+        }),
+      )
+    }
   }
 
   private error(
@@ -77,13 +109,13 @@ export class Bridge {
     this.out({ version: "v1", kind: "event", cursor: `cur_${sequence}`, sequence, sessionID, ...input })
   }
 
-  private mapped(sessionID: string, session: Stored, event: ACPEvent) {
+  private async mapped(sessionID: string, session: Stored, event: ACPEvent) {
     const turnID = session.turnID
     if (event.type === "output" && turnID) {
       this.event(sessionID, {
         type: "turn.output",
         turnID,
-        text: event.text,
+        text: clean(event.text, AgentOrchestrationLimits.maxTextBytes, "Agent output unavailable"),
         ...(event.nativeID ? { metadata: { nativeID: native(event.nativeID) } } : {}),
       })
       return
@@ -92,7 +124,7 @@ export class Bridge {
       this.event(sessionID, {
         type: "turn.reasoning",
         turnID,
-        text: event.text,
+        text: clean(event.text, AgentOrchestrationLimits.maxTextBytes, "Agent reasoning unavailable"),
         ...(event.nativeID ? { metadata: { nativeID: native(event.nativeID) } } : {}),
       })
       return
@@ -105,7 +137,7 @@ export class Bridge {
         turnID,
         tool: {
           id,
-          title: event.title,
+          title: clean(event.title, 512, "Tool call"),
           status: event.status,
           ...(event.kind &&
           ["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "other"].includes(event.kind)
@@ -118,16 +150,16 @@ export class Bridge {
     }
     if (event.type === "approval" && turnID) {
       const id = identifier("int", event.id)
-      this.native.set(id, event.id)
+      this.interactions.set(id, { sessionID, kind: "approval", revision: 1, nativeID: event.id })
       this.event(sessionID, {
         type: "interaction.approval.requested",
         turnID,
         interaction: {
           id,
           revision: 1,
-          title: event.title,
-          ...(event.command ? { command: event.command } : {}),
-          ...(event.cwd?.startsWith("/") ? { cwd: event.cwd } : {}),
+          title: clean(event.title, 512, "Approve tool call"),
+          ...(event.command ? { command: clean(event.command, 4 * 1024) } : {}),
+          ...(event.cwd?.startsWith(`${session.workspace}${path.sep}`) ? { cwd: event.cwd } : {}),
           risk: "medium",
           metadata: { nativeID: native(event.id) },
         },
@@ -136,15 +168,23 @@ export class Bridge {
     }
     if (event.type === "question" && turnID) {
       const id = identifier("int", event.id)
-      this.native.set(id, event.id)
+      this.interactions.set(id, { sessionID, kind: "question", revision: 1, nativeID: event.id })
       this.event(sessionID, {
         type: "interaction.question.requested",
         turnID,
         interaction: {
           id,
           revision: 1,
-          prompt: event.prompt,
-          ...(event.options ? { options: event.options } : {}),
+          prompt: clean(event.prompt, 4 * 1024, "Input required"),
+          ...(event.options
+            ? {
+                options: event.options
+                  .map((option) => clean(option, 512))
+                  .filter(Boolean)
+                  .filter((option, index, all) => all.indexOf(option) === index)
+                  .slice(0, AgentOrchestrationLimits.maxQuestionOptions),
+              }
+            : {}),
           allowFreeform: true,
           metadata: { nativeID: native(event.id) },
         },
@@ -160,16 +200,23 @@ export class Bridge {
           id,
           path: artifactPath(session.workspace, event.id),
           revision: 1,
-          content: event.content,
+          content: clean(event.content, AgentOrchestrationLimits.maxTextBytes, "Plan unavailable"),
           metadata: { nativeID: native(event.id), persisted: "false" },
         },
       })
       return
     }
-    if (
-      event.type === "artifact" &&
-      (event.path === session.workspace || event.path.startsWith(`${session.workspace}${path.sep}`))
-    ) {
+    if (event.type === "artifact") {
+      const value = await contained(session.workspace, event.path).catch(() => undefined)
+      if (!value) {
+        if (turnID)
+          this.event(sessionID, {
+            type: "turn.output",
+            turnID,
+            text: "Dropped ACP artifact outside the active workspace.",
+          })
+        return
+      }
       const id = identifier("art", event.id)
       this.native.set(id, event.id)
       this.event(sessionID, {
@@ -177,9 +224,9 @@ export class Bridge {
         ...(turnID ? { turnID } : {}),
         artifact: {
           id,
-          name: event.name,
+          name: clean(event.name, 256, "artifact"),
           kind: event.kind,
-          path: event.path,
+          path: value,
           size: 0,
           metadata: { nativeID: native(event.id) },
         },
@@ -187,7 +234,11 @@ export class Bridge {
       return
     }
     if (event.type === "retry" && turnID) {
-      this.event(sessionID, { type: "turn.retry", turnID, reason: event.reason })
+      this.event(sessionID, {
+        type: "turn.retry",
+        turnID,
+        reason: clean(event.reason, 2 * 1024, "Agent retry requested"),
+      })
       return
     }
     const message =
@@ -227,7 +278,12 @@ export class Bridge {
           agent: frame.agent,
           cwd: workspace,
           emit: (event) => {
-            if (stored) return this.mapped(sessionID, stored, event)
+            if (stored) {
+              void this.mapped(sessionID, stored, event).catch((error: unknown) =>
+                this.error("internal", error instanceof Error ? error.message : "ACP event mapping failed"),
+              )
+              return
+            }
             pending.push(event)
           },
         })
@@ -243,7 +299,9 @@ export class Bridge {
           sessionID,
           capabilities: adapter.capabilities,
         })
-        pending.forEach((event) => this.mapped(sessionID, stored, event))
+        for (const event of pending) {
+          await this.mapped(sessionID, stored, event)
+        }
         return
       }
       if (frame.type === "turn.create") {
@@ -268,9 +326,17 @@ export class Bridge {
       }
       if (frame.type === "interaction.approval.reply") {
         const session = this.sessions.get(frame.sessionID)
-        const nativeID = this.native.get(frame.interactionID)
-        if (!session || !nativeID || !session.adapter.approval(nativeID, frame.decision === "approved"))
+        const interaction = this.interactions.get(frame.interactionID)
+        if (
+          !session ||
+          !interaction ||
+          interaction.sessionID !== frame.sessionID ||
+          interaction.kind !== "approval" ||
+          interaction.revision !== frame.revision ||
+          !session.adapter.approval(interaction.nativeID, frame.decision === "approved")
+        )
           return this.error("interaction_conflict", "approval is no longer pending", frame)
+        this.interactions.delete(frame.interactionID)
         this.out({
           version: "v1",
           kind: "response",
@@ -283,9 +349,17 @@ export class Bridge {
       }
       if (frame.type === "interaction.question.reply") {
         const session = this.sessions.get(frame.sessionID)
-        const nativeID = this.native.get(frame.interactionID)
-        if (!session || !nativeID || !session.adapter.question(nativeID, frame.answer))
+        const interaction = this.interactions.get(frame.interactionID)
+        if (
+          !session ||
+          !interaction ||
+          interaction.sessionID !== frame.sessionID ||
+          interaction.kind !== "question" ||
+          interaction.revision !== frame.revision ||
+          !session.adapter.question(interaction.nativeID, frame.answer)
+        )
           return this.error("interaction_conflict", "question is no longer pending", frame)
+        this.interactions.delete(frame.interactionID)
         this.out({
           version: "v1",
           kind: "response",
@@ -307,6 +381,7 @@ export class Bridge {
     this.#closed = true
     await Promise.allSettled([...this.sessions.values()].map((session) => session.adapter.close()))
     this.sessions.clear()
+    this.interactions.clear()
   }
 }
 
