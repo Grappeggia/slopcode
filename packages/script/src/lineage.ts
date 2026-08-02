@@ -307,7 +307,12 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
     throw new Error(`Could not resolve freshly fetched canonical branch ${options.remote}/${options.branch}.`)
   const stateSha = await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`)
   const all = await releases(options.cwd, tags)
-  const published = stateSha ? (await history(options.cwd, all, stateSha)).filter((item) => item.ancestor) : all
+  const anchor = stateSha ? all.find((item) => item.sha === stateSha) : undefined
+  const published = stateSha
+    ? (await history(options.cwd, all, stateSha)).filter(
+        (item) => item.ancestor && (!anchor || semver.major(item.version) === semver.major(anchor.version)),
+      )
+    : all
   return {
     ...options,
     target,
