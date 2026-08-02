@@ -188,6 +188,10 @@ function remotePath(value: string | undefined) {
   return next
 }
 
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`
+}
+
 export function buildSshBrowseCommand(authority: string, port: number | undefined, current?: string) {
   const target = sshAuthority(authority, port)
   const folder = remotePath(current)
@@ -211,7 +215,7 @@ export function buildSshBrowseCommand(authority: string, port: number | undefine
       "-se",
       "--",
       "slopcode-ssh-browse",
-      folder,
+      shellQuote(folder),
     ],
     { extendEnv: true, stdin: Stream.make(new TextEncoder().encode(sshScript)) },
   )

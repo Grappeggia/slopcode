@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { mkdirSync, rmSync } from "node:fs"
 import * as http from "node:http"
 import { createServer } from "node:net"
@@ -345,7 +345,7 @@ const main = Effect.gen(function* () {
   const hostname = "127.0.0.1"
   const url = `http://${hostname}:${port}`
   const password = randomUUID()
-  const remoteHostID = `hst_${randomUUID().replaceAll("-", "")}`
+  const remoteHostID = `hst_${createHash("sha256").update(app.getPath("userData")).digest("hex").slice(0, 32)}`
   const remoteSupervisorToken = randomUUID()
 
   const loadingTask = yield* Effect.gen(function* () {

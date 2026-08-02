@@ -80,9 +80,13 @@ describe("remote runtime HttpApi", () => {
     expect(command?.args?.some((item) => item.startsWith("UserKnownHostsFile="))).toBe(true)
     expect(command?.args).toContain("ConnectTimeout=15")
     expect(command?.args).toEqual(
-      expect.arrayContaining(["-p", "2222", "marcos@example.test", "sh", "-se", "--", "/Users/marcos"]),
+      expect.arrayContaining(["-p", "2222", "marcos@example.test", "sh", "-se", "--", "'/Users/marcos'"]),
     )
     expect(command?.options.shell).toBeUndefined()
+    const unsafe = "/Users/a b; touch /tmp/pwned/'quote"
+    expect(buildSshBrowseCommand("marcos@example.test", 22, unsafe)?.args?.at(-1)).toBe(
+      "'/Users/a b; touch /tmp/pwned/'\"'\"'quote'",
+    )
     expect(buildSshBrowseCommand("marcos@-bad", 22, "/")).toBeUndefined()
     expect(
       parseSshBrowseOutput(
