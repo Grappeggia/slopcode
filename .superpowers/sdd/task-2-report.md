@@ -20,13 +20,14 @@
 - Every start, including a live in-memory job, passes through the scoped journal idempotency transaction; live conflicting prompts/configuration now fail cleanly.
 - Reused backend interaction IDs advance to a fresh durable revision that is reflected in the emitted event and snapshot before an answer is accepted.
 - Durable state, artifacts, plan preparation, and token commit are bound to both routed workspace and instance root; plan tokens are also bound to their original job ID.
+- Event streaming and all job actions use the same routed workspace/root guard, so an ID cannot expose retained output or mutate a job across an instance or workspace boundary.
 - Retains at most 2,048 events per job, bounds persisted event/state/metadata sizes, limits artifacts to 64 per job, expires idempotency records after 24 hours, and uses five-minute single-use plan tokens.
 - Keeps prompts and process environments out of the journal. Recovered jobs reject actions that cannot be delivered to an active in-memory process handle.
 
 ## Validation
 
 - `bun test test/server/remote-agent-journal.test.ts --timeout 30000` — 9 pass.
-- `bun test test/server/httpapi-remote-runtime.test.ts --timeout 30000` — 23 pass.
+- `bun test test/server/httpapi-remote-runtime.test.ts --timeout 30000` — 23 pass, including cross-root and cross-workspace stream/action denial.
 - `bun run typecheck` — pass.
 
 ## Limitations

@@ -1,4 +1,5 @@
 import { AppProcess } from "@slopcode-ai/core/process"
+import { Flag } from "@slopcode-ai/core/flag/flag"
 import { Context, Effect, Layer } from "effect"
 import { describe, expect, test, afterEach } from "bun:test"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
@@ -591,7 +592,9 @@ describe("remote agent runtime", () => {
       { mode: 0o755 },
     )
     const previous = process.env.PATH
+    const workspace = Flag.SLOPCODE_WORKSPACE_ID
     process.env.PATH = `${bin.path}${path.delimiter}${previous ?? ""}`
+    Flag.SLOPCODE_WORKSPACE_ID = "ws_job"
     try {
       const started = await request(
         RemoteRuntimePaths.job,
@@ -646,6 +649,38 @@ describe("remote agent runtime", () => {
         path: outside.path,
       })
       expect(crossRoot.status).toBe(404)
+      const crossEvents = await request(RemoteRuntimePaths.jobEvents, outside.path, {
+        job: "job_structured",
+        path: outside.path,
+      })
+      expect(crossEvents.status).toBe(404)
+      const crossAction = await request(
+        RemoteRuntimePaths.jobAction.replace(":jobID", "job_structured"),
+        outside.path,
+        { path: outside.path },
+        {
+          method: "POST",
+          body: JSON.stringify({ action: "comment", comment: { path: "result.ts", body: "must stay scoped" } }),
+        },
+      )
+      expect(crossAction.status).toBe(404)
+      Flag.SLOPCODE_WORKSPACE_ID = "ws_other"
+      const crossWorkspaceEvents = await request(RemoteRuntimePaths.jobEvents, tmp.path, {
+        job: "job_structured",
+        path: tmp.path,
+      })
+      expect(crossWorkspaceEvents.status).toBe(404)
+      const crossWorkspaceAction = await request(
+        RemoteRuntimePaths.jobAction.replace(":jobID", "job_structured"),
+        tmp.path,
+        { path: tmp.path },
+        {
+          method: "POST",
+          body: JSON.stringify({ action: "comment", comment: { path: "result.ts", body: "must stay scoped" } }),
+        },
+      )
+      expect(crossWorkspaceAction.status).toBe(404)
+      Flag.SLOPCODE_WORKSPACE_ID = "ws_job"
       const crossJob = await request(
         RemoteRuntimePaths.jobPlanCommit.replace(":jobID", "job_other"),
         tmp.path,
@@ -668,6 +703,7 @@ describe("remote agent runtime", () => {
       expect(body).toContain("Which suite?")
       expect(body).toContain("job.completed")
     } finally {
+      Flag.SLOPCODE_WORKSPACE_ID = workspace
       if (previous === undefined) delete process.env.PATH
       else process.env.PATH = previous
     }

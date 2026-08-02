@@ -68,11 +68,12 @@ export class RemoteAgentJobNotFoundError extends Error {
 
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<State>
-  readonly stream: (input: {
-    readonly jobID: string
-    readonly cursor?: string
-  }) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
-  readonly action: (input: { readonly jobID: string; readonly action: Action }) => Effect.Effect<State, Error>
+  readonly stream: (
+    input: { readonly jobID: string; readonly cursor?: string } & JobScope,
+  ) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
+  readonly action: (
+    input: { readonly jobID: string; readonly action: Action } & JobScope,
+  ) => Effect.Effect<State, Error>
   readonly state: (input: { readonly jobID: string } & JobScope) => Effect.Effect<State, RemoteAgentJobNotFoundError>
   readonly artifact: (
     input: {
@@ -753,6 +754,7 @@ export const layer = Layer.effect(
 
     const stream: Interface["stream"] = (input) =>
       Effect.gen(function* () {
+        yield* scoped(input.jobID, input)
         const job = jobs.get(input.jobID) ?? recovered.get(input.jobID)
         if (!job) return yield* Effect.fail(new RemoteAgentJobNotFoundError(input.jobID))
         const queue = yield* Queue.unbounded<Event>()
@@ -779,6 +781,7 @@ export const layer = Layer.effect(
 
     const action: Interface["action"] = (input) =>
       Effect.gen(function* () {
+        yield* scoped(input.jobID, input)
         const job = jobs.get(input.jobID) ?? recovered.get(input.jobID)
         if (!job) return yield* Effect.fail(new RemoteAgentJobNotFoundError(input.jobID))
         const value = input.action

@@ -1222,8 +1222,15 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
     const jobEvents = Effect.fn("RemoteRuntimeHttpApi.jobEvents")(function* (ctx: {
       query: typeof RemoteAgentJobEventsQuery.Type
     }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
       const source = yield* jobs
-        .stream({ jobID: ctx.query.job, cursor: ctx.query.cursor })
+        .stream({
+          jobID: ctx.query.job,
+          cursor: ctx.query.cursor,
+          workspaceID: (yield* WorkspaceRef) ?? "local",
+          root: instance.directory,
+        })
         .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
       const stream = source.pipe(
         Stream.takeUntil((event) => isTerminalJobEvent(event.type)),
@@ -1246,8 +1253,15 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       query: typeof RemoteAgentJobActionQuery.Type
       payload: typeof RemoteAgentJobAction.Type
     }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
       return yield* jobs
-        .action({ jobID: ctx.params.jobID, action: ctx.payload })
+        .action({
+          jobID: ctx.params.jobID,
+          action: ctx.payload,
+          workspaceID: (yield* WorkspaceRef) ?? "local",
+          root: instance.directory,
+        })
         .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
     })
 
