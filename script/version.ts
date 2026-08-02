@@ -10,8 +10,7 @@ type Release = {
   body?: string
 }
 
-const releases = async (repo: string) =>
-  (await $`gh api repos/${repo}/releases?per_page=100`.json()) as Release[]
+const releases = async (repo: string) => (await $`gh api repos/${repo}/releases?per_page=100`.json()) as Release[]
 
 export const releaseInfo = async (repo = process.env.GH_REPO ?? "teamslop/slopcode") => {
   const tag = `v${Script.version}`
