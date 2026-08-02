@@ -269,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.version.outputs.version != ''
     permissions:
-      contents: read
+      contents: write
       id-token: write # npm trusted publishing
     steps:
       - uses: actions/checkout@v5
@@ -367,7 +367,7 @@ jobs:
             sleep 10
           done
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
 
       - name: Install package repository tooling
         run: |
@@ -376,7 +376,7 @@ jobs:
 
       - name: Recheck draft release
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           draft=$(gh api 'repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}' --jq .draft)
           test "$draft" = "true" || test "$draft" = "false"
@@ -448,6 +448,6 @@ jobs:
           SLOPCODE_RELEASE: ${{ needs.version.outputs.release }}
           SLOPCODE_SOURCE_SHA: ${{ inputs.source_sha }}
           SLOPCODE_PREVIOUS_TAG: ${{ inputs.previous_tag }}
-          GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           NPM_CONFIG_PROVENANCE: true
