@@ -470,7 +470,7 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
           params: { jobID: BoundedID },
           query: RemoteAgentJobActionQuery,
           payload: RemoteAgentJobArtifact,
-          success: described(Schema.Literal("saved", "duplicate", "quota"), "Persisted artifact metadata result"),
+          success: described(Schema.Literals(["saved", "duplicate", "quota"]), "Persisted artifact metadata result"),
           error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
         }),
         HttpApiEndpoint.post("jobPlanPrepare", RemoteRuntimePaths.jobPlanPrepare, {

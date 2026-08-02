@@ -6,12 +6,18 @@ import {
   RemoteAgentJobState,
 } from "../groups/remote-runtime"
 import { Context, Effect, Layer } from "effect"
-import { sql } from "drizzle-orm"
+import { sql, type SQLWrapper } from "drizzle-orm"
 
 type State = typeof RemoteAgentJobState.Type
 type Event = typeof RemoteAgentJobEvent.Type
 type Config = typeof RemoteAgentConfig.Type
 type Connection = Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0]
+type Query = SQLWrapper | string
+type SafeConnection = {
+  readonly run: (query: Query) => Effect.Effect<unknown>
+  readonly get: <A>(query: Query) => Effect.Effect<A | undefined>
+  readonly all: <A>(query: Query) => Effect.Effect<A[]>
+}
 
 export const limits = {
   eventBytes: 256 * 1024,
@@ -84,6 +90,14 @@ function safe(value: unknown): unknown {
         : [[key, safe(item)]],
     ),
   )
+}
+
+function queries(tx: Connection): SafeConnection {
+  return {
+    run: (query: Query) => tx.run(query).pipe(Effect.orDie),
+    get: <A>(query: Query) => tx.get<A>(query).pipe(Effect.orDie),
+    all: <A>(query: Query) => tx.all<A>(query).pipe(Effect.orDie),
+  }
 }
 
 export interface Interface {
@@ -220,7 +234,7 @@ function tables(db: Database.Interface["db"]) {
   ]).pipe(Effect.asVoid)
 }
 
-function find(tx: Connection, id: string) {
+function find(tx: SafeConnection, id: string) {
   return tx.get<{ state: string; root: string; config: string | null; fingerprint: string }>(
     sql`SELECT state, root, config, fingerprint FROM remote_agent_job WHERE id = ${id}`,
   )
@@ -249,8 +263,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* tables(db)
-    const atomic = <A, E>(effect: (tx: Connection) => Effect.Effect<A, E>) =>
-      db.transaction(effect, { behavior: "immediate" })
+    const atomic = <A, E>(effect: (tx: SafeConnection) => Effect.gen.Return<A, E, never>) =>
+      db
+        .transaction((tx) => Effect.gen(() => effect(queries(tx))), { behavior: "immediate" })
+        .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
 
     const start: Interface["start"] = (input) =>
       atomic(function* (tx) {
@@ -299,6 +315,7 @@ export const layer = Layer.effect(
           config: string | null
           fingerprint: string
         }>(sql`SELECT state, root, config, fingerprint FROM remote_agent_job WHERE id = ${id}`)
+        .pipe(Effect.orDie)
         .pipe(Effect.map((row) => (row ? job(row) : undefined)))
 
     const failStart: Interface["failStart"] = (input) =>
@@ -307,7 +324,7 @@ export const layer = Layer.effect(
         if (!current) return yield* Effect.fail(new JobNotFoundError(input.jobID))
         const state = { ...job(current).state, status: "failed" as const, error: input.message, updatedAt: Date.now() }
         const stored = encoded(state, limits.stateBytes)
-        if (!stored) return yield* Effect.fail(new Error("remote agent snapshot exceeds durable retention limit"))
+        if (!stored) return yield* Effect.die(new Error("remote agent snapshot exceeds durable retention limit"))
         yield* tx.run(sql`UPDATE remote_agent_job SET state = ${stored}, terminal_outcome = 'failed', updated_at = ${Date.now()}
           WHERE id = ${input.jobID}`)
         return state
@@ -321,6 +338,7 @@ export const layer = Layer.effect(
           config: string | null
           fingerprint: string
         }>(sql`SELECT state, root, config, fingerprint FROM remote_agent_job ORDER BY updated_at`)
+        .pipe(Effect.orDie)
         .pipe(Effect.map((rows) => rows.map(job)))
 
     const append: Interface["append"] = (input) =>
@@ -363,13 +381,13 @@ export const layer = Layer.effect(
             current.revision !== input.completion.revision ||
             current.digest !== input.completion.digest
           )
-            return yield* Effect.fail(new Error("remote agent interaction delivery is no longer pending"))
+            return yield* Effect.die(new Error("remote agent interaction delivery is no longer pending"))
         }
         const data = encoded(candidate.data, limits.eventBytes)
-        if (!data) return yield* Effect.fail(new Error("remote agent event exceeds durable retention limit"))
+        if (!data) return yield* Effect.die(new Error("remote agent event exceeds durable retention limit"))
         const state = input.reduce(job(current).state, candidate)
         const stored = encoded(state, limits.stateBytes)
-        if (!stored) return yield* Effect.fail(new Error("remote agent snapshot exceeds durable retention limit"))
+        if (!stored) return yield* Effect.die(new Error("remote agent snapshot exceeds durable retention limit"))
         const now = Date.now()
         yield* tx.run(sql`INSERT INTO remote_agent_event (job_id, sequence, id, type, data, created_at)
           VALUES (${input.jobID}, ${next}, ${input.id}, ${input.type}, ${data}, ${now})`)
@@ -377,7 +395,7 @@ export const layer = Layer.effect(
           WHERE job_id = ${input.jobID} AND sequence <= ${next - MAX_REMOTE_JOB_EVENTS}`)
         if (input.interaction) {
           const payload = encoded(safe(input.interaction.payload), 64 * 1024)
-          if (!payload) return yield* Effect.fail(new Error("remote agent interaction exceeds retention limit"))
+          if (!payload) return yield* Effect.die(new Error("remote agent interaction exceeds retention limit"))
           yield* tx.run(sql`INSERT INTO remote_agent_interaction (
             job_id, id, kind, revision, status, payload, updated_at
           ) VALUES (${input.jobID}, ${input.interaction.id}, ${input.interaction.kind}, ${revision}, 'pending', ${payload}, ${now})
@@ -416,7 +434,7 @@ export const layer = Layer.effect(
       atomic(function* (tx) {
         if (!(yield* find(tx, input.jobID))) return yield* Effect.fail(new JobNotFoundError(input.jobID))
         const payload = encoded(safe(input.payload), 64 * 1024)
-        if (!payload) return yield* Effect.fail(new Error("remote agent interaction exceeds retention limit"))
+        if (!payload) return yield* Effect.die(new Error("remote agent interaction exceeds retention limit"))
         const current = yield* tx.get<{
           id: string
           kind: "approval" | "question"
@@ -483,11 +501,13 @@ export const layer = Layer.effect(
 
     const artifacts: Interface["artifacts"] = (jobID) =>
       Effect.gen(function* () {
-        if (!(yield* db.get(sql`SELECT id FROM remote_agent_job WHERE id = ${jobID}`)))
+        if (!(yield* db.get(sql`SELECT id FROM remote_agent_job WHERE id = ${jobID}`).pipe(Effect.orDie)))
           return yield* Effect.fail(new JobNotFoundError(jobID))
-        return (yield* db.all<{ metadata: string }>(
-          sql`SELECT metadata FROM remote_agent_artifact WHERE job_id = ${jobID} ORDER BY created_at, id`,
-        )).map((item) => json<Record<string, unknown>>(item.metadata))
+        return (yield* db
+          .all<{ metadata: string }>(
+            sql`SELECT metadata FROM remote_agent_artifact WHERE job_id = ${jobID} ORDER BY created_at, id`,
+          )
+          .pipe(Effect.orDie)).map((item) => json<Record<string, unknown>>(item.metadata))
       })
 
     const preparePlan: Interface["preparePlan"] = (input) =>

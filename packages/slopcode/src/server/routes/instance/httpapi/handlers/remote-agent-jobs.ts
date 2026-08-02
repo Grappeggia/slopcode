@@ -67,7 +67,7 @@ export class RemoteAgentJobNotFoundError extends Error {
 }
 
 export interface Interface {
-  readonly start: (input: StartInput) => Effect.Effect<State>
+  readonly start: (input: StartInput) => Effect.Effect<State, Error>
   readonly stream: (
     input: { readonly jobID: string; readonly cursor?: string } & JobScope,
   ) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
@@ -95,7 +95,7 @@ export interface Interface {
       readonly digest: string
       readonly jobID: string
     } & JobScope,
-  ) => Effect.Effect<"consumed" | "expired" | "used" | "conflict" | "missing">
+  ) => Effect.Effect<"consumed" | "expired" | "used" | "conflict" | "missing", Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/RemoteAgentJobs") {}
@@ -593,8 +593,9 @@ export const layer = Layer.effect(
 
     const terminate = (job: Job) => {
       if (!job.ptyID) return Effect.void
+      const ptyID = job.ptyID
       return Effect.provide(
-        Pty.Service.use((service) => service.remove(job.ptyID)).pipe(Effect.catch(() => Effect.void)),
+        Pty.Service.use((service) => service.remove(ptyID)).pipe(Effect.catch(() => Effect.void)),
         locationLayer(locations, job.root),
       )
     }
@@ -840,9 +841,11 @@ export const layer = Layer.effect(
               ? job.state.question
               : undefined
         if (interaction?.id) {
+          const revision = value.expectedRevision
           if (
+            revision === undefined ||
             value.interactionID !== interaction.id ||
-            value.expectedRevision !== interaction.revision ||
+            revision !== interaction.revision ||
             !value.idempotencyKey
           )
             return yield* Effect.fail(new Error("interaction id, expected revision, and idempotency key are required"))
@@ -857,7 +860,7 @@ export const layer = Layer.effect(
           const delivery = yield* journal.beginInteraction({
             jobID: job.state.id,
             id: interaction.id,
-            revision: value.expectedRevision,
+            revision,
             digest: requestDigest,
           })
           if (delivery.type === "duplicate" || delivery.type === "stale" || delivery.type === "conflict")
@@ -868,7 +871,7 @@ export const layer = Layer.effect(
             job,
             "job.progress",
             { message: "Agent action accepted" },
-            { id: interaction.id, revision: value.expectedRevision, digest: requestDigest },
+            { id: interaction.id, revision, digest: requestDigest },
           )
           return job.state
         }
