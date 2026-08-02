@@ -1147,28 +1147,41 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
         root: instance.directory,
         current: ctx.query.path ?? instance.directory,
       })
-      return yield* jobs.start({
-        id: ctx.payload.jobID ?? `job_${crypto.randomUUID().replaceAll("-", "")}`,
-        workspaceID: (yield* WorkspaceRef) ?? "local",
-        root: instance.directory,
-        directory: folder.current,
-        agent: ctx.payload.agent,
-        prompt: ctx.payload.prompt,
-        config: ctx.payload.config,
-        idempotencyKey: ctx.payload.idempotencyKey,
-      })
+      return yield* jobs
+        .start({
+          id: ctx.payload.jobID ?? `job_${crypto.randomUUID().replaceAll("-", "")}`,
+          workspaceID: (yield* WorkspaceRef) ?? "local",
+          root: instance.directory,
+          directory: folder.current,
+          agent: ctx.payload.agent,
+          prompt: ctx.payload.prompt,
+          config: ctx.payload.config,
+          idempotencyKey: ctx.payload.idempotencyKey,
+        })
+        .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
     })
 
     const jobState = Effect.fn("RemoteRuntimeHttpApi.jobState")(function* (ctx: { params: { jobID: string } }) {
-      return yield* jobs.state(ctx.params.jobID).pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
+      return yield* jobs
+        .state({ jobID: ctx.params.jobID, workspaceID: (yield* WorkspaceRef) ?? "local", root: instance.directory })
+        .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
     })
 
     const jobArtifact = Effect.fn("RemoteRuntimeHttpApi.jobArtifact")(function* (ctx: {
       params: { jobID: string }
       payload: typeof RemoteAgentJobArtifact.Type
     }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
       return yield* jobs
-        .artifact({ jobID: ctx.params.jobID, ...ctx.payload })
+        .artifact({
+          jobID: ctx.params.jobID,
+          workspaceID: (yield* WorkspaceRef) ?? "local",
+          root: instance.directory,
+          ...ctx.payload,
+        })
         .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
     })
 
@@ -1176,8 +1189,15 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       params: { jobID: string }
       payload: typeof RemoteAgentPlanPrepare.Type
     }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
       return yield* jobs
-        .preparePlan({ jobID: ctx.params.jobID, ...ctx.payload })
+        .preparePlan({
+          jobID: ctx.params.jobID,
+          workspaceID: (yield* WorkspaceRef) ?? "local",
+          root: instance.directory,
+          ...ctx.payload,
+        })
         .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
     })
 
@@ -1185,8 +1205,17 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       params: { jobID: string }
       payload: typeof RemoteAgentPlanCommit.Type
     }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
       return {
-        status: yield* jobs.commitPlan(ctx.payload).pipe(Effect.catch((error) => Effect.fail(remoteJobError(error)))),
+        status: yield* jobs
+          .commitPlan({
+            jobID: ctx.params.jobID,
+            workspaceID: (yield* WorkspaceRef) ?? "local",
+            root: instance.directory,
+            ...ctx.payload,
+          })
+          .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error)))),
       }
     })
 

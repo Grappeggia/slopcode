@@ -613,6 +613,13 @@ describe("remote agent runtime", () => {
       )
       expect(status.status).toBe(200)
       expect((await status.json()).id).toBe("job_structured")
+      const conflict = await request(
+        RemoteRuntimePaths.job,
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ jobID: "job_structured", agent: "codex-cli", prompt: "different" }) },
+      )
+      expect(conflict.status).toBe(503)
       const snapshot = await request(RemoteRuntimePaths.jobState.replace(":jobID", "job_structured"), tmp.path, {
         path: tmp.path,
       })
@@ -634,6 +641,18 @@ describe("remote agent runtime", () => {
       )
       expect(prepared.status).toBe(200)
       const plan = (await prepared.json()) as { token: string }
+      await using outside = await tmpdir({ config: { formatter: false, lsp: false } })
+      const crossRoot = await request(RemoteRuntimePaths.jobState.replace(":jobID", "job_structured"), outside.path, {
+        path: outside.path,
+      })
+      expect(crossRoot.status).toBe(404)
+      const crossJob = await request(
+        RemoteRuntimePaths.jobPlanCommit.replace(":jobID", "job_other"),
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ token: plan.token, digest: "digest_result" }) },
+      )
+      expect(crossJob.status).toBe(404)
       const committed = await request(
         RemoteRuntimePaths.jobPlanCommit.replace(":jobID", "job_structured"),
         tmp.path,

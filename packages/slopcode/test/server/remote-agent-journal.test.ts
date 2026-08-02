@@ -17,10 +17,10 @@ import { MAX_REMOTE_JOB_EVENTS } from "../../src/server/routes/instance/httpapi/
 type State = typeof RemoteAgentJobState.Type
 type Event = typeof RemoteAgentJobEvent.Type
 
-function state(id = "job_test"): State {
+function state(id = "job_test", workspaceID = "workspace_test"): State {
   return {
     id,
-    workspaceID: "workspace_test",
+    workspaceID,
     directory: "/project",
     agent: "codex-cli",
     status: "queued",
@@ -90,6 +90,31 @@ describe("remote agent journal", () => {
         expect((yield* start()).type).toBe("duplicate")
         expect((yield* start("job_test", "changed")).type).toBe("conflict")
         expect((yield* (yield* Journal).get("job_test"))?.fingerprint).toBe("first")
+      }),
+    )
+  })
+
+  test("scopes idempotency records to the workspace and instance root", async () => {
+    await run(
+      ":memory:",
+      Effect.gen(function* () {
+        const journal = yield* Journal
+        expect(
+          (yield* journal.start({
+            state: state("job_workspace_one", "workspace_one"),
+            root: "/project",
+            fingerprint: "first",
+            idempotencyKey: "request",
+          })).type,
+        ).toBe("created")
+        expect(
+          (yield* journal.start({
+            state: state("job_workspace_two", "workspace_two"),
+            root: "/project",
+            fingerprint: "second",
+            idempotencyKey: "request",
+          })).type,
+        ).toBe("created")
       }),
     )
   })
@@ -224,6 +249,24 @@ describe("remote agent journal", () => {
         expect(
           yield* journal.beginInteraction({ jobID: "job_test", id: "int_test", revision: 1, digest: "reject" }),
         ).toMatchObject({ type: "conflict" })
+        const reused = yield* journal.append({
+          jobID: "job_test",
+          id: "evt_reused",
+          type: "job.approval",
+          data: { approval: { id: "int_test", title: "Run again", revision: 1 } },
+          reduce: (current, event) => ({
+            ...current,
+            cursor: event.cursor,
+            approval: event.data.approval,
+            updatedAt: 3,
+          }),
+          interaction: { id: "int_test", kind: "approval", payload: { title: "Run again" } },
+        })
+        expect(reused.event.data.approval).toMatchObject({ id: "int_test", revision: 3 })
+        expect(reused.state.approval).toMatchObject({ id: "int_test", revision: 3 })
+        expect(
+          yield* journal.beginInteraction({ jobID: "job_test", id: "int_test", revision: 3, digest: "again" }),
+        ).toMatchObject({ type: "deliver" })
       }),
     )
   })
@@ -283,8 +326,15 @@ describe("remote agent journal", () => {
           "quota",
         )
         yield* journal.preparePlan({ token: "prp_one", jobID: "job_test", planID: "pln_one", digest: "hash", now: 10 })
-        expect(yield* journal.consumePlan({ token: "prp_one", digest: "hash", now: 11 })).toBe("consumed")
-        expect(yield* journal.consumePlan({ token: "prp_one", digest: "hash", now: 12 })).toBe("used")
+        expect(yield* journal.consumePlan({ token: "prp_one", jobID: "job_other", digest: "hash", now: 11 })).toBe(
+          "conflict",
+        )
+        expect(yield* journal.consumePlan({ token: "prp_one", jobID: "job_test", digest: "hash", now: 11 })).toBe(
+          "consumed",
+        )
+        expect(yield* journal.consumePlan({ token: "prp_one", jobID: "job_test", digest: "hash", now: 12 })).toBe(
+          "used",
+        )
         yield* journal.preparePlan({
           token: "prp_expired",
           jobID: "job_test",
@@ -292,9 +342,14 @@ describe("remote agent journal", () => {
           digest: "hash",
           now: 10,
         })
-        expect(yield* journal.consumePlan({ token: "prp_expired", digest: "hash", now: 10 + limits.tokenTTL })).toBe(
-          "expired",
-        )
+        expect(
+          yield* journal.consumePlan({
+            token: "prp_expired",
+            jobID: "job_test",
+            digest: "hash",
+            now: 10 + limits.tokenTTL,
+          }),
+        ).toBe("expired")
       }),
     )
   })

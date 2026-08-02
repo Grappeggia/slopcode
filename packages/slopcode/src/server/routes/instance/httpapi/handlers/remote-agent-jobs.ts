@@ -31,6 +31,7 @@ type State = typeof RemoteAgentJobState.Type
 type Event = typeof RemoteAgentJobEvent.Type
 type Action = typeof RemoteAgentJobAction.Type
 type Data = Event["data"]
+type JobScope = { readonly workspaceID: string; readonly root: string }
 
 type StartInput = {
   readonly id: string
@@ -72,21 +73,28 @@ export interface Interface {
     readonly cursor?: string
   }) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
   readonly action: (input: { readonly jobID: string; readonly action: Action }) => Effect.Effect<State, Error>
-  readonly state: (jobID: string) => Effect.Effect<State, RemoteAgentJobNotFoundError>
-  readonly artifact: (input: {
-    readonly jobID: string
-    readonly id: string
-    readonly metadata: Record<string, unknown>
-  }) => Effect.Effect<"saved" | "duplicate" | "quota", Error>
-  readonly preparePlan: (input: {
-    readonly jobID: string
-    readonly planID: string
-    readonly digest: string
-  }) => Effect.Effect<{ token: string; expiresAt: number }, Error>
-  readonly commitPlan: (input: {
-    readonly token: string
-    readonly digest: string
-  }) => Effect.Effect<"consumed" | "expired" | "used" | "conflict" | "missing">
+  readonly state: (input: { readonly jobID: string } & JobScope) => Effect.Effect<State, RemoteAgentJobNotFoundError>
+  readonly artifact: (
+    input: {
+      readonly jobID: string
+      readonly id: string
+      readonly metadata: Record<string, unknown>
+    } & JobScope,
+  ) => Effect.Effect<"saved" | "duplicate" | "quota", Error>
+  readonly preparePlan: (
+    input: {
+      readonly jobID: string
+      readonly planID: string
+      readonly digest: string
+    } & JobScope,
+  ) => Effect.Effect<{ token: string; expiresAt: number }, Error>
+  readonly commitPlan: (
+    input: {
+      readonly token: string
+      readonly digest: string
+      readonly jobID: string
+    } & JobScope,
+  ) => Effect.Effect<"consumed" | "expired" | "used" | "conflict" | "missing">
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/RemoteAgentJobs") {}
@@ -680,7 +688,6 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const existing = jobs.get(input.id)
-        if (existing) return existing.state
         const state: State = {
           id: input.id,
           workspaceID: input.workspaceID,
@@ -706,6 +713,7 @@ export const layer = Layer.effect(
         })
         if (claimed.type === "conflict") return yield* Effect.fail(new Error("remote agent job idempotency conflict"))
         if (claimed.type === "duplicate") {
+          if (existing) return existing.state
           const restored = {
             state: claimed.job.state,
             root: claimed.job.root,
@@ -871,24 +879,30 @@ export const layer = Layer.effect(
         return job.state
       })
 
-    const state: Interface["state"] = (jobID) =>
+    const scoped = (jobID: string, scope: JobScope) =>
       Effect.gen(function* () {
         const current = yield* journal.get(jobID)
-        if (!current) return yield* Effect.fail(new RemoteAgentJobNotFoundError(jobID))
-        return current.state
+        if (!current || current.state.workspaceID !== scope.workspaceID || current.root !== scope.root)
+          return yield* Effect.fail(new RemoteAgentJobNotFoundError(jobID))
+        return current
       })
 
-    const artifact: Interface["artifact"] = (input) => journal.saveArtifact(input)
+    const state: Interface["state"] = (input) => scoped(input.jobID, input).pipe(Effect.map((current) => current.state))
+
+    const artifact: Interface["artifact"] = (input) =>
+      scoped(input.jobID, input).pipe(Effect.flatMap(() => journal.saveArtifact(input)))
 
     const preparePlan: Interface["preparePlan"] = (input) =>
       Effect.gen(function* () {
+        yield* scoped(input.jobID, input)
         const token = id("plan")
         const now = Date.now()
         yield* journal.preparePlan({ token, ...input, now })
         return { token, expiresAt: now + 5 * 60 * 1000 }
       })
 
-    const commitPlan: Interface["commitPlan"] = (input) => journal.consumePlan(input)
+    const commitPlan: Interface["commitPlan"] = (input) =>
+      scoped(input.jobID, input).pipe(Effect.flatMap(() => journal.consumePlan(input)))
 
     yield* Effect.addFinalizer(() => Effect.sync(() => jobs.clear()))
     return Service.of({ start, stream, action, state, artifact, preparePlan, commitPlan })

@@ -147,6 +147,7 @@ export interface Interface {
   }) => Effect.Effect<void, JobNotFoundError>
   readonly consumePlan: (input: {
     readonly token: string
+    readonly jobID: string
     readonly digest: string
     readonly now?: number
   }) => Effect.Effect<"consumed" | "expired" | "used" | "conflict" | "missing">
@@ -257,10 +258,11 @@ export const layer = Layer.effect(
         const state = encoded(input.state, limits.stateBytes)
         if (!state) return { type: "conflict" as const, job: input }
         const config = input.config && encoded(input.config, 16 * 1024)
+        const scope = `${input.state.workspaceID}:${input.root}`
         const key = input.idempotencyKey ?? input.state.id
         yield* tx.run(sql`DELETE FROM remote_agent_idempotency WHERE expires_at <= ${now}`)
         const claim = yield* tx.get<{ digest: string; result: string }>(
-          sql`SELECT digest, result FROM remote_agent_idempotency WHERE scope = 'job' AND key = ${key}`,
+          sql`SELECT digest, result FROM remote_agent_idempotency WHERE scope = ${scope} AND key = ${key}`,
         )
         if (claim) {
           const stored = yield* find(tx, claim.result)
@@ -285,7 +287,7 @@ export const layer = Layer.effect(
           ${input.state.sessionID ?? null}, ${state}, ${config ?? null}, ${input.fingerprint}, ${now}, ${now}
         )`)
         yield* tx.run(sql`INSERT INTO remote_agent_idempotency (scope, key, digest, result, expires_at)
-          VALUES ('job', ${key}, ${input.fingerprint}, ${input.state.id}, ${now + limits.idempotencyTTL})`)
+          VALUES (${scope}, ${key}, ${input.fingerprint}, ${input.state.id}, ${now + limits.idempotencyTTL})`)
         return { type: "created" as const, job: input }
       })
 
@@ -329,12 +331,27 @@ export const layer = Layer.effect(
           sql`SELECT sequence FROM remote_agent_event WHERE job_id = ${input.jobID} ORDER BY sequence DESC LIMIT 1`,
         )
         const next = (last?.sequence ?? 0) + 1
+        const prior = input.interaction
+          ? yield* tx.get<{ revision: number }>(
+              sql`SELECT revision FROM remote_agent_interaction WHERE job_id = ${input.jobID} AND id = ${input.interaction.id}`,
+            )
+          : undefined
+        const revision = (prior?.revision ?? 0) + 1
+        const values = safe(input.data) as Event["data"]
         const candidate = {
           id: input.id,
           cursor: String(next),
           jobID: input.jobID,
           type: input.type,
-          data: safe(input.data) as Event["data"],
+          data: {
+            ...values,
+            ...(input.interaction?.kind === "approval" && values.approval
+              ? { approval: { ...values.approval, revision } }
+              : {}),
+            ...(input.interaction?.kind === "question" && values.question
+              ? { question: { ...values.question, revision } }
+              : {}),
+          },
         } satisfies Event
         if (input.completion) {
           const current = yield* tx.get<{ revision: number; status: string; digest: string | null }>(
@@ -361,9 +378,11 @@ export const layer = Layer.effect(
         if (input.interaction) {
           const payload = encoded(safe(input.interaction.payload), 64 * 1024)
           if (!payload) return yield* Effect.fail(new Error("remote agent interaction exceeds retention limit"))
-          yield* tx.run(sql`INSERT OR IGNORE INTO remote_agent_interaction (
+          yield* tx.run(sql`INSERT INTO remote_agent_interaction (
             job_id, id, kind, revision, status, payload, updated_at
-          ) VALUES (${input.jobID}, ${input.interaction.id}, ${input.interaction.kind}, 1, 'pending', ${payload}, ${now})`)
+          ) VALUES (${input.jobID}, ${input.interaction.id}, ${input.interaction.kind}, ${revision}, 'pending', ${payload}, ${now})
+          ON CONFLICT(job_id, id) DO UPDATE SET kind = excluded.kind, revision = excluded.revision,
+            status = 'pending', payload = excluded.payload, resolution = NULL, digest = NULL, updated_at = excluded.updated_at`)
         }
         if (input.completion)
           yield* tx.run(sql`UPDATE remote_agent_interaction SET status = 'resolved', revision = revision + 1, updated_at = ${now}
@@ -483,10 +502,16 @@ export const layer = Layer.effect(
     const consumePlan: Interface["consumePlan"] = (input) =>
       atomic(function* (tx) {
         const now = input.now ?? Date.now()
-        const current = yield* tx.get<{ digest: string; expires_at: number; consumed_at: number | null }>(
-          sql`SELECT digest, expires_at, consumed_at FROM remote_agent_plan_token WHERE token = ${input.token}`,
+        const current = yield* tx.get<{
+          job_id: string
+          digest: string
+          expires_at: number
+          consumed_at: number | null
+        }>(
+          sql`SELECT job_id, digest, expires_at, consumed_at FROM remote_agent_plan_token WHERE token = ${input.token}`,
         )
         if (!current) return "missing" as const
+        if (current.job_id !== input.jobID) return "conflict" as const
         if (current.expires_at <= now) return "expired" as const
         if (current.consumed_at !== null) return "used" as const
         if (current.digest !== input.digest) return "conflict" as const
