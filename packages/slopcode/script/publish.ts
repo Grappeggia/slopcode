@@ -70,6 +70,7 @@ const registry = (process.env.npm_config_registry ?? "https://registry.npmjs.org
 const npmPath = (name: string) => encodeURIComponent(name).replace(/^%40/, "@")
 const source = process.env.SLOPCODE_SOURCE_SHA
 if (Script.release && !dry && !source) throw new Error("Release npm publication requires verified source provenance")
+const allowMissing = process.env.SLOPCODE_RELEASE_DRAFT === "true" || process.env.SLOPCODE_PUBLISH_ONLY === "true"
 const published = async (name: string, version: string) => {
   const current = await readNpmPublication(registry, name, version)
   if (!current) return false
@@ -413,7 +414,7 @@ const publishBinary = async (binary: (typeof binaries)[number]) => {
     return
   }
 
-  if (Script.release && process.env.SLOPCODE_RELEASE_DRAFT !== "true") {
+  if (Script.release && !allowMissing) {
     throw new Error(`Release is finalized; refuse missing npm package ${binary.name}@${binary.version}`)
   }
 
@@ -436,7 +437,7 @@ const publishPackage = async (name: string) => {
     return
   }
 
-  if (Script.release && process.env.SLOPCODE_RELEASE_DRAFT !== "true") {
+  if (Script.release && !allowMissing) {
     throw new Error(`Release is finalized; refuse missing npm package ${name}@${version}`)
   }
 

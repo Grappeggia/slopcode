@@ -202,6 +202,14 @@ if (plan === "success") {
   console.log(`Recovered successful publish.yml run: ${existing?.url ?? `run ${existing?.databaseId}`}`)
   process.exit(0)
 }
+const draft = (
+  await $`gh release view ${prepared.tag} --json isDraft --jq .isDraft --repo ${repo}`.text()
+).trim()
+if (draft === "true") {
+  await $`gh release edit ${prepared.tag} --draft=false --repo ${repo}`
+} else if (draft !== "false") {
+  throw new Error(`Could not verify draft state for ${prepared.tag}.`)
+}
 if (plan === "dispatch") {
   const previous = prepared.previous_tag ? ["-f", `previous_tag=${prepared.previous_tag}`] : []
   await $`gh workflow run publish.yml --ref ${ref} -f version=${prepared.version} -f source_sha=${prepared.source_sha} ${previous} -f dispatch_id=${dispatch} -f release_id=${prepared.release_id}`.nothrow()

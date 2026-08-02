@@ -842,6 +842,13 @@ describe("workflow contracts", () => {
     expect(source).not.toContain("SLOPCODE_RELEASE_BASE_SHA")
   })
 
+  test("finalizes the uploaded release before dispatch and permits publish-only recovery", async () => {
+    const dispatcher = await Bun.file(path.join(root, "script/release.ts")).text()
+    const publisher = await Bun.file(path.join(root, "packages/slopcode/script/publish.ts")).text()
+    expect(dispatcher).toContain("gh release edit ${prepared.tag} --draft=false")
+    expect(publisher).toContain('process.env.SLOPCODE_PUBLISH_ONLY === "true"')
+  })
+
   test("uses exact dispatch identity and source checkout without binding the event SHA", async () => {
     const source = await Bun.file(path.join(root, ".github/workflows/publish.yml")).text()
     expect(source).toContain('run-name: "${{ inputs.dispatch_id }}"')
