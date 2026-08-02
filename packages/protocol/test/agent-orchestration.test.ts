@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import {
   AgentOrchestrationApprovalReply,
+  AgentOrchestrationArtifact,
   AgentOrchestrationCapabilities,
   AgentOrchestrationError,
   AgentOrchestrationEventReplayResponse,
   AgentOrchestrationFrame,
   AgentOrchestrationFrameJson,
   AgentOrchestrationLimits,
+  AgentOrchestrationMetadata,
   AgentOrchestrationPath,
   AgentOrchestrationQuestionReply,
   AgentOrchestrationQuestion,
@@ -36,7 +38,7 @@ const event = {
   version: "v1",
   kind: "event",
   type: "turn.output",
-  cursor: "cur_orchestration_1",
+  cursor: "cur_1",
   sequence: 1,
   sessionID: "ses_orchestration_1",
   turnID: "trn_orchestration_1",
@@ -119,7 +121,7 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "interaction.approval.requested",
-        cursor: "cur_orchestration_2",
+        cursor: "cur_2",
         sequence: 2,
         sessionID: "ses_orchestration_1",
         turnID: "trn_orchestration_1",
@@ -136,7 +138,7 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "interaction.question.requested",
-        cursor: "cur_orchestration_3",
+        cursor: "cur_3",
         sequence: 3,
         sessionID: "ses_orchestration_1",
         turnID: "trn_orchestration_1",
@@ -152,7 +154,7 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "plan.saved",
-        cursor: "cur_orchestration_4",
+        cursor: "cur_4",
         sequence: 4,
         sessionID: "ses_orchestration_1",
         plan: {
@@ -166,7 +168,7 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "artifact.created",
-        cursor: "cur_orchestration_5",
+        cursor: "cur_5",
         sequence: 5,
         sessionID: "ses_orchestration_1",
         turnID: "trn_orchestration_1",
@@ -187,7 +189,7 @@ describe("agent orchestration protocol contracts", () => {
         requestID: "req_replay_1",
         idempotencyKey: "idem_replay_1",
         events: [event],
-        nextCursor: "cur_orchestration_2",
+        nextCursor: "cur_2",
         hasMore: true,
       },
       {
@@ -260,6 +262,7 @@ describe("agent orchestration protocol contracts", () => {
     await expect(decode(AgentOrchestrationPath, "/srv//slopcode")).rejects.toThrow()
     await expect(decode(AgentOrchestrationPath, "relative/path")).rejects.toThrow()
     await expect(decode(AgentOrchestrationPath, "/srv\\slopcode")).rejects.toThrow()
+    await expect(decode(AgentOrchestrationPath, `/${"x".repeat(AgentOrchestrationLimits.maxPathBytes)}`)).rejects.toThrow()
     expect(String(await decode(AgentOrchestrationPath, "/srv/slopcode"))).toBe("/srv/slopcode")
   })
 
@@ -297,7 +300,43 @@ describe("agent orchestration protocol contracts", () => {
     ).rejects.toThrow()
   })
 
-  test("accepts only ordered replay events with distinct cursors and idempotency fields", async () => {
+  test("bounds metadata and artifact values", async () => {
+    await expect(
+      decode(
+        AgentOrchestrationMetadata,
+        Object.fromEntries(Array.from({ length: AgentOrchestrationLimits.maxMetadataEntries + 1 }, (_, index) => [`field${index}`, "x"])),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationMetadata, { field: "x".repeat(AgentOrchestrationLimits.maxMetadataValueBytes + 1) }),
+    ).rejects.toThrow()
+    await expect(
+      decode(
+        AgentOrchestrationMetadata,
+        Object.fromEntries(Array.from({ length: AgentOrchestrationLimits.maxMetadataEntries }, (_, index) => [`field${index}`, "x".repeat(1024)])),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationArtifact, {
+        id: "art_orchestration_1",
+        name: "report",
+        kind: "report",
+        path: "/srv/slopcode/report.md",
+        size: -1,
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationArtifact, {
+        id: "art_orchestration_1",
+        name: "report",
+        kind: "report",
+        path: "/srv/slopcode/report.md",
+        size: AgentOrchestrationLimits.maxArtifactBytes + 1,
+      }),
+    ).rejects.toThrow()
+  })
+
+  test("accepts only ordered replay events with advancing cursors and idempotency fields", async () => {
     const value = {
       version: "v1",
       kind: "response",
@@ -306,10 +345,10 @@ describe("agent orchestration protocol contracts", () => {
       idempotencyKey: "idem_replay_1",
       events: [
         event,
-        { ...event, cursor: "cur_orchestration_2", sequence: 2, text: "Finished." },
+        { ...event, cursor: "cur_2", sequence: 2, text: "Finished." },
       ],
-      nextCursor: "cur_orchestration_3",
-      hasMore: false,
+      nextCursor: "cur_3",
+      hasMore: true,
     }
 
     expect((await decode(AgentOrchestrationEventReplayResponse, value)).events.map((item) => item.sequence)).toEqual([1, 2])
@@ -323,6 +362,30 @@ describe("agent orchestration protocol contracts", () => {
       decode(AgentOrchestrationEventReplayResponse, {
         ...value,
         events: [event, { ...event, sequence: 2 }],
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationEventReplayResponse, {
+        ...value,
+        nextCursor: "cur_0",
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationEventReplayResponse, {
+        ...value,
+        nextCursor: "cur_invalid",
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationEventReplayResponse, {
+        ...value,
+        nextCursor: undefined,
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationEventReplayResponse, {
+        ...value,
+        hasMore: false,
       }),
     ).rejects.toThrow()
     await expect(

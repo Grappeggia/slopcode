@@ -108,9 +108,19 @@ export const AgentOrchestrationArtifactID = identifier("art_", "artifact ID").pi
 )
 export type AgentOrchestrationArtifactID = typeof AgentOrchestrationArtifactID.Type
 
-export const AgentOrchestrationEventCursor = identifier("cur_", "event cursor").pipe(
-  Schema.brand("AgentOrchestrationV1.EventCursor"),
+const cursor = (value: string) => Number(value.slice(4))
+
+export const AgentOrchestrationEventCursor = text(
+  AgentOrchestrationLimits.maxIdentifierBytes,
+  "event cursor is too large",
 )
+  .check(
+    Schema.isPattern(/^cur_(?:0|[1-9][0-9]{0,9})$/),
+    Schema.makeFilter((value: string) =>
+      cursor(value) <= 2_147_483_647 ? undefined : "event cursor is outside the supported range",
+    ),
+  )
+  .pipe(Schema.brand("AgentOrchestrationV1.EventCursor"))
 export type AgentOrchestrationEventCursor = typeof AgentOrchestrationEventCursor.Type
 
 export const AgentOrchestrationPath = AbsolutePath.check(
@@ -435,7 +445,13 @@ export const AgentOrchestrationEventReplayResponse = exact(replayShape)
       if (value.events.some((event, index) => index > 0 && event.sequence <= value.events[index - 1]!.sequence)) {
         return "replayed events must be ordered by sequence"
       }
-      if (value.nextCursor !== undefined && cursors.has(value.nextCursor)) return "next cursor must be after replayed events"
+      if (value.events.some((event, index) => index > 0 && cursor(event.cursor) <= cursor(value.events[index - 1]!.cursor))) {
+        return "replayed event cursors must be ordered"
+      }
+      if (value.hasMore !== (value.nextCursor !== undefined)) return "event replay continuation must match hasMore"
+      if (value.nextCursor !== undefined && value.events.length > 0 && cursor(value.nextCursor) <= cursor(value.events.at(-1)!.cursor)) {
+        return "next cursor must advance beyond replayed events"
+      }
       return jsonBytes(value) <= AgentOrchestrationLimits.maxFrameBytes ? undefined : "event replay is too large"
     }),
   )
