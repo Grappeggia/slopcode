@@ -7,7 +7,7 @@ import { Schema } from "effect"
 import { AgentOrchestrationFrame } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
-import { contained } from "@/remote-orchestrator/workspace"
+import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
 
 const dirs: string[] = []
 type Frame = typeof AgentOrchestrationFrame.Type
@@ -26,6 +26,16 @@ const frame = (type: string, value: Record<string, unknown>) =>
     idempotencyKey: `idem_${type.replaceAll(".", "_")}`,
     ...value,
   })
+const waitFor = async (condition: () => boolean) => {
+  for (let index = 0; index < 100 && !condition(); index++) await Bun.sleep(1)
+  expect(condition()).toBe(true)
+}
+type SessionResponse = Frame & { kind: "response"; type: "session.create"; sessionID: string }
+const sessionResponses = (output: Frame[]) =>
+  output.filter(
+    (item): item is SessionResponse =>
+      item.kind === "response" && item.type === "session.create" && typeof item.sessionID === "string",
+  )
 
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
@@ -52,11 +62,11 @@ describe("remote orchestrator", () => {
       start: () => spawn(process.execPath, [fixture], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
     })
     const turn = session.turn("fixture prompt")
-    await Bun.sleep(50)
+    await waitFor(() => events.some((event) => event.type === "approval"))
     const approval = events.find((event) => event.type === "approval")
     expect(approval?.type).toBe("approval")
     if (approval?.type === "approval") expect(session.approval(approval.id, true)).toBe(true)
-    await Bun.sleep(50)
+    await waitFor(() => events.some((event) => event.type === "question"))
     const question = events.find((event) => event.type === "question")
     expect(question?.type).toBe("question")
     if (question?.type === "question") expect(session.question(question.id, "yes")).toBe(true)
@@ -74,8 +84,12 @@ describe("remote orchestrator", () => {
     const outside = await temp()
     const escape = path.join(cwd, "escape")
     await symlink(outside, escape)
+    const invalidTarget = path.join(cwd, "invalid\nname")
+    await Bun.write(invalidTarget, "invalid")
+    const invalidLink = path.join(cwd, "invalid-link")
+    await symlink(invalidTarget, invalidLink)
     const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-acp-agent.ts")
-    const values = [`${cwd}/bad\npath`, path.join(cwd, ".."), escape]
+    const values = [`${cwd}/bad\npath`, path.join(cwd, ".."), escape, invalidLink]
     await Promise.all(
       values.map(async (value) => {
         const events: ACPEvent[] = []
@@ -92,14 +106,14 @@ describe("remote orchestrator", () => {
             }),
         })
         const turn = session.turn("fixture prompt")
-        await Bun.sleep(50)
+        await waitFor(() => events.some((event) => event.type === "approval"))
         const approval = events.find((event) => event.type === "approval")
         expect(approval?.type).toBe("approval")
         if (approval?.type === "approval") {
           expect(approval.cwd).toBeUndefined()
           expect(session.approval(approval.id, true)).toBe(true)
         }
-        await Bun.sleep(50)
+        await waitFor(() => events.some((event) => event.type === "question"))
         const question = events.find((event) => event.type === "question")
         expect(question?.type).toBe("question")
         if (question?.type === "question") expect(session.question(question.id, "yes")).toBe(true)
@@ -158,7 +172,7 @@ describe("remote orchestrator", () => {
     const sessionID = created && "sessionID" in created ? created.sessionID : undefined
     expect(sessionID).toStartWith("ses_")
     await bridge.handle(frame("turn.create", { sessionID, agent: "slopcode", prompt: "hello" }))
-    await Bun.sleep(0)
+    await waitFor(() => output.filter((item) => item.kind === "event").length >= 8)
     expect(output.filter((item) => item.kind === "event").map((item) => item.type)).toEqual(
       expect.arrayContaining([
         "turn.output",
@@ -180,6 +194,8 @@ describe("remote orchestrator", () => {
           interactionID: approval.interaction.id,
           revision: 2,
           decision: "approved",
+          requestID: "req_stale_approval",
+          idempotencyKey: "idem_stale_approval",
         }),
       )
       expect(approvals).toBe(0)
@@ -189,6 +205,8 @@ describe("remote orchestrator", () => {
           interactionID: approval.interaction.id,
           revision: 1,
           decision: "approved",
+          requestID: "req_approval",
+          idempotencyKey: "idem_approval",
         }),
       )
       await bridge.handle(
@@ -197,6 +215,8 @@ describe("remote orchestrator", () => {
           interactionID: approval.interaction.id,
           revision: 1,
           decision: "approved",
+          requestID: "req_replayed_approval",
+          idempotencyKey: "idem_replayed_approval",
         }),
       )
       expect(approvals).toBe(1)
@@ -208,6 +228,8 @@ describe("remote orchestrator", () => {
           interactionID: question.interaction.id,
           revision: 1,
           decision: "approved",
+          requestID: "req_wrong_question_kind",
+          idempotencyKey: "idem_wrong_question_kind",
         }),
       )
       expect(questions).toBe(0)
@@ -217,6 +239,8 @@ describe("remote orchestrator", () => {
           interactionID: question.interaction.id,
           revision: 1,
           answer: "yes",
+          requestID: "req_question",
+          idempotencyKey: "idem_question",
         }),
       )
       await bridge.handle(
@@ -225,6 +249,8 @@ describe("remote orchestrator", () => {
           interactionID: question.interaction.id,
           revision: 1,
           answer: "yes",
+          requestID: "req_replayed_question",
+          idempotencyKey: "idem_replayed_question",
         }),
       )
       expect(questions).toBe(1)
@@ -263,20 +289,40 @@ describe("remote orchestrator", () => {
         agent: { id: "slopcode", capabilities: ["workspace", "sessions", "turns"] },
       }),
     )
-    await bridge.handle(frame("session.create", { workspaceID: "wrk_fixture", agent: "slopcode" }))
-    await bridge.handle(frame("session.create", { workspaceID: "wrk_fixture", agent: "slopcode" }))
-    const sessions = output
-      .filter(
-        (item): item is Extract<Frame, { kind: "response"; type: "session.create" }> =>
-          item.kind === "response" && item.type === "session.create",
-      )
-      .map((item) => item.sessionID)
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_fixture",
+        agent: "slopcode",
+        requestID: "req_session_one",
+        idempotencyKey: "idem_session_one",
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_fixture",
+        agent: "slopcode",
+        requestID: "req_session_two",
+        idempotencyKey: "idem_session_two",
+      }),
+    )
+    const sessions = sessionResponses(output).map((item) => item.sessionID)
     await Promise.all(
-      sessions.map((sessionID) =>
-        bridge.handle(frame("turn.create", { sessionID, agent: "slopcode", prompt: "hello" })),
+      sessions.map((sessionID, index) =>
+        bridge.handle(
+          frame("turn.create", {
+            sessionID,
+            agent: "slopcode",
+            prompt: "hello",
+            requestID: `req_turn_session_${index}`,
+            idempotencyKey: `idem_turn_session_${index}`,
+          }),
+        ),
       ),
     )
-    await Bun.sleep(0)
+    await waitFor(
+      () =>
+        output.filter((item) => item.kind === "event" && item.type === "interaction.approval.requested").length >= 2,
+    )
     const interactions = output.filter(
       (item): item is Extract<Frame, { kind: "event"; type: "interaction.approval.requested" }> =>
         item.kind === "event" && item.type === "interaction.approval.requested",
@@ -284,18 +330,295 @@ describe("remote orchestrator", () => {
     expect(interactions).toHaveLength(2)
     expect(new Set(interactions.map((item) => item.interaction.id)).size).toBe(2)
     await Promise.all(
-      interactions.map((item) =>
+      interactions.map((item, index) =>
         bridge.handle(
           frame("interaction.approval.reply", {
             sessionID: item.sessionID,
             interactionID: item.interaction.id,
             revision: 1,
             decision: "approved",
+            requestID: `req_session_approval_${index}`,
+            idempotencyKey: `idem_session_approval_${index}`,
           }),
         ),
       ),
     )
     expect(approvals).toEqual(new Set([1, 2]))
+    await bridge.close()
+  })
+
+  test("revalidates canonical approval paths before protocol projection", async () => {
+    const cwd = await temp()
+    const invalid = path.join(cwd, "invalid\nname")
+    await Bun.write(invalid, "invalid")
+    const link = path.join(cwd, "link")
+    await symlink(invalid, link)
+    expect(await approvalCwd(cwd, link)).toBeUndefined()
+    expect(await approvalCwd(cwd, `${cwd}/${"x".repeat(5_000)}`)).toBeUndefined()
+    expect(await approvalCwd(cwd, `${cwd}/../outside`)).toBeUndefined()
+  })
+
+  test("rejects overlapping turns and keeps delayed events on their originating turn", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    let emit: ((event: ACPEvent) => void) | undefined
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    let finish: () => void = () => undefined
+    const done = new Promise<void>((resolve) => (finish = resolve))
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => {
+        emit = input.emit
+        return {
+          nativeID: "native-session",
+          capabilities: ["workspace", "sessions", "turns"],
+          async turn(prompt) {
+            await gate
+            emit?.({ type: "output", text: prompt })
+            finish()
+          },
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_overlap", path: root },
+        agent: { id: "slopcode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_overlap",
+        agent: "slopcode",
+        requestID: "req_overlap_session",
+        idempotencyKey: "idem_overlap_session",
+      }),
+    )
+    const created = output.find((item) => item.kind === "response" && item.type === "session.create")
+    const sessionID = created && "sessionID" in created ? created.sessionID : undefined
+    expect(sessionID).toStartWith("ses_")
+    await bridge.handle(
+      frame("turn.create", {
+        sessionID,
+        agent: "slopcode",
+        prompt: "first",
+        turnID: "trn_first",
+        requestID: "req_first_turn",
+        idempotencyKey: "idem_first_turn",
+      }),
+    )
+    await bridge.handle(
+      frame("turn.create", {
+        sessionID,
+        agent: "slopcode",
+        prompt: "second",
+        turnID: "trn_second",
+        requestID: "req_second_turn",
+        idempotencyKey: "idem_second_turn",
+      }),
+    )
+    const conflict = output.find(
+      (item): item is Extract<Frame, { kind: "error" }> =>
+        item.kind === "error" && item.requestID === "req_second_turn",
+    )
+    expect(conflict).toMatchObject({ code: "bad_request", message: "a turn is already active for this session" })
+    release()
+    await done
+    await waitFor(() => output.some((item) => item.kind === "event" && item.type === "turn.output"))
+    const event = output.find(
+      (item): item is Extract<Frame, { kind: "event"; type: "turn.output" }> =>
+        item.kind === "event" && item.type === "turn.output",
+    )
+    expect(event).toMatchObject({ turnID: "trn_first", text: "first" })
+    await bridge.close()
+  })
+
+  test("replays equivalent requests and rejects conflicting request reuse", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    let opens = 0
+    let turns = 0
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => {
+        opens++
+        return {
+          nativeID: "native-session",
+          capabilities: ["workspace", "sessions", "turns"],
+          async turn() {
+            turns++
+          },
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_idempotency", path: root },
+        agent: { id: "slopcode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    const request = frame("session.create", {
+      workspaceID: "wrk_idempotency",
+      agent: "slopcode",
+      requestID: "req_session_duplicate",
+      idempotencyKey: "idem_session_duplicate",
+    })
+    await Promise.all([bridge.handle(request), bridge.handle(request)])
+    expect(opens).toBe(1)
+    const sessions = sessionResponses(output)
+    expect(sessions).toHaveLength(2)
+    expect(sessions[0]?.sessionID).toBe(sessions[1]?.sessionID)
+    const sessionID = sessions[0]?.sessionID
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_idempotency",
+        agent: "slopcode",
+        title: "different payload",
+        requestID: "req_session_duplicate",
+        idempotencyKey: "idem_session_duplicate",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "idempotency_conflict" })
+    const turn = frame("turn.create", {
+      sessionID,
+      agent: "slopcode",
+      prompt: "same prompt",
+      requestID: "req_turn_duplicate",
+      idempotencyKey: "idem_turn_duplicate",
+    })
+    await bridge.handle(turn)
+    await bridge.handle(turn)
+    expect(turns).toBe(1)
+    expect(output.filter((item) => item.kind === "response" && item.type === "turn.create")).toHaveLength(2)
+    await bridge.handle(
+      frame("turn.create", {
+        sessionID,
+        agent: "slopcode",
+        prompt: "different prompt",
+        requestID: "req_turn_duplicate",
+        idempotencyKey: "idem_turn_duplicate",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "idempotency_conflict" })
+    await bridge.close()
+  })
+
+  test("scopes public IDs and preserves per-session event order", async () => {
+    const root = await temp()
+    await Bun.write(path.join(root, "fixture.md"), "fixture")
+    const output: Frame[] = []
+    let owner = 0
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => {
+        const number = ++owner
+        return {
+          nativeID: "shared-native-session",
+          capabilities: ["workspace", "sessions", "turns", "plans", "artifacts"],
+          async turn() {
+            input.emit({
+              type: "artifact",
+              id: "shared-artifact",
+              name: "fixture",
+              path: path.join(root, "fixture.md"),
+              kind: "report",
+            })
+            input.emit({ type: "tool", id: "shared-tool", title: "tool", status: "completed", kind: "read" })
+            input.emit({ type: "plan", id: "shared-plan", content: `plan ${number}` })
+            input.emit({ type: "output", text: `output ${number}` })
+          },
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_scoped", path: root },
+        agent: { id: "slopcode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_scoped",
+        agent: "slopcode",
+        requestID: "req_scope_one",
+        idempotencyKey: "idem_scope_one",
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_scoped",
+        agent: "slopcode",
+        requestID: "req_scope_two",
+        idempotencyKey: "idem_scope_two",
+      }),
+    )
+    const sessions = sessionResponses(output).map((item) => item.sessionID)
+    await Promise.all(
+      sessions.map((sessionID, index) =>
+        bridge.handle(
+          frame("turn.create", {
+            sessionID,
+            agent: "slopcode",
+            prompt: `prompt ${index}`,
+            requestID: `req_scope_turn_${index}`,
+            idempotencyKey: `idem_scope_turn_${index}`,
+          }),
+        ),
+      ),
+    )
+    await waitFor(() => output.filter((item) => item.kind === "event").length >= 8)
+    const scoped = sessions.map((sessionID) =>
+      output.filter((item) => item.kind === "event" && item.sessionID === sessionID),
+    )
+    expect(scoped.map((items) => items.map((item) => item.type))).toEqual([
+      ["artifact.created", "tool.updated", "plan.available", "turn.output"],
+      ["artifact.created", "tool.updated", "plan.available", "turn.output"],
+    ])
+    for (const items of scoped) {
+      const tool = items.find((item) => item.kind === "event" && item.type === "tool.updated")
+      const plan = items.find((item) => item.kind === "event" && item.type === "plan.available")
+      const artifact = items.find((item) => item.kind === "event" && item.type === "artifact.created")
+      if (tool?.kind === "event" && tool.type === "tool.updated") expect(tool.tool.id).toStartWith("tol_")
+      if (plan?.kind === "event" && plan.type === "plan.available") expect(plan.plan.id).toStartWith("pln_")
+      if (artifact?.kind === "event" && artifact.type === "artifact.created")
+        expect(artifact.artifact.id).toStartWith("art_")
+    }
+    expect(
+      new Set(
+        scoped.flatMap((items) =>
+          items.flatMap((item) => (item.kind === "event" && item.type === "tool.updated" ? [item.tool.id] : [])),
+        ),
+      ).size,
+    ).toBe(2)
+    expect(
+      new Set(
+        scoped.flatMap((items) =>
+          items.flatMap((item) => (item.kind === "event" && item.type === "plan.available" ? [item.plan.id] : [])),
+        ),
+      ).size,
+    ).toBe(2)
+    expect(
+      new Set(
+        scoped.flatMap((items) =>
+          items.flatMap((item) =>
+            item.kind === "event" && item.type === "artifact.created" ? [item.artifact.id] : [],
+          ),
+        ),
+      ).size,
+    ).toBe(2)
     await bridge.close()
   })
 

@@ -11,6 +11,7 @@ import { connect, type ACPEvent, type Session } from "./acp"
 import { approvalCwd, contained, WorkspaceError } from "./workspace"
 
 const decode = Schema.decodeUnknownSync(AgentOrchestrationFrame)
+type Frame = typeof AgentOrchestrationFrame.Type
 const bytes = (value: string) => Buffer.byteLength(value)
 const clean = (value: string, size = 2_000, fallback = "") => {
   const normalized = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
@@ -23,15 +24,36 @@ const clean = (value: string, size = 2_000, fallback = "") => {
 const native = (value: string) => clean(value, 512, "native")
 const identifier = (prefix: string, value: string = randomUUID()) =>
   `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 48)}`
+const scoped = (sessionID: string, value: string) => `${sessionID}:${value}`
 const artifactPath = (root: string, value: string) =>
   path.resolve(root, ".slopcode", "remote-artifacts", `${identifier("item", value)}.md`)
+const canonical = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (!value || typeof value !== "object") return value
+  const object = value as Record<string, unknown>
+  return Object.fromEntries(
+    Object.keys(object)
+      .sort()
+      .map((key) => [key, canonical(object[key])]),
+  )
+}
+const fingerprint = (frame: AgentOrchestrationRequest) => {
+  const value = { ...frame } as Record<string, unknown>
+  delete value.requestID
+  delete value.idempotencyKey
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(value)) ?? "")
+    .digest("hex")
+}
 
 type Stored = {
   adapter: Session
   agent: "slopcode" | "opencode"
   workspaceID: string
   workspace: string
-  turnID?: string
+  activeTurnID?: string
+  lastTurnID?: string
+  queue: Promise<void>
 }
 
 type Interaction = {
@@ -47,11 +69,23 @@ type Open = (input: {
   emit: (event: ACPEvent) => void
 }) => Promise<Session>
 
+type RequestRecord = {
+  requestID: string
+  idempotencyKey: string
+  fingerprint: string
+  done: Promise<Frame>
+  resolve: (frame: Frame) => void
+  response?: Frame
+}
+
+const maxRequests = 256
+
 export class Bridge {
   readonly workspaces = new Map<string, string>()
   readonly sessions = new Map<string, Stored>()
   readonly native = new Map<string, string>()
   readonly interactions = new Map<string, Interaction>()
+  #requests = new Map<string, RequestRecord>()
   #sequence = 0
   #closed = false
 
@@ -83,12 +117,19 @@ export class Bridge {
     }
   }
 
-  private error(
-    code: "bad_request" | "unsupported_agent" | "not_found" | "interaction_conflict" | "path_forbidden" | "internal",
+  private errorFrame(
+    code:
+      | "bad_request"
+      | "unsupported_agent"
+      | "not_found"
+      | "interaction_conflict"
+      | "idempotency_conflict"
+      | "path_forbidden"
+      | "internal",
     message: string,
     frame?: Partial<AgentOrchestrationRequest>,
   ) {
-    this.out({
+    return decode({
       version: "v1",
       kind: "error",
       type: "error",
@@ -101,6 +142,81 @@ export class Bridge {
     })
   }
 
+  private error(
+    code:
+      | "bad_request"
+      | "unsupported_agent"
+      | "not_found"
+      | "interaction_conflict"
+      | "idempotency_conflict"
+      | "path_forbidden"
+      | "internal",
+    message: string,
+    frame?: Partial<AgentOrchestrationRequest>,
+  ) {
+    const value = this.errorFrame(code, message, frame)
+    this.out(value)
+    return value
+  }
+
+  private complete(record: RequestRecord, frame: unknown) {
+    const value = decode(frame)
+    record.response = value
+    record.resolve(value)
+    this.out(value)
+  }
+
+  private fail(
+    record: RequestRecord,
+    code:
+      | "bad_request"
+      | "unsupported_agent"
+      | "not_found"
+      | "interaction_conflict"
+      | "idempotency_conflict"
+      | "path_forbidden"
+      | "internal",
+    message: string,
+    frame: AgentOrchestrationRequest,
+  ) {
+    this.complete(record, this.errorFrame(code, message, frame))
+  }
+
+  private remember(record: RequestRecord) {
+    this.#requests.set(`request:${record.requestID}`, record)
+    this.#requests.set(`idempotency:${record.idempotencyKey}`, record)
+    while (new Set(this.#requests.values()).size > maxRequests) {
+      const first = this.#requests.values().next().value as RequestRecord | undefined
+      if (!first) return
+      this.#requests.delete(`request:${first.requestID}`)
+      this.#requests.delete(`idempotency:${first.idempotencyKey}`)
+    }
+  }
+
+  private async begin(frame: AgentOrchestrationRequest) {
+    const request = this.#requests.get(`request:${frame.requestID}`)
+    const idempotency = this.#requests.get(`idempotency:${frame.idempotencyKey}`)
+    if (request || idempotency) {
+      if (!request || !idempotency || request !== idempotency || request.fingerprint !== fingerprint(frame)) {
+        this.error("idempotency_conflict", "request ID or idempotency key was reused with a different payload", frame)
+        return undefined
+      }
+      this.out(await request.done)
+      return undefined
+    }
+    let resolve: (frame: Frame) => void = () => undefined
+    const done = new Promise<Frame>((value) => (resolve = value))
+    const record = {
+      requestID: frame.requestID,
+      idempotencyKey: frame.idempotencyKey,
+      fingerprint: fingerprint(frame),
+      done,
+      resolve,
+    }
+    this.remember(record)
+    return record
+  }
+
   private event(
     sessionID: string,
     input: Omit<Record<string, unknown>, "version" | "kind" | "cursor" | "sequence" | "sessionID">,
@@ -109,8 +225,7 @@ export class Bridge {
     this.out({ version: "v1", kind: "event", cursor: `cur_${sequence}`, sequence, sessionID, ...input })
   }
 
-  private async mapped(sessionID: string, session: Stored, event: ACPEvent) {
-    const turnID = session.turnID
+  private async mapped(sessionID: string, session: Stored, event: ACPEvent, turnID: string | undefined) {
     if (event.type === "output" && turnID) {
       this.event(sessionID, {
         type: "turn.output",
@@ -130,8 +245,8 @@ export class Bridge {
       return
     }
     if (event.type === "tool" && turnID) {
-      const id = identifier("tol", event.id)
-      this.native.set(id, event.id)
+      const id = identifier("tol", scoped(sessionID, event.id))
+      this.native.set(id, scoped(sessionID, event.id))
       this.event(sessionID, {
         type: "tool.updated",
         turnID,
@@ -149,7 +264,7 @@ export class Bridge {
       return
     }
     if (event.type === "approval" && turnID) {
-      const id = identifier("int", `${sessionID}:${event.id}`)
+      const id = identifier("int", scoped(sessionID, event.id))
       this.interactions.set(id, { sessionID, kind: "approval", revision: 1, nativeID: event.id })
       const cwd = await approvalCwd(session.workspace, event.cwd)
       this.event(sessionID, {
@@ -168,7 +283,7 @@ export class Bridge {
       return
     }
     if (event.type === "question" && turnID) {
-      const id = identifier("int", `${sessionID}:${event.id}`)
+      const id = identifier("int", scoped(sessionID, event.id))
       this.interactions.set(id, { sessionID, kind: "question", revision: 1, nativeID: event.id })
       this.event(sessionID, {
         type: "interaction.question.requested",
@@ -193,13 +308,13 @@ export class Bridge {
       return
     }
     if (event.type === "plan") {
-      const id = identifier("pln", event.id)
-      this.native.set(id, event.id)
+      const id = identifier("pln", scoped(sessionID, event.id))
+      this.native.set(id, scoped(sessionID, event.id))
       this.event(sessionID, {
         type: "plan.available",
         plan: {
           id,
-          path: artifactPath(session.workspace, event.id),
+          path: artifactPath(session.workspace, scoped(sessionID, event.id)),
           revision: 1,
           content: clean(event.content, AgentOrchestrationLimits.maxTextBytes, "Plan unavailable"),
           metadata: { nativeID: native(event.id), persisted: "false" },
@@ -218,8 +333,8 @@ export class Bridge {
           })
         return
       }
-      const id = identifier("art", event.id)
-      this.native.set(id, event.id)
+      const id = identifier("art", scoped(sessionID, event.id))
+      this.native.set(id, scoped(sessionID, event.id))
       this.event(sessionID, {
         type: "artifact.created",
         ...(turnID ? { turnID } : {}),
@@ -249,15 +364,26 @@ export class Bridge {
     if (turnID) this.event(sessionID, { type: "turn.output", turnID, text: message })
   }
 
+  private enqueue(sessionID: string, session: Stored, event: ACPEvent) {
+    const turnID = session.activeTurnID ?? session.lastTurnID
+    session.queue = session.queue
+      .then(() => this.mapped(sessionID, session, event, turnID))
+      .catch((error: unknown) => {
+        this.error("internal", error instanceof Error ? error.message : "ACP event mapping failed")
+      })
+  }
+
   async handle(frame: AgentOrchestrationFrame) {
     if (frame.kind !== "request") return this.error("bad_request", "bridge accepts request frames only")
+    const record = await this.begin(frame)
+    if (!record) return
     try {
       if (frame.type === "workspace.open") {
         if (frame.agent.id !== "slopcode" && frame.agent.id !== "opencode")
-          return this.error("unsupported_agent", `${frame.agent.id} is not available in the ACP bridge`, frame)
+          return this.fail(record, "unsupported_agent", `${frame.agent.id} is not available in the ACP bridge`, frame)
         const workspace = await contained(this.root, frame.workspace.path)
         this.workspaces.set(frame.workspace.id, workspace)
-        this.out({
+        this.complete(record, {
           version: "v1",
           kind: "response",
           type: "workspace.open",
@@ -269,9 +395,9 @@ export class Bridge {
       }
       if (frame.type === "session.create") {
         if (frame.agent !== "slopcode" && frame.agent !== "opencode")
-          return this.error("unsupported_agent", `${frame.agent} does not support the ACP bridge`, frame)
+          return this.fail(record, "unsupported_agent", `${frame.agent} does not support the ACP bridge`, frame)
         const workspace = this.workspaces.get(frame.workspaceID)
-        if (!workspace) return this.error("not_found", "workspace was not opened", frame)
+        if (!workspace) return this.fail(record, "not_found", "workspace was not opened", frame)
         const sessionID = identifier("ses")
         const pending: ACPEvent[] = []
         let stored: Stored | undefined
@@ -279,19 +405,14 @@ export class Bridge {
           agent: frame.agent,
           cwd: workspace,
           emit: (event) => {
-            if (stored) {
-              void this.mapped(sessionID, stored, event).catch((error: unknown) =>
-                this.error("internal", error instanceof Error ? error.message : "ACP event mapping failed"),
-              )
-              return
-            }
+            if (stored) return this.enqueue(sessionID, stored, event)
             pending.push(event)
           },
         })
-        stored = { adapter, agent: frame.agent, workspaceID: frame.workspaceID, workspace }
+        stored = { adapter, agent: frame.agent, workspaceID: frame.workspaceID, workspace, queue: Promise.resolve() }
         this.sessions.set(sessionID, stored)
-        this.native.set(sessionID, adapter.nativeID)
-        this.out({
+        this.native.set(sessionID, scoped(sessionID, adapter.nativeID))
+        this.complete(record, {
           version: "v1",
           kind: "response",
           type: "session.create",
@@ -300,18 +421,20 @@ export class Bridge {
           sessionID,
           capabilities: adapter.capabilities,
         })
-        for (const event of pending) {
-          await this.mapped(sessionID, stored, event)
-        }
+        for (const event of pending) this.enqueue(sessionID, stored, event)
+        await stored.queue
         return
       }
       if (frame.type === "turn.create") {
         const session = this.sessions.get(frame.sessionID)
         if (!session || session.agent !== frame.agent)
-          return this.error("not_found", "session was not found for this agent", frame)
+          return this.fail(record, "not_found", "session was not found for this agent", frame)
+        if (session.activeTurnID)
+          return this.fail(record, "bad_request", "a turn is already active for this session", frame)
         const turnID = frame.turnID ?? identifier("trn")
-        session.turnID = turnID
-        this.out({
+        session.activeTurnID = turnID
+        session.lastTurnID = turnID
+        this.complete(record, {
           version: "v1",
           kind: "response",
           type: "turn.create",
@@ -323,6 +446,9 @@ export class Bridge {
         void session.adapter
           .turn(frame.prompt)
           .catch((error: unknown) => this.error("internal", error instanceof Error ? error.message : "ACP turn failed"))
+          .finally(() => {
+            if (session.activeTurnID === turnID) session.activeTurnID = undefined
+          })
         return
       }
       if (frame.type === "interaction.approval.reply") {
@@ -336,9 +462,9 @@ export class Bridge {
           interaction.revision !== frame.revision ||
           !session.adapter.approval(interaction.nativeID, frame.decision === "approved")
         )
-          return this.error("interaction_conflict", "approval is no longer pending", frame)
+          return this.fail(record, "interaction_conflict", "approval is no longer pending", frame)
         this.interactions.delete(frame.interactionID)
-        this.out({
+        this.complete(record, {
           version: "v1",
           kind: "response",
           type: "interaction.approval.reply",
@@ -359,9 +485,9 @@ export class Bridge {
           interaction.revision !== frame.revision ||
           !session.adapter.question(interaction.nativeID, frame.answer)
         )
-          return this.error("interaction_conflict", "question is no longer pending", frame)
+          return this.fail(record, "interaction_conflict", "question is no longer pending", frame)
         this.interactions.delete(frame.interactionID)
-        this.out({
+        this.complete(record, {
           version: "v1",
           kind: "response",
           type: "interaction.question.reply",
@@ -371,10 +497,10 @@ export class Bridge {
         })
         return
       }
-      return this.error("bad_request", `${frame.type} is not available in the ACP bridge`, frame)
+      return this.fail(record, "bad_request", `${frame.type} is not available in the ACP bridge`, frame)
     } catch (error) {
-      if (error instanceof WorkspaceError) return this.error("path_forbidden", error.message, frame)
-      return this.error("internal", error instanceof Error ? error.message : "remote orchestrator failed", frame)
+      if (error instanceof WorkspaceError) return this.fail(record, "path_forbidden", error.message, frame)
+      return this.fail(record, "internal", error instanceof Error ? error.message : "remote orchestrator failed", frame)
     }
   }
 
@@ -383,6 +509,7 @@ export class Bridge {
     await Promise.allSettled([...this.sessions.values()].map((session) => session.adapter.close()))
     this.sessions.clear()
     this.interactions.clear()
+    this.#requests.clear()
   }
 }
 

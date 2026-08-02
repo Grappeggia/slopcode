@@ -32,4 +32,14 @@
 
 - Public interaction IDs now include the bridge session ID before hashing, so identical native interaction IDs from separate ACP sessions remain independently replyable.
 - ACP approval locations are accepted only when they are bounded, control-free absolute paths that `realpath` inside the active workspace. Invalid, traversal, and symlink-escape locations are omitted while the approval remains pending and actionable.
-- Validation: `packages/slopcode` remote-orchestrator tests (6 passed), `packages/protocol` orchestration tests (6 passed), both package typechecks, and `git diff --check` passed.
+- Validation: `packages/slopcode` remote-orchestrator tests (10 passed), `packages/protocol` orchestration tests (6 passed), both package typechecks, and `git diff --check` passed.
+
+## Task 3b correction
+
+- Workspace approval and artifact paths are now checked before and after `realpath` using the same absolute, normalized, control-free, UTF-8 byte, and containment rules. Invalid canonical symlink results are omitted without dropping the pending approval.
+- Each bridge session permits one active turn. A concurrent turn receives a stable `bad_request` conflict, and event callbacks capture the originating turn ID before asynchronous projection.
+- Stdio requests use a bounded 256-record in-memory idempotency ledger. Equivalent request/idempotency pairs replay the original response; conflicting reuse returns `idempotency_conflict` without creating another ACP session or turn. Fingerprints are hashes, not stored prompts.
+- Tool, plan, and artifact IDs and generated plan paths are scoped by bridge session and native ID. A per-session projection queue preserves ACP event order while canonical paths resolve asynchronously.
+- Regression coverage includes invalid canonical symlinks and oversized/traversal paths, overlapping turns and delayed output, duplicate/conflicting session and turn requests, cross-session public-ID collisions, and asynchronous event ordering.
+
+The bridge idempotency ledger remains intentionally in memory; durable restart recovery is still a follow-up for the journal integration and is not claimed by this correction.
