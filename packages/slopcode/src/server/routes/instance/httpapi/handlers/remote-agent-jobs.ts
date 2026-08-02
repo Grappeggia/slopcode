@@ -5,7 +5,6 @@ import { Pty } from "@slopcode-ai/core/pty"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { AppProcess } from "@slopcode-ai/core/process"
 import {
-  MAX_REMOTE_JOB_EVENTS,
   MAX_REMOTE_JOB_OUTPUT_BYTES,
   MAX_REMOTE_REVIEW_COMMENTS,
   MAX_REMOTE_REVIEW_DIFF_BYTES,
@@ -22,6 +21,8 @@ import {
 } from "../groups/remote-runtime"
 import { ChildProcess } from "effect/unstable/process"
 import { Context, Deferred, Effect, Layer, Queue, Scope, Stream } from "effect"
+import { Service as RemoteAgentJournal, layer as remoteAgentJournalLayer } from "./remote-agent-journal"
+import { createHash } from "node:crypto"
 import path from "node:path"
 
 type Agent = typeof RemoteAgent.Type
@@ -44,11 +45,9 @@ type StartInput = {
 type Job = {
   state: State
   root: string
-  prompt: string
+  prompt?: string
   config?: Config
-  ptyID: Pty.Info["id"]
-  sequence: number
-  events: Event[]
+  ptyID?: Pty.Info["id"]
   listeners: Set<Queue.Queue<Event>>
   exitCode?: number
   write?: (value: string) => void
@@ -87,6 +86,10 @@ const textLimit = 4096
 
 function id(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`
+}
+
+function digest(value: unknown) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
 
 function text(value: unknown, limit = textLimit) {
@@ -373,15 +376,18 @@ function nextState(state: State, event: Event): State {
               ? state.status
               : "running")
   const output = data.output ? boundedOutput(`${state.output ?? ""}${data.output}`) : state.output
+  const retry = event.type.endsWith("retry")
+  const accepted = data.message === "Agent action accepted"
   return {
     ...state,
     status,
     cursor: event.cursor,
     ...(output ? { output } : {}),
-    ...(data.error ? { error: data.error } : {}),
+    ...(retry ? { error: undefined } : data.error ? { error: data.error } : {}),
     ...(data.progress === undefined ? {} : { progress: data.progress }),
     ...(data.sessionID ? { sessionID: data.sessionID } : {}),
     ...(data.commandPreview ? { commandPreview: data.commandPreview } : {}),
+    ...(retry || accepted ? { approval: undefined, question: undefined } : {}),
     ...(data.approval ? { approval: data.approval } : {}),
     ...(data.question ? { question: data.question } : {}),
     ...(data.review ? { review: mergeReview(state.review, data.review) } : {}),
@@ -391,21 +397,6 @@ function nextState(state: State, event: Event): State {
 
 function data(value: Record<string, unknown>): Data {
   return value as Data
-}
-
-function statusData(job: Job, type: string, values: Record<string, unknown> = {}) {
-  const event = {
-    id: id("evt"),
-    cursor: String(++job.sequence),
-    jobID: job.state.id,
-    type,
-    data: data(values),
-  } satisfies Event
-  job.events.push(event)
-  if (job.events.length > MAX_REMOTE_JOB_EVENTS) job.events.shift()
-  job.state = nextState(job.state, event)
-  for (const listener of job.listeners) Queue.offerUnsafe(listener, event)
-  return event
 }
 
 function changedFiles(value: string, root: string) {
@@ -498,9 +489,54 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const locations = yield* LocationServiceMap
+    const journal = yield* RemoteAgentJournal
     const jobs = new Map<string, Job>()
+    const recovered = new Map<string, Job>(
+      (yield* journal.list()).map((item) => [
+        item.state.id,
+        { state: item.state, root: item.root, config: item.config, listeners: new Set(), input: [], pending: "" },
+      ]),
+    )
     const context = yield* Effect.context<unknown>()
     const runFork = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.runFork(effect.pipe(Effect.provide(context)))
+
+    const statusData = (job: Job, type: string, values: Record<string, unknown> = {}) => {
+      const approval = type.endsWith("approval") && record(values.approval) ? values.approval : undefined
+      const question = type.endsWith("question") && record(values.question) ? values.question : undefined
+      const interaction = approval ?? question
+      const identifier = text(interaction?.id) ?? (interaction ? id("int") : undefined)
+      const valuesData = {
+        ...values,
+        ...(approval && identifier ? { approval: { ...approval, id: identifier } } : {}),
+        ...(question && identifier ? { question: { ...question, id: identifier } } : {}),
+      }
+      return journal
+        .append({
+          jobID: job.state.id,
+          id: id("evt"),
+          type,
+          data: data(valuesData),
+          reduce: nextState,
+          ...(identifier && interaction
+            ? {
+                interaction: {
+                  id: identifier,
+                  kind: approval ? ("approval" as const) : ("question" as const),
+                  payload: interaction,
+                },
+              }
+            : {}),
+        })
+        .pipe(
+          Effect.tap(({ state, event }) =>
+            Effect.sync(() => {
+              job.state = state
+              for (const listener of job.listeners) Queue.offerUnsafe(listener, event)
+            }),
+          ),
+          Effect.map(({ event }) => event),
+        )
+    }
 
     const create = (input: {
       readonly root: string
@@ -525,6 +561,7 @@ export const layer = Layer.effect(
     }
 
     const terminate = (job: Job) => {
+      if (!job.ptyID) return Effect.void
       return Effect.provide(
         Pty.Service.use((service) => service.remove(job.ptyID)).pipe(Effect.catch(() => Effect.void)),
         locationLayer(locations, job.root),
@@ -534,22 +571,25 @@ export const layer = Layer.effect(
     const run = (job: Job) =>
       Effect.provide(
         Effect.gen(function* () {
-          statusData(job, "job.running", { progress: 0 })
+          if (!job.ptyID || !job.prompt) return yield* Effect.fail(new Error("remote job process is unavailable"))
+          const ptyID = job.ptyID
+          const prompt = job.prompt
+          yield* statusData(job, "job.running", { progress: 0 })
           const pty = yield* Pty.Service
           const events = yield* EventV2.Service
           const process = yield* AppProcess.Service
           const exited = yield* Deferred.make<{ id: Pty.Info["id"]; exitCode: number }>()
-          job.stop = () => Deferred.succeed(exited, { id: job.ptyID, exitCode: 143 })
+          job.stop = () => Deferred.succeed(exited, { id: ptyID, exitCode: 143 })
           const unsubscribe = yield* events.listen((event) => {
             if (event.type !== Pty.Event.Exited.type) return Effect.void
             const value = event.data as { id?: Pty.Info["id"]; exitCode?: number }
-            if (value.id !== job.ptyID || typeof value.exitCode !== "number") return Effect.void
+            if (value.id !== ptyID || typeof value.exitCode !== "number") return Effect.void
             job.exitCode = value.exitCode
             return Deferred.succeed(exited, { id: value.id, exitCode: value.exitCode })
           })
           yield* Effect.addFinalizer(() => unsubscribe)
-          statusData(job, "job.progress", { message: "Connecting to remote agent process" })
-          const info = yield* pty.get(job.ptyID)
+          yield* statusData(job, "job.progress", { message: "Connecting to remote agent process" })
+          const info = yield* pty.get(ptyID)
           const socket = {
             readyState: 1,
             send: (value: string | Uint8Array | ArrayBuffer) => {
@@ -563,25 +603,25 @@ export const layer = Layer.effect(
               job.pending = lines.pop() ?? ""
               for (const line of lines) {
                 const parsed = structured(line.trim())
-                if (parsed) statusData(job, parsed.type, parsed.data)
-                else if (line) statusData(job, "job.output", { output: line + "\n" })
+                if (parsed) runFork(statusData(job, parsed.type, parsed.data))
+                else if (line) runFork(statusData(job, "job.output", { output: line + "\n" }))
               }
               if (job.pending.length > 16 * 1024) {
-                statusData(job, "job.output", { output: job.pending.slice(0, 16 * 1024) })
+                runFork(statusData(job, "job.output", { output: job.pending.slice(0, 16 * 1024) }))
                 job.pending = job.pending.slice(16 * 1024)
               }
             },
             close: () => {
-              runFork(Deferred.succeed(exited, { id: job.ptyID, exitCode: job.exitCode ?? 0 }))
+              runFork(Deferred.succeed(exited, { id: ptyID, exitCode: job.exitCode ?? 0 }))
             },
           }
           const connection = yield* pty.connect(info.id, socket, -1)
           if (!connection) return yield* Effect.fail(new Error("remote job PTY connection failed"))
           job.write = connection.onMessage as (value: string) => void
           job.input.splice(0).forEach((value) => job.write?.(value))
-          statusData(job, "job.progress", {
+          yield* statusData(job, "job.progress", {
             sessionID: info.id,
-            commandPreview: preview(job.state.agent, job.state.directory, job.prompt, job.config),
+            commandPreview: preview(job.state.agent, job.state.directory, prompt, job.config),
           })
           const poll = Effect.gen(function* () {
             while (true) {
@@ -594,14 +634,14 @@ export const layer = Layer.effect(
           connection.onClose()
           if (job.pending) {
             const parsed = structured(job.pending.trim())
-            if (parsed) statusData(job, parsed.type, parsed.data)
-            else statusData(job, "job.output", { output: job.pending })
+            if (parsed) yield* statusData(job, parsed.type, parsed.data)
+            else yield* statusData(job, "job.output", { output: job.pending })
             job.pending = ""
           }
           if (job.state.status === "stopped") return
           const collected = yield* collectRemoteAgentReview(job.state.directory, process)
           const reviewValue = mergeReview(job.state.review, collected)
-          statusData(job, exit.exitCode === 0 ? "job.completed" : "job.failed", {
+          yield* statusData(job, exit.exitCode === 0 ? "job.completed" : "job.failed", {
             ...(exit.exitCode === 0 ? {} : { error: `Remote agent exited with code ${exit.exitCode}` }),
             review: reviewValue,
           })
@@ -611,8 +651,7 @@ export const layer = Layer.effect(
         Effect.catch((error) => {
           if (job.state.status === "stopped") return Effect.void
           const message = error instanceof Error ? error.message : "Remote agent job failed"
-          statusData(job, "job.failed", { error: message })
-          return Effect.void
+          return statusData(job, "job.failed", { error: message }).pipe(Effect.asVoid)
         }),
       )
 
@@ -620,41 +659,80 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const existing = jobs.get(input.id)
         if (existing) return existing.state
-        const info = yield* create(input)
-        const job: Job = {
-          state: {
-            id: input.id,
+        const state: State = {
+          id: input.id,
+          workspaceID: input.workspaceID,
+          directory: input.directory,
+          agent: input.agent,
+          status: "queued",
+          commandPreview: preview(input.agent, input.directory, input.prompt, input.config),
+          updatedAt: Date.now(),
+        }
+        const claimed = yield* journal.start({
+          state,
+          root: input.root,
+          config: input.config,
+          fingerprint: digest({
             workspaceID: input.workspaceID,
+            root: input.root,
             directory: input.directory,
             agent: input.agent,
-            status: "queued",
-            sessionID: info.id,
-            commandPreview: preview(input.agent, input.directory, input.prompt, input.config),
-            updatedAt: Date.now(),
-          },
+            prompt: input.prompt,
+            config: input.config,
+          }),
+        })
+        if (claimed.type === "conflict") return yield* Effect.fail(new Error("remote agent job idempotency conflict"))
+        if (claimed.type === "duplicate") {
+          const restored = {
+            state: claimed.job.state,
+            root: claimed.job.root,
+            config: claimed.job.config,
+            listeners: new Set<Queue.Queue<Event>>(),
+            input: [],
+            pending: "",
+          } satisfies Job
+          recovered.set(restored.state.id, restored)
+          return restored.state
+        }
+        const info = yield* create(input)
+        const job: Job = {
+          state,
           root: input.root,
           prompt: input.prompt,
           config: input.config,
           ptyID: info.id,
-          sequence: 0,
-          events: [],
           listeners: new Set(),
           input: [],
           pending: "",
         }
         jobs.set(job.state.id, job)
-        statusData(job, "job.queued", { commandPreview: job.state.commandPreview })
+        recovered.delete(job.state.id)
+        yield* statusData(job, "job.queued", { commandPreview: job.state.commandPreview })
         runFork(run(job))
         return job.state
       })
 
     const stream: Interface["stream"] = (input) =>
       Effect.gen(function* () {
-        const job = jobs.get(input.jobID)
+        const job = jobs.get(input.jobID) ?? recovered.get(input.jobID)
         if (!job) return yield* Effect.fail(new RemoteAgentJobNotFoundError(input.jobID))
         const queue = yield* Queue.unbounded<Event>()
-        const cursor = input.cursor && /^\d+$/.test(input.cursor) ? Number(input.cursor) : 0
-        job.events.filter((event) => Number(event.cursor) > cursor).forEach((event) => Queue.offerUnsafe(queue, event))
+        const replay = yield* journal
+          .replay(input)
+          .pipe(
+            Effect.catchTag("RemoteAgentJournalJobNotFoundError", () =>
+              Effect.fail(new RemoteAgentJobNotFoundError(input.jobID)),
+            ),
+          )
+        if (replay.type === "snapshot_required")
+          Queue.offerUnsafe(queue, {
+            id: id("evt"),
+            cursor: replay.cursor,
+            jobID: input.jobID,
+            type: "job.snapshot_required",
+            data: { message: "Requested event cursor is outside the retained tail" },
+          })
+        else replay.events.forEach((event) => Queue.offerUnsafe(queue, event))
         job.listeners.add(queue)
         yield* Effect.addFinalizer(() => Effect.sync(() => job.listeners.delete(queue)))
         return Stream.fromQueue(queue)
@@ -662,7 +740,7 @@ export const layer = Layer.effect(
 
     const action: Interface["action"] = (input) =>
       Effect.gen(function* () {
-        const job = jobs.get(input.jobID)
+        const job = jobs.get(input.jobID) ?? recovered.get(input.jobID)
         if (!job) return yield* Effect.fail(new RemoteAgentJobNotFoundError(input.jobID))
         const value = input.action
         if (value.action === "comment") {
@@ -679,11 +757,12 @@ export const layer = Layer.effect(
               createdAt: Date.now(),
             },
           ].slice(-MAX_REMOTE_REVIEW_COMMENTS)
-          statusData(job, "job.review.updated", { review: { ...current, comments } })
+          yield* statusData(job, "job.review.updated", { review: { ...current, comments } })
           return job.state
         }
         if (value.action === "retry") {
           if (!job.state.status || !["failed", "stopped", "completed"].includes(job.state.status)) return job.state
+          if (!job.prompt) return yield* Effect.fail(new Error("remote job prompt is unavailable after restart"))
           const info = yield* create({
             root: job.root,
             directory: job.state.directory,
@@ -695,20 +774,12 @@ export const layer = Layer.effect(
           job.write = undefined
           job.pending = ""
           job.exitCode = undefined
-          job.state = {
-            ...job.state,
-            status: "retrying",
-            error: undefined,
-            approval: undefined,
-            question: undefined,
-            updatedAt: Date.now(),
-          }
-          statusData(job, "job.retry", { message: "Retrying remote agent job", sessionID: info.id })
+          yield* statusData(job, "job.retry", { message: "Retrying remote agent job", sessionID: info.id })
           runFork(run(job))
           return job.state
         }
         if (value.action === "stop") {
-          statusData(job, "job.stopped", { message: "Stopped by user" })
+          yield* statusData(job, "job.stopped", { message: "Stopped by user" })
           yield* terminate(job)
           yield* job.stop?.() ?? Effect.void
           return job.state
@@ -720,10 +791,29 @@ export const layer = Layer.effect(
               ? "n\r"
               : `${value.answer ?? value.prompt ?? ""}\r`
         if (!inputValue.trim()) return yield* Effect.fail(new Error("answer or steering prompt is required"))
+        if (!job.write && !job.ptyID)
+          return yield* Effect.fail(new Error("remote job process is unavailable after restart"))
+        const interaction =
+          value.action === "approve" || value.action === "reject"
+            ? job.state.approval
+            : value.action === "answer"
+              ? job.state.question
+              : undefined
+        if (interaction?.id) {
+          const resolved = yield* journal.resolveInteraction({
+            jobID: job.state.id,
+            id: interaction.id,
+            revision: 1,
+            digest: digest({ action: value.action, answer: value.answer, prompt: value.prompt }),
+            resolution: { action: value.action, answer: value.answer ?? value.prompt },
+          })
+          if (resolved.type === "duplicate" || resolved.type === "stale" || resolved.type === "conflict")
+            return job.state
+        }
         if (job.write) job.write(inputValue)
         else job.input.push(inputValue)
         job.state = { ...job.state, approval: undefined, question: undefined, updatedAt: Date.now() }
-        statusData(job, "job.progress", {
+        yield* statusData(job, "job.progress", {
           message: value.action === "steer" ? "Steering prompt sent" : "Agent action accepted",
         })
         return job.state
@@ -732,4 +822,4 @@ export const layer = Layer.effect(
     yield* Effect.addFinalizer(() => Effect.sync(() => jobs.clear()))
     return Service.of({ start, stream, action })
   }),
-)
+).pipe(Layer.provide(remoteAgentJournalLayer))
