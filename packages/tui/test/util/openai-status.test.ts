@@ -133,6 +133,30 @@ describe("OpenAI status helpers", () => {
     ).toEqual({ status: "disconnected" })
   })
 
+  test("normalizes nullable legacy usage fields", async () => {
+    expect(
+      await loadOpenAIUsage(
+        async () => ({ status: "disconnected" }),
+        async () => ({
+          status: "oauth",
+          plan: "plus",
+          email: null,
+          primary: { usedPercent: 20, windowMinutes: null, resetAt: null },
+          credits: { hasCredits: true, unlimited: false, balance: null },
+          spend: { limit: "10", used: "2", remainingPercent: 80, resetAt: null },
+          capturedAt: 1,
+        }),
+      ),
+    ).toEqual({
+      status: "oauth",
+      plan: "plus",
+      primary: { usedPercent: 20 },
+      credits: { hasCredits: true, unlimited: false },
+      spend: { limit: "10", used: "2", remainingPercent: 80 },
+      capturedAt: 1,
+    })
+  })
+
   test("labels known and generic windows", () => {
     expect([300, 1_440, 10_080, 43_200, 525_600, 120, 45].map(windowLabel)).toEqual([
       "5h",

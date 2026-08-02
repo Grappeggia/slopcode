@@ -1,14 +1,80 @@
-import type { AssistantMessage, Message, OpenAiUsage, Provider } from "@slopcode-ai/sdk/v2"
+import type { AssistantMessage, Message, OpenAiUsage, OpenAiUsage1, Provider } from "@slopcode-ai/sdk/v2"
 
 export const OPENAI_LOADING = "Loading ChatGPT Codex usage..."
 
-export async function loadOpenAIUsage(v2: () => Promise<OpenAiUsage>, legacy: () => Promise<OpenAiUsage>) {
+type OpenAiUsageResponse = OpenAiUsage | OpenAiUsage1
+
+function normalizeUsage(usage: OpenAiUsageResponse): OpenAiUsage {
+  if (usage.status !== "oauth") return usage
+  return {
+    status: "oauth",
+    plan: usage.plan,
+    ...(usage.email === undefined || usage.email === null ? {} : { email: usage.email }),
+    ...(usage.primary
+      ? {
+          primary: {
+            usedPercent: usage.primary.usedPercent,
+            ...(usage.primary.windowMinutes === undefined || usage.primary.windowMinutes === null
+              ? {}
+              : { windowMinutes: usage.primary.windowMinutes }),
+            ...(usage.primary.resetAt === undefined || usage.primary.resetAt === null
+              ? {}
+              : { resetAt: usage.primary.resetAt }),
+          },
+        }
+      : {}),
+    ...(usage.secondary
+      ? {
+          secondary: {
+            usedPercent: usage.secondary.usedPercent,
+            ...(usage.secondary.windowMinutes === undefined || usage.secondary.windowMinutes === null
+              ? {}
+              : { windowMinutes: usage.secondary.windowMinutes }),
+            ...(usage.secondary.resetAt === undefined || usage.secondary.resetAt === null
+              ? {}
+              : { resetAt: usage.secondary.resetAt }),
+          },
+        }
+      : {}),
+    ...(usage.credits
+      ? {
+          credits: {
+            hasCredits: usage.credits.hasCredits,
+            unlimited: usage.credits.unlimited,
+            ...(usage.credits.balance === undefined || usage.credits.balance === null
+              ? {}
+              : { balance: usage.credits.balance }),
+          },
+        }
+      : {}),
+    ...(usage.spend
+      ? {
+          spend: {
+            limit: usage.spend.limit,
+            used: usage.spend.used,
+            remainingPercent: usage.spend.remainingPercent,
+            ...(usage.spend.resetAt === undefined || usage.spend.resetAt === null
+              ? {}
+              : { resetAt: usage.spend.resetAt }),
+          },
+        }
+      : {}),
+    capturedAt: usage.capturedAt,
+  }
+}
+
+export async function loadOpenAIUsage(
+  v2: () => Promise<OpenAiUsageResponse>,
+  legacy: () => Promise<OpenAiUsageResponse>,
+) {
   const usage = await Promise.resolve()
     .then(v2)
+    .then(normalizeUsage)
     .catch(() => undefined)
   if (usage && usage.status !== "disconnected") return usage
   return Promise.resolve()
     .then(legacy)
+    .then(normalizeUsage)
     .catch(() => usage ?? ({ status: "unavailable" } as const))
 }
 
