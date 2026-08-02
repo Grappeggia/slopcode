@@ -486,7 +486,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           const location = response.data
           const key = locationKey(location)
           if (!store.location[key]) setStore("location", key, {})
-          if (!ref) setDefaultLocation({ directory: location.directory, workspaceID: location.workspaceID ?? undefined })
+          if (!ref)
+            setDefaultLocation({ directory: location.directory, workspaceID: location.workspaceID ?? undefined })
         },
         agent: {
           list(location?: LocationRef) {
