@@ -544,7 +544,9 @@ export const layer = Layer.effect(
               })
             }
             const stored = yield* load(connection)
-            const scope = stored.store.scopes.find((item) => item.pairings.some((pairing) => pairing.id === input.pairingID))
+            const scope = stored.store.scopes.find((item) =>
+              item.pairings.some((pairing) => pairing.id === input.pairingID),
+            )
             const pairing = scope?.pairings.find((item) => item.id === input.pairingID)
             if (!scope || !pairing) {
               return yield* new TargetRegistrationError({

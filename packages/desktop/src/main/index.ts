@@ -262,7 +262,8 @@ const main = Effect.gen(function* () {
   yield* Effect.promise(() => cleanupStoreFiles(app.getPath("userData"))).pipe(
     Effect.tap((result) =>
       Effect.sync(() => {
-        if (result.deleted.length) logger.log("cleaned scoped store files", { scanned: result.scanned, count: result.deleted.length })
+        if (result.deleted.length)
+          logger.log("cleaned scoped store files", { scanned: result.scanned, count: result.deleted.length })
       }),
     ),
     Effect.catch((error) =>

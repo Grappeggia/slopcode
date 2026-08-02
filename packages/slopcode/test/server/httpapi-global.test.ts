@@ -14,7 +14,10 @@ import { controlHandlers } from "../../src/server/routes/instance/httpapi/handle
 import { controlPlaneHandlers } from "../../src/server/routes/instance/httpapi/handlers/control-plane"
 import { globalHandlers } from "../../src/server/routes/instance/httpapi/handlers/global"
 import { remoteSupervisorHandlers } from "../../src/server/routes/instance/httpapi/handlers/remote-supervisor"
-import { Service as RemotePairingService, type Interface as RemotePairingInterface } from "../../src/server/routes/instance/httpapi/remote-pairing"
+import {
+  Service as RemotePairingService,
+  type Interface as RemotePairingInterface,
+} from "../../src/server/routes/instance/httpapi/remote-pairing"
 import { authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { schemaErrorLayer } from "../../src/server/routes/instance/httpapi/middleware/schema-error"
 import { testEffect } from "../lib/effect"

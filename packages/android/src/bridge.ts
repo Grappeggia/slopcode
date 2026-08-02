@@ -63,7 +63,9 @@ function parseJson<T>(value: unknown, fallback: T) {
 
 const enabled = (value: unknown) => value === true
 
-export function getAndroidBridge(target: Pick<Window, "SlopcodeAndroid"> = typeof window === "object" ? window : { SlopcodeAndroid: undefined }) {
+export function getAndroidBridge(
+  target: Pick<Window, "SlopcodeAndroid"> = typeof window === "object" ? window : { SlopcodeAndroid: undefined },
+) {
   const port = target.SlopcodeAndroid
   if (!port) return
   const existing = ports.get(port)
@@ -187,7 +189,8 @@ export function parseDeepLinkMessage(value: unknown, nonce: string) {
     parsed.channel !== ANDROID_DEEP_LINK_CHANNEL ||
     parsed.nonce !== nonce ||
     parsed.ready !== true
-  ) return []
+  )
+    return []
   return parseSupportedDeepLinks(parsed.urls)
 }
 
