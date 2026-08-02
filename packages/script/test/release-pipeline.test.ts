@@ -871,9 +871,12 @@ describe("workflow contracts", () => {
     const publisher = await Bun.file(path.join(root, "script/publish.ts")).text()
 
     expect(workflow).toMatch(/previous_tag:\n\s+description:[^\n]+\n\s+required: false\n\s+default: ""/)
+    expect(workflow).toMatch(/release_id:\n\s+description:[^\n]+\n\s+required: true/)
     expect(workflow.match(/--require-previous-if-any/g)).toHaveLength(3)
     expect(workflow.match(/if \[ -n "\$PREVIOUS" \]; then args\+=\(--previous-tag "\$PREVIOUS"\); fi/g)).toHaveLength(3)
     expect(dispatcher).toContain("previous_tag?: string")
+    expect(dispatcher).toContain("release_id: string")
+    expect(dispatcher).toContain("-f release_id=${prepared.release_id}")
     expect(dispatcher).toContain(
       'const previous = prepared.previous_tag ? ["-f", `previous_tag=${prepared.previous_tag}`] : []',
     )
@@ -894,9 +897,6 @@ describe("workflow contracts", () => {
     expect(workflow).not.toContain("_authToken")
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).toContain("contents: read")
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).not.toContain("id-token: write")
-    const version = workflow.slice(workflow.indexOf("  version:"), workflow.indexOf("  build-tauri:"))
-    expect(version).toContain("name: Setup release token")
-    expect(version).toContain("GH_TOKEN: ${{ steps.committer.outputs.token }}")
     expect(publish).toContain("id-token: write")
     expect(publish).toContain("contents: read")
     expect(publish).not.toContain("contents: write")

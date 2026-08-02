@@ -183,9 +183,15 @@ const prepared = parse<{
   source_sha: string
   previous_tag?: string
   tag: string
+  release_id: string
 }>(await Bun.file(output).text())
 await Bun.file(output).delete()
-if (prepared.version !== version || prepared.tag !== lineage.target || prepared.previous_tag !== lineage.previous) {
+if (
+  prepared.version !== version ||
+  prepared.tag !== lineage.target ||
+  prepared.previous_tag !== lineage.previous ||
+  !/^RE_[A-Za-z0-9_-]+$/.test(prepared.release_id)
+) {
   throw new Error("Prepared release result does not match the verified lineage and target version.")
 }
 
@@ -198,7 +204,7 @@ if (plan === "success") {
 }
 if (plan === "dispatch") {
   const previous = prepared.previous_tag ? ["-f", `previous_tag=${prepared.previous_tag}`] : []
-  await $`gh workflow run publish.yml --ref ${ref} -f version=${prepared.version} -f source_sha=${prepared.source_sha} ${previous} -f dispatch_id=${dispatch}`.nothrow()
+  await $`gh workflow run publish.yml --ref ${ref} -f version=${prepared.version} -f source_sha=${prepared.source_sha} ${previous} -f dispatch_id=${dispatch} -f release_id=${prepared.release_id}`.nothrow()
 }
 if (plan === "rerun") {
   await $`gh run rerun ${existing!.databaseId}`.nothrow()

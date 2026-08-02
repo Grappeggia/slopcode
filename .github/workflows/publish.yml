@@ -21,6 +21,10 @@ on:
         description: "Unique release invocation identifier"
         required: true
         type: string
+      release_id:
+        description: "Exact prepared GitHub release node id"
+        required: true
+        type: string
 
 concurrency:
   group: publish-release
@@ -61,32 +65,24 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
-      - name: Setup release token
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          slopcode-app-id: ${{ vars.SLOPCODE_APP_ID }}
-          slopcode-app-secret: ${{ secrets.SLOPCODE_APP_SECRET }}
-
       - name: Verify release provenance from canonical dev
         id: version
         run: |
           test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           test "$GITHUB_REF" = "refs/heads/dev"
+          [[ "$RELEASE_ID" =~ ^RE_[A-Za-z0-9_-]+$ ]]
           args=(bun run --cwd packages/script lineage verify --tag "v$VERSION" --source "$SOURCE" --require-previous-if-any --remote origin --branch dev)
           if [ -n "$PREVIOUS" ]; then args+=(--previous-tag "$PREVIOUS"); fi
           "${args[@]}"
-          release=$(gh release view "v$VERSION" --json id --jq .id --repo "$GITHUB_REPOSITORY")
-          test -n "$release"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE_ID" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "repo=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
           VERSION: ${{ inputs.version }}
           SOURCE: ${{ inputs.source_sha }}
           PREVIOUS: ${{ inputs.previous_tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}

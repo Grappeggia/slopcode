@@ -138,6 +138,7 @@ const buildLocal = async () => {
 // await import(`../packages/sdk/js/script/build.ts`)
 
 let prepared: Awaited<ReturnType<typeof prepareRelease>> | undefined
+let release = ""
 if (mode !== "publish" && lineage) {
   const dist = path.join(dir, "packages", "slopcode", "dist")
   let repo = process.env.GH_REPO ?? "teamslop/slopcode"
@@ -159,6 +160,7 @@ if (mode !== "publish" && lineage) {
     release: async () => {
       const info = await releaseInfo()
       repo = info.repo
+      release = info.release
       process.env.GH_REPO = repo
     },
     upload: async () => {
@@ -184,6 +186,7 @@ if (mode !== "publish" && lineage) {
         source_sha: prepared.source,
         previous_tag: prepared.previous,
         tag: prepared.tag,
+        release_id: release,
       })}\n`,
     )
   }
