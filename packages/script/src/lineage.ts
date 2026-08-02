@@ -310,7 +310,11 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
   const anchor = stateSha ? all.find((item) => item.sha === stateSha) : undefined
   const published = stateSha
     ? (await history(options.cwd, all, stateSha)).filter(
-        (item) => item.ancestor && (!anchor || semver.major(item.version) === semver.major(anchor.version)),
+        (item) =>
+          item.ancestor &&
+          (!anchor ||
+            (semver.major(item.version) === semver.major(anchor.version) &&
+              semver.minor(item.version) === semver.minor(anchor.version))),
       )
     : all
   return {

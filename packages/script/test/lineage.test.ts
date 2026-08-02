@@ -163,11 +163,11 @@ describe("release lineage", () => {
     await expect(release(ctx.repo)).resolves.toMatchObject({ source, previous: "v1.0.0" })
   })
 
-  test("keeps older major tags out of an anchored release family", async () => {
+  test("keeps foreign minor tags out of an anchored release family", async () => {
     const ctx = await setup()
     await git(ctx.repo, "push", "origin", `${ctx.base}:refs/tags/v0.2.0`)
     const foreign = await commit(ctx.repo, "foreign")
-    await git(ctx.repo, "push", "origin", `${foreign}:refs/tags/v1.2.15`)
+    await git(ctx.repo, "push", "origin", `${foreign}:refs/tags/v0.15.31`)
     const anchor = await commit(ctx.repo, "anchor")
     await git(ctx.repo, "push", "origin", `${anchor}:refs/tags/v0.2.1`)
     await git(ctx.repo, "push", "origin", `${anchor}:${releaseStateRef}`)
