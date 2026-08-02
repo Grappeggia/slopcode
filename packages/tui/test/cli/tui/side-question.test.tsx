@@ -27,17 +27,15 @@ async function wait(fn: () => boolean, timeout = 2000) {
 }
 
 function stream(events: object[]) {
-  return new Response(events.map((event) => `event: ${(event as { type: string }).type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  })
+  return new Response(
+    events.map((event) => `event: ${(event as { type: string }).type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+    {
+      headers: { "content-type": "text/event-stream" },
+    },
+  )
 }
 
-async function mount(input: {
-  root: string
-  question?: string
-  fetch: typeof globalThis.fetch
-  onClose?: () => void
-}) {
+async function mount(input: { root: string; question?: string; fetch: typeof globalThis.fetch; onClose?: () => void }) {
   const config = createTuiResolvedConfig()
   const state = path.join(input.root, "state")
   await mkdir(state, { recursive: true })

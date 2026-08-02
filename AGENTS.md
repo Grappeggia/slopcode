@@ -123,8 +123,8 @@ const table = sqliteTable("session", {
 
 The codebase supports two SlopCode model tiers:
 
-| Tier     | Provider ID   | API Endpoint                    | Needs Auth?                          |
-| -------- | ------------- | ------------------------------- | ------------------------------------ |
+| Tier     | Provider ID   | API Endpoint                     | Needs Auth?                          |
+| -------- | ------------- | -------------------------------- | ------------------------------------ |
 | **Free** | `slopcode`    | `https://slopcode.dev/zen/v1`    | No (auto-injects `apiKey: "public"`) |
 | **Go**   | `slopcode-go` | `https://slopcode.dev/zen/go/v1` | Yes (`SLOPCODE_API_KEY`)             |
 

@@ -41,7 +41,9 @@ export function migrateClosedTabs(
     if ("server" in tab && typeof tab.server !== "string") return []
     const server = ("server" in tab ? tab.server : fallback) as SessionTab["server"]
     if (!preserveUnknown && !servers.has(server)) return []
-    return [{ tab: { type: "session", server, sessionId: tab.sessionId, dirBase64: tab.dirBase64 }, index: entry.index }]
+    return [
+      { tab: { type: "session", server, sessionId: tab.sessionId, dirBase64: tab.dirBase64 }, index: entry.index },
+    ]
   })
 }
 

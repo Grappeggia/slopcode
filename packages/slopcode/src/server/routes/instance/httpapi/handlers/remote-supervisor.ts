@@ -29,9 +29,7 @@ export const remoteSupervisorHandlers = HttpApiBuilder.group(RootHttpApi, "remot
       const payload = yield* Schema.decodeUnknownEffect(RemoteWorkspaceTargetPayload)(ctx.payload).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
-      yield* pairings.registerSupervisorTarget(payload).pipe(
-        Effect.mapError(() => new HttpApiError.BadRequest({})),
-      )
+      yield* pairings.registerSupervisorTarget(payload).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     return handlers.handle("pairings", list).handle("target", target)

@@ -66,11 +66,16 @@ describe("Android remote agent session", () => {
     expect(parseRemoteAgentCommand("/help")).toEqual({ name: "help", args: "" })
     expect(parseRemoteAgentCommand("/review changed\nfiles")).toBeUndefined()
     expect(
-      remoteAgentTerminalUrl("https://desktop.example.test", input.workspaceID, {
-        ptyID: "pty_remote_1",
-        directory: input.directory,
-        ticket: "ticket-1",
-      }, { username: input.username, password: input.password }),
+      remoteAgentTerminalUrl(
+        "https://desktop.example.test",
+        input.workspaceID,
+        {
+          ptyID: "pty_remote_1",
+          directory: input.directory,
+          ticket: "ticket-1",
+        },
+        { username: input.username, password: input.password },
+      ),
     ).toContain("auth_token=c2xvcGNvZGU6ZGVza3RvcC1zZWNyZXQ%3D")
   })
 

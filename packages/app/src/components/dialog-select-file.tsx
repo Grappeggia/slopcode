@@ -140,9 +140,7 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
     opened: () => serverCtx?.projects.list() ?? [],
     stored: () => serverCtx?.sync.data.project ?? [],
     load: (search, signal) =>
-      serverSDK.client.session
-        .list({ roots: true, search, limit: 50 }, { signal })
-        .then((result) => result.data ?? []),
+      serverSDK.client.session.list({ roots: true, search, limit: 50 }, { signal }).then((result) => result.data ?? []),
     untitled: () => language.t("command.session.new"),
     category: () => language.t("command.category.session"),
   })

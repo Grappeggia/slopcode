@@ -743,7 +743,12 @@ function parseOpenCodeCommand(name: string, value: unknown) {
         ? undefined
         : null
       : metadataText(value.model, MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH)
-  if (description === null || agent === null || model === null || (value.subtask !== undefined && typeof value.subtask !== "boolean"))
+  if (
+    description === null ||
+    agent === null ||
+    model === null ||
+    (value.subtask !== undefined && typeof value.subtask !== "boolean")
+  )
     return
   return {
     name: next,
@@ -1068,6 +1073,10 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       return yield* runAgentCatalog({ agent: ctx.query.agent, directory: folder.current })
     })
 
-    return handlers.handle("browse", browse).handle("prompt", prompt).handle("session", session).handle("catalog", catalog)
+    return handlers
+      .handle("browse", browse)
+      .handle("prompt", prompt)
+      .handle("session", session)
+      .handle("catalog", catalog)
   }),
 ).pipe(Layer.provide(LocationServiceMap.layer))

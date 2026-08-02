@@ -2051,6 +2051,10 @@ export type Config = {
   }
 }
 
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -2723,6 +2727,52 @@ export type WorkspaceWarpError = {
   }
 }
 
+export type WorkspaceRemoteSshValidationError = {
+  name: "WorkspaceRemoteSshValidationError"
+  data: {
+    message: string
+  }
+}
+
+export type WorkspaceRemoteSelectError = {
+  name: "WorkspaceRemoteSelectError"
+  data: {
+    message: string
+  }
+}
+
+export type WorkspaceRemoteTargetError = {
+  name: "WorkspaceRemoteTargetError"
+  data: {
+    message: string
+  }
+}
+
+export type WorkspaceRemoteTargetUnauthorizedError = {
+  name: "WorkspaceRemoteTargetUnauthorizedError"
+  data: {
+    message: string
+  }
+}
+
+export type InvalidRequestError1 = {
+  _tag: "InvalidRequestError"
+  message: string
+  kind?: string | RemoteV1WorkspaceSsh
+  field?: string | RemoteV1WorkspaceSsh
+}
+
+export type ForbiddenError = {
+  _tag: "ForbiddenError"
+  message: string
+}
+
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string | RemoteV1WorkspaceSsh
+}
+
 export type UnauthorizedError = {
   _tag: "UnauthorizedError"
   message: string
@@ -2731,14 +2781,21 @@ export type UnauthorizedError = {
 export type SessionsResponse = {
   data: Array<SessionV2Info>
   cursor: {
-    previous?: string
-    next?: string
+    previous?: string | RemoteV1WorkspaceSsh
+    next?: string | RemoteV1WorkspaceSsh
   }
 }
 
 export type InvalidCursorError = {
   _tag: "InvalidCursorError"
   message: string
+}
+
+export type InvalidRequestError3 = {
+  _tag: "InvalidRequestError"
+  message: string
+  kind?: string | RemoteV1WorkspaceSsh
+  field?: string | RemoteV1WorkspaceSsh
 }
 
 export type SessionNotFoundError = {
@@ -2750,26 +2807,20 @@ export type SessionNotFoundError = {
 export type ConflictError = {
   _tag: "ConflictError"
   message: string
-  resource?: string
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
+  resource?: string | RemoteV1WorkspaceSsh
 }
 
 export type UnknownError1 = {
   _tag: "UnknownError"
   message: string
-  ref?: string
+  ref?: string | RemoteV1WorkspaceSsh
 }
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessage>
   cursor: {
-    previous?: string
-    next?: string
+    previous?: string | RemoteV1WorkspaceSsh
+    next?: string | RemoteV1WorkspaceSsh
   }
 }
 
@@ -2783,12 +2834,8 @@ export type ProjectCopyError = {
   name: "ProjectCopyError"
   data: {
     message: string
-    forceRequired?: boolean
+    forceRequired?: boolean | RemoteV1WorkspaceSsh
   }
-}
-
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
 }
 
 export type EventTuiPromptAppend2 = {
@@ -3717,6 +3764,91 @@ export type ConfigV2ExperimentalPolicy = {
   resource: string
 }
 
+export type RemoteV1Version = "v1"
+
+export type RemoteV1Device = {
+  id: string
+  name: string
+  platform: string
+  arch: string
+  version: string
+}
+
+export type RemoteV1Mode = "local" | "ssh"
+
+export type RemoteV1Host = {
+  id: string
+  name: string
+  platform: string
+  arch: string
+  version: string
+  mode: RemoteV1Mode
+}
+
+export type RemoteV1AgentMode = "local-slopcode" | "codex-cli" | "opencode-cli" | "claude-code"
+
+export type RemoteV1SshProfile = {
+  host: string
+  port: number
+  user: string
+}
+
+export type RemoteV1WorkspaceInput =
+  | {
+      id: string
+      name: string
+      mode: "local"
+      directory: string
+    }
+  | {
+      id: string
+      name: string
+      mode: "ssh"
+      agent?: RemoteV1AgentMode
+      directory: string
+      remoteDirectory: string
+      ssh: RemoteV1SshProfile
+    }
+
+export type RemoteV1Capability = {
+  fs: boolean
+  command: boolean
+  pty: boolean
+  events: boolean
+  localWorkspace: boolean
+  sshWorkspace: boolean
+}
+
+export type RemoteV1PairingRecordWire = {
+  version: RemoteV1Version
+  id: string
+  device: RemoteV1Device
+  host: RemoteV1Host
+  workspace: RemoteV1WorkspaceInput
+  capability: RemoteV1Capability
+}
+
+export type RemoteV1TargetHeadersInput = {
+  "x-slopcode-remote-capability": string
+}
+
+export type RemoteV1TargetInput =
+  | {
+      type: "local"
+      directory: string
+    }
+  | {
+      type: "remote"
+      url: string
+      headers?: RemoteV1TargetHeadersInput
+    }
+
+export type RemoteV1WorkspaceTargetPayload = {
+  pairingID: string
+  workspace: RemoteV1WorkspaceInput
+  target: RemoteV1TargetInput
+}
+
 export type MemoryScope = "project" | "global"
 
 export type MemoryCreateInput = {
@@ -3735,9 +3867,56 @@ export type ProjectDirectories = Array<{
   strategy?: string
 }>
 
+export type RemoteV1PairedHostWire = {
+  host: RemoteV1Host
+  pairings: Array<RemoteV1PairingRecordWire>
+}
+
+export type RemoteV1PairingCreatePayload = {
+  device: RemoteV1Device
+  workspace: RemoteV1WorkspaceInput
+  capability?: RemoteV1Capability
+}
+
+export type RemoteV1PairingSelectionWire = {
+  nonce: string
+  deviceID: string
+  code: string
+}
+
+export type RemoteV1PairingWire = {
+  version: RemoteV1Version
+  id: string
+  code: string
+  selection: RemoteV1PairingSelectionWire
+  device: RemoteV1Device
+  host: RemoteV1Host
+  workspace: RemoteV1WorkspaceInput
+  capability: RemoteV1Capability
+}
+
+export type RemoteV1WorkspaceSshInput = {
+  id: string
+  name: string
+  mode: "ssh"
+  agent?: RemoteV1AgentMode
+  directory: string
+  remoteDirectory: string
+  ssh: RemoteV1SshProfile
+}
+
+export type RemoteV1WorkspaceSsh = null
+
+export type RemoteV1WorkspaceSelectInput = {
+  pairingID: string
+  deviceID: string
+  selectionNonce: string
+  selectionCode: string
+}
+
 export type LocationInfo = {
   directory: string
-  workspaceID?: string
+  workspaceID?: string | RemoteV1WorkspaceSsh
   project: {
     id: string
     directory: string
@@ -3756,11 +3935,13 @@ export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
 export type AgentV2Info = {
   id: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
+  model?:
+    | {
+        id: string
+        providerID: string
+        variant?: string | RemoteV1WorkspaceSsh
+      }
+    | RemoteV1WorkspaceSsh
   request: {
     headers: {
       [key: string]: string
@@ -3769,25 +3950,32 @@ export type AgentV2Info = {
       [key: string]: unknown
     }
   }
-  system?: string
-  description?: string
+  system?: string | RemoteV1WorkspaceSsh
+  description?: string | RemoteV1WorkspaceSsh
   mode: "subagent" | "primary" | "all"
   hidden: boolean
-  color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
-  steps?: number
+  color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info" | RemoteV1WorkspaceSsh
+  steps?: number | RemoteV1WorkspaceSsh
   permissions: PermissionV2Ruleset
+}
+
+export type LocationRef1 = {
+  directory: string
+  workspaceID?: string | RemoteV1WorkspaceSsh
 }
 
 export type SessionV2Info = {
   id: string
   parentID?: string
   projectID: string
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
+  agent?: string | RemoteV1WorkspaceSsh
+  model?:
+    | {
+        id: string
+        providerID: string
+        variant?: string | RemoteV1WorkspaceSsh
+      }
+    | RemoteV1WorkspaceSsh
   cost: number
   tokens: {
     input: number
@@ -3801,11 +3989,11 @@ export type SessionV2Info = {
   time: {
     created: number
     updated: number
-    archived?: number
+    archived?: number | RemoteV1WorkspaceSsh
   }
   title: string
-  location: LocationRef
-  subpath?: string
+  location: LocationRef1
+  subpath?: string | RemoteV1WorkspaceSsh
 }
 
 export type SessionRuntimeInfo = {
@@ -3825,14 +4013,16 @@ export type SessionInputAdmitted = {
   prompt: Prompt
   delivery: "steer" | "queue"
   timeCreated: number
-  promotedSeq?: number
+  promotedSeq?: number | RemoteV1WorkspaceSsh
 }
 
 export type SessionMessageAgentSwitched = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
   }
@@ -3842,9 +4032,11 @@ export type SessionMessageAgentSwitched = {
 
 export type SessionMessageModelSwitched = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
   }
@@ -3852,29 +4044,33 @@ export type SessionMessageModelSwitched = {
   model: {
     id: string
     providerID: string
-    variant?: string
+    variant?: string | RemoteV1WorkspaceSsh
   }
 }
 
 export type SessionMessageUser = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
   }
   text: string
-  files?: Array<PromptFileAttachment>
-  agents?: Array<PromptAgentAttachment>
+  files?: Array<PromptFileAttachment> | RemoteV1WorkspaceSsh
+  agents?: Array<PromptAgentAttachment> | RemoteV1WorkspaceSsh
   type: "user"
 }
 
 export type SessionMessageSynthetic = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
   }
@@ -3885,9 +4081,11 @@ export type SessionMessageSynthetic = {
 
 export type SessionMessageSystem = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
   }
@@ -3897,12 +4095,14 @@ export type SessionMessageSystem = {
 
 export type SessionMessageShell = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
-    completed?: number
+    completed?: number | RemoteV1WorkspaceSsh
   }
   type: "shell"
   callID: string
@@ -3920,11 +4120,13 @@ export type SessionMessageAssistantReasoning = {
   type: "reasoning"
   id: string
   text: string
-  providerMetadata?: {
-    [key: string]: {
-      [key: string]: unknown
-    }
-  }
+  providerMetadata?:
+    | {
+        [key: string]: {
+          [key: string]: unknown
+        }
+      }
+    | RemoteV1WorkspaceSsh
 }
 
 export type SessionMessageToolStatePending = {
@@ -3948,13 +4150,13 @@ export type SessionMessageToolStateCompleted = {
   input: {
     [key: string]: unknown
   }
-  attachments?: Array<PromptFileAttachment>
+  attachments?: Array<PromptFileAttachment> | RemoteV1WorkspaceSsh
   content: Array<ToolTextContent | ToolFileContent>
-  outputPaths?: Array<string>
+  outputPaths?: Array<string> | RemoteV1WorkspaceSsh
   structured: {
     [key: string]: unknown
   }
-  result?: unknown
+  result?: unknown | RemoteV1WorkspaceSsh
 }
 
 export type SessionMessageToolStateError = {
@@ -3967,26 +4169,32 @@ export type SessionMessageToolStateError = {
     [key: string]: unknown
   }
   error: SessionErrorUnknown
-  result?: unknown
+  result?: unknown | RemoteV1WorkspaceSsh
 }
 
 export type SessionMessageAssistantTool = {
   type: "tool"
   id: string
   name: string
-  provider?: {
-    executed: boolean
-    metadata?: {
-      [key: string]: {
-        [key: string]: unknown
+  provider?:
+    | {
+        executed: boolean
+        metadata?:
+          | {
+              [key: string]: {
+                [key: string]: unknown
+              }
+            }
+          | RemoteV1WorkspaceSsh
+        resultMetadata?:
+          | {
+              [key: string]: {
+                [key: string]: unknown
+              }
+            }
+          | RemoteV1WorkspaceSsh
       }
-    }
-    resultMetadata?: {
-      [key: string]: {
-        [key: string]: unknown
-      }
-    }
-  }
+    | RemoteV1WorkspaceSsh
   state:
     | SessionMessageToolStatePending
     | SessionMessageToolStateRunning
@@ -3994,45 +4202,51 @@ export type SessionMessageAssistantTool = {
     | SessionMessageToolStateError
   time: {
     created: number
-    ran?: number
-    completed?: number
-    pruned?: number
+    ran?: number | RemoteV1WorkspaceSsh
+    completed?: number | RemoteV1WorkspaceSsh
+    pruned?: number | RemoteV1WorkspaceSsh
   }
 }
 
 export type SessionMessageAssistant = {
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
-    completed?: number
+    completed?: number | RemoteV1WorkspaceSsh
   }
   type: "assistant"
   agent: string
   model: {
     id: string
     providerID: string
-    variant?: string
+    variant?: string | RemoteV1WorkspaceSsh
   }
   content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
-  snapshot?: {
-    start?: string
-    end?: string
-  }
-  finish?: string
-  cost?: number
-  tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  error?: SessionErrorUnknown
+  snapshot?:
+    | {
+        start?: string | RemoteV1WorkspaceSsh
+        end?: string | RemoteV1WorkspaceSsh
+      }
+    | RemoteV1WorkspaceSsh
+  finish?: string | RemoteV1WorkspaceSsh
+  cost?: number | RemoteV1WorkspaceSsh
+  tokens?:
+    | {
+        input: number
+        output: number
+        reasoning: number
+        cache: {
+          read: number
+          write: number
+        }
+      }
+    | RemoteV1WorkspaceSsh
+  error?: SessionErrorUnknown | RemoteV1WorkspaceSsh
 }
 
 export type SessionMessageCompaction = {
@@ -4041,9 +4255,11 @@ export type SessionMessageCompaction = {
   summary: string
   recent: string
   id: string
-  metadata?: {
-    [key: string]: unknown
-  }
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
   time: {
     created: number
   }
@@ -4083,14 +4299,16 @@ export type ProviderV2Info = {
     | {
         type: "aisdk"
         package: string
-        url?: string
-        settings?: {
-          [key: string]: unknown
-        }
+        url?: string | RemoteV1WorkspaceSsh
+        settings?:
+          | {
+              [key: string]: unknown
+            }
+          | RemoteV1WorkspaceSsh
       }
     | {
         type: "native"
-        url?: string
+        url?: string | RemoteV1WorkspaceSsh
         settings: {
           [key: string]: unknown
         }
@@ -4115,8 +4333,8 @@ export type IntegrationTextPrompt = {
   type: "text"
   key: string
   message: string
-  placeholder?: string
-  when?: IntegrationWhen
+  placeholder?: string | RemoteV1WorkspaceSsh
+  when?: IntegrationWhen | RemoteV1WorkspaceSsh
 }
 
 export type IntegrationSelectPrompt = {
@@ -4126,21 +4344,21 @@ export type IntegrationSelectPrompt = {
   options: Array<{
     label: string
     value: string
-    hint?: string
+    hint?: string | RemoteV1WorkspaceSsh
   }>
-  when?: IntegrationWhen
+  when?: IntegrationWhen | RemoteV1WorkspaceSsh
 }
 
 export type IntegrationOAuthMethod = {
   id: string
   type: "oauth"
   label: string
-  prompts?: Array<IntegrationTextPrompt | IntegrationSelectPrompt>
+  prompts?: Array<IntegrationTextPrompt | IntegrationSelectPrompt> | RemoteV1WorkspaceSsh
 }
 
 export type IntegrationKeyMethod = {
   type: "key"
-  label?: string
+  label?: string | RemoteV1WorkspaceSsh
 }
 
 export type IntegrationEnvMethod = {
@@ -4184,11 +4402,13 @@ export type PermissionV2Request = {
   sessionID: string
   action: string
   resources: Array<string>
-  save?: Array<string>
-  metadata?: {
-    [key: string]: unknown
-  }
-  source?: PermissionV2Source
+  save?: Array<string> | RemoteV1WorkspaceSsh
+  metadata?:
+    | {
+        [key: string]: unknown
+      }
+    | RemoteV1WorkspaceSsh
+  source?: PermissionV2Source | RemoteV1WorkspaceSsh
 }
 
 export type PermissionSavedInfo = {
@@ -4207,20 +4427,22 @@ export type FileSystemEntry = {
 export type CommandV2Info = {
   name: string
   template: string
-  description?: string
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-  subtask?: boolean
+  description?: string | RemoteV1WorkspaceSsh
+  agent?: string | RemoteV1WorkspaceSsh
+  model?:
+    | {
+        id: string
+        providerID: string
+        variant?: string | RemoteV1WorkspaceSsh
+      }
+    | RemoteV1WorkspaceSsh
+  subtask?: boolean | RemoteV1WorkspaceSsh
 }
 
 export type SkillV2Info = {
   name: string
-  description?: string
-  slash?: boolean
+  description?: string | RemoteV1WorkspaceSsh
+  slash?: boolean | RemoteV1WorkspaceSsh
   location: string
   content: string
 }
@@ -4232,7 +4454,7 @@ export type QuestionV2Request = {
    * Questions to ask
    */
   questions: Array<QuestionV2Info>
-  tool?: QuestionV2Tool
+  tool?: QuestionV2Tool | RemoteV1WorkspaceSsh
 }
 
 export type QuestionV2Reply = {
@@ -4245,23 +4467,23 @@ export type QuestionV2Reply = {
 export type ReferenceLocalSource = {
   type: "local"
   path: string
-  description?: string
-  hidden?: boolean
+  description?: string | RemoteV1WorkspaceSsh
+  hidden?: boolean | RemoteV1WorkspaceSsh
 }
 
 export type ReferenceGitSource = {
   type: "git"
   repository: string
-  branch?: string
-  description?: string
-  hidden?: boolean
+  branch?: string | RemoteV1WorkspaceSsh
+  description?: string | RemoteV1WorkspaceSsh
+  hidden?: boolean | RemoteV1WorkspaceSsh
 }
 
 export type ReferenceInfo = {
   name: string
   path: string
-  description?: string
-  hidden?: boolean
+  description?: string | RemoteV1WorkspaceSsh
+  hidden?: boolean | RemoteV1WorkspaceSsh
   source: ReferenceLocalSource | ReferenceGitSource
 }
 
@@ -5589,6 +5811,68 @@ export type GlobalUpgradeResponses = {
 }
 
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
+
+export type ExperimentalRemoteSupervisorPairingsData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/experimental/remote/supervisor/pairings"
+}
+
+export type ExperimentalRemoteSupervisorPairingsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+}
+
+export type ExperimentalRemoteSupervisorPairingsError =
+  ExperimentalRemoteSupervisorPairingsErrors[keyof ExperimentalRemoteSupervisorPairingsErrors]
+
+export type ExperimentalRemoteSupervisorPairingsResponses = {
+  /**
+   * Pending remote pairings
+   */
+  200: Array<RemoteV1PairingRecordWire>
+}
+
+export type ExperimentalRemoteSupervisorPairingsResponse =
+  ExperimentalRemoteSupervisorPairingsResponses[keyof ExperimentalRemoteSupervisorPairingsResponses]
+
+export type ExperimentalRemoteSupervisorTargetData = {
+  body?: RemoteV1WorkspaceTargetPayload
+  path?: never
+  query?: never
+  url: "/experimental/remote/supervisor/target"
+}
+
+export type ExperimentalRemoteSupervisorTargetErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+}
+
+export type ExperimentalRemoteSupervisorTargetError =
+  ExperimentalRemoteSupervisorTargetErrors[keyof ExperimentalRemoteSupervisorTargetErrors]
+
+export type ExperimentalRemoteSupervisorTargetResponses = {
+  /**
+   * Remote target registered
+   */
+  204: void
+}
+
+export type ExperimentalRemoteSupervisorTargetResponse =
+  ExperimentalRemoteSupervisorTargetResponses[keyof ExperimentalRemoteSupervisorTargetResponses]
 
 export type EventSubscribeData = {
   body?: never
@@ -9572,6 +9856,432 @@ export type ExperimentalWorkspaceWarpResponses = {
 export type ExperimentalWorkspaceWarpResponse =
   ExperimentalWorkspaceWarpResponses[keyof ExperimentalWorkspaceWarpResponses]
 
+export type ExperimentalWorkspaceRemoteHostListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/remote/host"
+}
+
+export type ExperimentalWorkspaceRemoteHostListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalWorkspaceRemoteHostListError =
+  ExperimentalWorkspaceRemoteHostListErrors[keyof ExperimentalWorkspaceRemoteHostListErrors]
+
+export type ExperimentalWorkspaceRemoteHostListResponses = {
+  /**
+   * Paired remote hosts
+   */
+  200: Array<RemoteV1PairedHostWire>
+}
+
+export type ExperimentalWorkspaceRemoteHostListResponse =
+  ExperimentalWorkspaceRemoteHostListResponses[keyof ExperimentalWorkspaceRemoteHostListResponses]
+
+export type ExperimentalWorkspaceRemotePairingCreateData = {
+  body?: RemoteV1PairingCreatePayload
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/remote/pairing"
+}
+
+export type ExperimentalWorkspaceRemotePairingCreateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalWorkspaceRemotePairingCreateError =
+  ExperimentalWorkspaceRemotePairingCreateErrors[keyof ExperimentalWorkspaceRemotePairingCreateErrors]
+
+export type ExperimentalWorkspaceRemotePairingCreateResponses = {
+  /**
+   * Remote pairing created
+   */
+  200: RemoteV1PairingWire
+}
+
+export type ExperimentalWorkspaceRemotePairingCreateResponse =
+  ExperimentalWorkspaceRemotePairingCreateResponses[keyof ExperimentalWorkspaceRemotePairingCreateResponses]
+
+export type ExperimentalWorkspaceRemotePairingRevokeData = {
+  body?: never
+  path: {
+    pairingID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/remote/pairing/{pairingID}"
+}
+
+export type ExperimentalWorkspaceRemotePairingRevokeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalWorkspaceRemotePairingRevokeError =
+  ExperimentalWorkspaceRemotePairingRevokeErrors[keyof ExperimentalWorkspaceRemotePairingRevokeErrors]
+
+export type ExperimentalWorkspaceRemotePairingRevokeResponses = {
+  /**
+   * Remote pairing revoked
+   */
+  204: void
+}
+
+export type ExperimentalWorkspaceRemotePairingRevokeResponse =
+  ExperimentalWorkspaceRemotePairingRevokeResponses[keyof ExperimentalWorkspaceRemotePairingRevokeResponses]
+
+export type ExperimentalWorkspaceRemoteSshValidateData = {
+  body?: RemoteV1WorkspaceSshInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/remote/ssh/validate"
+}
+
+export type ExperimentalWorkspaceRemoteSshValidateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * WorkspaceRemoteSshValidationError
+   */
+  409: WorkspaceRemoteSshValidationError
+}
+
+export type ExperimentalWorkspaceRemoteSshValidateError =
+  ExperimentalWorkspaceRemoteSshValidateErrors[keyof ExperimentalWorkspaceRemoteSshValidateErrors]
+
+export type ExperimentalWorkspaceRemoteSshValidateResponses = {
+  /**
+   * SSH workspace validated
+   */
+  200: RemoteV1WorkspaceSsh
+}
+
+export type ExperimentalWorkspaceRemoteSshValidateResponse =
+  ExperimentalWorkspaceRemoteSshValidateResponses[keyof ExperimentalWorkspaceRemoteSshValidateResponses]
+
+export type ExperimentalWorkspaceRemoteSelectData = {
+  body?: RemoteV1WorkspaceSelectInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/remote/select"
+}
+
+export type ExperimentalWorkspaceRemoteSelectErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * WorkspaceRemoteSelectError
+   */
+  409: WorkspaceRemoteSelectError
+}
+
+export type ExperimentalWorkspaceRemoteSelectError =
+  ExperimentalWorkspaceRemoteSelectErrors[keyof ExperimentalWorkspaceRemoteSelectErrors]
+
+export type ExperimentalWorkspaceRemoteSelectResponses = {
+  /**
+   * Remote workspace selected
+   */
+  200: RemoteV1PairingRecordWire | RemoteV1WorkspaceSsh
+}
+
+export type ExperimentalWorkspaceRemoteSelectResponse =
+  ExperimentalWorkspaceRemoteSelectResponses[keyof ExperimentalWorkspaceRemoteSelectResponses]
+
+export type ExperimentalWorkspaceRemoteTargetRegisterData = {
+  body?: RemoteV1WorkspaceTargetPayload
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/remote/target"
+}
+
+export type ExperimentalWorkspaceRemoteTargetRegisterErrors = {
+  /**
+   * WorkspaceRemoteTargetError | BadRequest | InvalidRequestError
+   */
+  400: WorkspaceRemoteTargetError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * WorkspaceRemoteTargetUnauthorizedError
+   */
+  403: WorkspaceRemoteTargetUnauthorizedError
+}
+
+export type ExperimentalWorkspaceRemoteTargetRegisterError =
+  ExperimentalWorkspaceRemoteTargetRegisterErrors[keyof ExperimentalWorkspaceRemoteTargetRegisterErrors]
+
+export type ExperimentalWorkspaceRemoteTargetRegisterResponses = {
+  /**
+   * Remote workspace target registered
+   */
+  204: void
+}
+
+export type ExperimentalWorkspaceRemoteTargetRegisterResponse =
+  ExperimentalWorkspaceRemoteTargetRegisterResponses[keyof ExperimentalWorkspaceRemoteTargetRegisterResponses]
+
+export type RemoteSshBrowseData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+    sshAuthority?: string
+    sshPort?: string
+  }
+  url: "/remote/ssh/browse"
+}
+
+export type RemoteSshBrowseErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteSshBrowseError = RemoteSshBrowseErrors[keyof RemoteSshBrowseErrors]
+
+export type RemoteSshBrowseResponses = {
+  /**
+   * Remote folder listing
+   */
+  200: {
+    root: string
+    current: string
+    parent?: string | RemoteV1WorkspaceSsh
+    entries: Array<{
+      name: string
+      path: string
+      type: "directory" | "file" | "symlink" | "other"
+    }>
+  }
+}
+
+export type RemoteSshBrowseResponse = RemoteSshBrowseResponses[keyof RemoteSshBrowseResponses]
+
+export type RemoteAgentPromptData = {
+  body?: {
+    agent: "codex-cli" | "opencode-cli" | "claude-code"
+    prompt: string
+    config?:
+      | {
+          model?: string | RemoteV1WorkspaceSsh
+          profile?: string | RemoteV1WorkspaceSsh
+          sandbox?: "read-only" | "workspace-write" | "danger-full-access" | RemoteV1WorkspaceSsh
+          approval?: "untrusted" | "on-failure" | "on-request" | "never" | RemoteV1WorkspaceSsh
+          permissionMode?:
+            | "acceptEdits"
+            | "auto"
+            | "bypassPermissions"
+            | "manual"
+            | "dontAsk"
+            | "plan"
+            | RemoteV1WorkspaceSsh
+        }
+      | RemoteV1WorkspaceSsh
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/remote/agent/prompt"
+}
+
+export type RemoteAgentPromptErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteAgentPromptError = RemoteAgentPromptErrors[keyof RemoteAgentPromptErrors]
+
+export type RemoteAgentPromptResponses = {
+  /**
+   * Selected agent CLI result
+   */
+  200: {
+    output: string
+    status: "completed" | "failed" | "timed_out"
+    exitCode?: number | RemoteV1WorkspaceSsh
+  }
+}
+
+export type RemoteAgentPromptResponse = RemoteAgentPromptResponses[keyof RemoteAgentPromptResponses]
+
+export type RemoteAgentSessionData = {
+  body?: {
+    agent: "codex-cli" | "opencode-cli" | "claude-code"
+    config?:
+      | {
+          model?: string | RemoteV1WorkspaceSsh
+          profile?: string | RemoteV1WorkspaceSsh
+          sandbox?: "read-only" | "workspace-write" | "danger-full-access" | RemoteV1WorkspaceSsh
+          approval?: "untrusted" | "on-failure" | "on-request" | "never" | RemoteV1WorkspaceSsh
+          permissionMode?:
+            | "acceptEdits"
+            | "auto"
+            | "bypassPermissions"
+            | "manual"
+            | "dontAsk"
+            | "plan"
+            | RemoteV1WorkspaceSsh
+        }
+      | RemoteV1WorkspaceSsh
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/remote/agent/session"
+}
+
+export type RemoteAgentSessionErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteAgentSessionError = RemoteAgentSessionErrors[keyof RemoteAgentSessionErrors]
+
+export type RemoteAgentSessionResponses = {
+  /**
+   * Interactive remote agent session
+   */
+  200: {
+    ptyID: string
+    directory: string
+    ticket: string
+    expires_in: number
+  }
+}
+
+export type RemoteAgentSessionResponse = RemoteAgentSessionResponses[keyof RemoteAgentSessionResponses]
+
+export type RemoteAgentCatalogData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    agent: "codex-cli" | "opencode-cli" | "claude-code"
+    path?: string
+  }
+  url: "/remote/agent/catalog"
+}
+
+export type RemoteAgentCatalogErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteAgentCatalogError = RemoteAgentCatalogErrors[keyof RemoteAgentCatalogErrors]
+
+export type RemoteAgentCatalogResponses = {
+  /**
+   * Remote agent version and command catalog
+   */
+  200: {
+    agent: "codex-cli" | "opencode-cli" | "claude-code"
+    version: string
+    commands: Array<{
+      name: string
+      description?: string | RemoteV1WorkspaceSsh
+      agent?: string | RemoteV1WorkspaceSsh
+      model?: string | RemoteV1WorkspaceSsh
+      subtask?: boolean | RemoteV1WorkspaceSsh
+    }>
+  }
+}
+
+export type RemoteAgentCatalogResponse = RemoteAgentCatalogResponses[keyof RemoteAgentCatalogResponses]
+
 export type V2HealthGetData = {
   body?: never
   path?: never
@@ -9697,7 +10407,7 @@ export type V2SessionListErrors = {
   /**
    * InvalidCursorError | InvalidRequestError
    */
-  400: InvalidCursorError | InvalidRequestError
+  400: InvalidCursorError | InvalidRequestError3 | InvalidRequestError
   /**
    * UnauthorizedError
    */
@@ -9717,14 +10427,16 @@ export type V2SessionListResponse = V2SessionListResponses[keyof V2SessionListRe
 
 export type V2SessionCreateData = {
   body: {
-    id?: string
-    agent?: string
-    model?: {
-      id: string
-      providerID: string
-      variant?: string
-    }
-    location?: LocationRef
+    id?: string | RemoteV1WorkspaceSsh
+    agent?: string | RemoteV1WorkspaceSsh
+    model?:
+      | {
+          id: string
+          providerID: string
+          variant?: string | RemoteV1WorkspaceSsh
+        }
+      | RemoteV1WorkspaceSsh
+    location?: LocationRef1 | RemoteV1WorkspaceSsh
   }
   path?: never
   query?: never
@@ -9831,10 +10543,10 @@ export type V2SessionRuntimeResponse = V2SessionRuntimeResponses[keyof V2Session
 
 export type V2SessionPromptData = {
   body: {
-    id?: string
+    id?: string | RemoteV1WorkspaceSsh
     prompt: Prompt
-    delivery?: "steer" | "queue"
-    resume?: boolean
+    delivery?: "steer" | "queue" | RemoteV1WorkspaceSsh
+    resume?: boolean | RemoteV1WorkspaceSsh
   }
   path: {
     sessionID: string
@@ -10243,7 +10955,7 @@ export type V2IntegrationGetResponses = {
    */
   200: {
     location: LocationInfo
-    data: IntegrationInfo
+    data: IntegrationInfo | RemoteV1WorkspaceSsh
   }
 }
 
@@ -10252,7 +10964,7 @@ export type V2IntegrationGetResponse = V2IntegrationGetResponses[keyof V2Integra
 export type V2IntegrationConnectKeyData = {
   body: {
     key: string
-    label?: string
+    label?: string | RemoteV1WorkspaceSsh
   }
   path: {
     integrationID: string
@@ -10270,7 +10982,7 @@ export type V2IntegrationConnectKeyErrors = {
   /**
    * InvalidRequestError
    */
-  400: InvalidRequestError
+  400: InvalidRequestError3 | InvalidRequestError
   /**
    * UnauthorizedError
    */
@@ -10294,7 +11006,7 @@ export type V2IntegrationConnectOauthData = {
     inputs: {
       [key: string]: string
     }
-    label?: string
+    label?: string | RemoteV1WorkspaceSsh
   }
   path: {
     integrationID: string
@@ -10312,7 +11024,7 @@ export type V2IntegrationConnectOauthErrors = {
   /**
    * InvalidRequestError
    */
-  400: InvalidRequestError
+  400: InvalidRequestError3 | InvalidRequestError
   /**
    * UnauthorizedError
    */
@@ -10442,7 +11154,7 @@ export type V2IntegrationAttemptStatusResponse =
 
 export type V2IntegrationAttemptCompleteData = {
   body: {
-    code?: string
+    code?: string | RemoteV1WorkspaceSsh
   }
   path: {
     attemptID: string
@@ -10460,7 +11172,7 @@ export type V2IntegrationAttemptCompleteErrors = {
   /**
    * InvalidRequestError
    */
-  400: InvalidRequestError
+  400: InvalidRequestError3 | InvalidRequestError
   /**
    * UnauthorizedError
    */
@@ -10685,7 +11397,7 @@ export type V2SessionPermissionListResponse = V2SessionPermissionListResponses[k
 export type V2SessionPermissionReplyData = {
   body: {
     reply: PermissionV2Reply
-    message?: string
+    message?: string | RemoteV1WorkspaceSsh
   }
   path: {
     sessionID: string
@@ -11164,7 +11876,7 @@ export type V2ProjectCopyCreateData = {
   body?: {
     strategy: string
     directory: string
-    name?: string
+    name?: string | RemoteV1WorkspaceSsh
   }
   path: {
     projectID: string
@@ -11227,6 +11939,318 @@ export type V2ProjectCopyRefreshResponses = {
 }
 
 export type V2ProjectCopyRefreshResponse = V2ProjectCopyRefreshResponses[keyof V2ProjectCopyRefreshResponses]
+
+export type V2PtyListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/pty"
+}
+
+export type V2PtyListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2PtyListError = V2PtyListErrors[keyof V2PtyListErrors]
+
+export type V2PtyListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<Pty>
+  }
+}
+
+export type V2PtyListResponse = V2PtyListResponses[keyof V2PtyListResponses]
+
+export type V2PtyCreateData = {
+  body: {
+    command?: string | RemoteV1WorkspaceSsh
+    args?: Array<string> | RemoteV1WorkspaceSsh
+    cwd?: string | RemoteV1WorkspaceSsh
+    title?: string | RemoteV1WorkspaceSsh
+    env?:
+      | {
+          [key: string]: string
+        }
+      | RemoteV1WorkspaceSsh
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/pty"
+}
+
+export type V2PtyCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2PtyCreateError = V2PtyCreateErrors[keyof V2PtyCreateErrors]
+
+export type V2PtyCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Pty
+  }
+}
+
+export type V2PtyCreateResponse = V2PtyCreateResponses[keyof V2PtyCreateResponses]
+
+export type V2PtyRemoveData = {
+  body?: never
+  path: {
+    ptyID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/pty/{ptyID}"
+}
+
+export type V2PtyRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PtyNotFoundError
+   */
+  404: PtyNotFoundError
+}
+
+export type V2PtyRemoveError = V2PtyRemoveErrors[keyof V2PtyRemoveErrors]
+
+export type V2PtyRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2PtyRemoveResponse = V2PtyRemoveResponses[keyof V2PtyRemoveResponses]
+
+export type V2PtyGetData = {
+  body?: never
+  path: {
+    ptyID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/pty/{ptyID}"
+}
+
+export type V2PtyGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PtyNotFoundError
+   */
+  404: PtyNotFoundError
+}
+
+export type V2PtyGetError = V2PtyGetErrors[keyof V2PtyGetErrors]
+
+export type V2PtyGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Pty
+  }
+}
+
+export type V2PtyGetResponse = V2PtyGetResponses[keyof V2PtyGetResponses]
+
+export type V2PtyUpdateData = {
+  body: {
+    title?: string | RemoteV1WorkspaceSsh
+    size?:
+      | {
+          rows: number
+          cols: number
+        }
+      | RemoteV1WorkspaceSsh
+  }
+  path: {
+    ptyID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/pty/{ptyID}"
+}
+
+export type V2PtyUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PtyNotFoundError
+   */
+  404: PtyNotFoundError
+}
+
+export type V2PtyUpdateError = V2PtyUpdateErrors[keyof V2PtyUpdateErrors]
+
+export type V2PtyUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Pty
+  }
+}
+
+export type V2PtyUpdateResponse = V2PtyUpdateResponses[keyof V2PtyUpdateResponses]
+
+export type V2PtyConnectTokenData = {
+  body?: never
+  path: {
+    ptyID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/pty/{ptyID}/connect-token"
+}
+
+export type V2PtyConnectTokenErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * PtyNotFoundError
+   */
+  404: PtyNotFoundError
+}
+
+export type V2PtyConnectTokenError = V2PtyConnectTokenErrors[keyof V2PtyConnectTokenErrors]
+
+export type V2PtyConnectTokenResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      ticket: string
+      expires_in: number
+    }
+  }
+}
+
+export type V2PtyConnectTokenResponse = V2PtyConnectTokenResponses[keyof V2PtyConnectTokenResponses]
+
+export type V2PtyConnectData = {
+  body?: never
+  path: {
+    ptyID: string
+  }
+  query?: {
+    "location[directory]"?: string
+    "location[workspace]"?: string
+    cursor?: string
+    ticket?: string
+  }
+  url: "/api/pty/{ptyID}/connect"
+}
+
+export type V2PtyConnectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * PtyNotFoundError
+   */
+  404: PtyNotFoundError
+}
+
+export type V2PtyConnectError = V2PtyConnectErrors[keyof V2PtyConnectErrors]
+
+export type V2PtyConnectResponses = {
+  /**
+   * Success
+   */
+  200: boolean
+}
+
+export type V2PtyConnectResponse = V2PtyConnectResponses[keyof V2PtyConnectResponses]
 
 export type PtyConnectData = {
   body?: never

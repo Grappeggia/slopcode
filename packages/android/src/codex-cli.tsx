@@ -210,7 +210,10 @@ function connection(input: Omit<RemoteAgentPromptInput, "prompt">) {
 }
 
 function terminalSession(value: unknown): RemoteAgentTerminalSession | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key)))
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key))
+  )
     return
   const ptyID = text(value.ptyID, 256)
   const remoteDirectory = directory(value.directory)
@@ -244,7 +247,8 @@ export function remoteAgentTerminalUrl(
   endpoint.searchParams.set("directory", session.directory)
   endpoint.searchParams.set("cursor", "-1")
   endpoint.searchParams.set("ticket", session.ticket)
-  if (credentials?.password) endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
+  if (credentials?.password)
+    endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
   return endpoint.toString()
 }
 

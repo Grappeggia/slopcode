@@ -11,15 +11,17 @@ import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attach
 import { guardIpc } from "./security"
 import { getStore, removeStoreFileIfEmpty, runStoreOperation } from "./store"
 import { assertRendererStoreName } from "./store-name"
-import { openExternalURL, openLocalFileURL, getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
+import {
+  openExternalURL,
+  openLocalFileURL,
+  getPinchZoomEnabled,
+  setPinchZoomEnabled,
+  setTitlebar,
+  updateTitlebar,
+} from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
-import {
-  DesktopWorkspaceID,
-  publicRemoteState,
-  type DesktopRemoteHostService,
-  type DesktopSshTarget,
-} from "./remote"
+import { DesktopWorkspaceID, publicRemoteState, type DesktopRemoteHostService, type DesktopSshTarget } from "./remote"
 
 const pickerFilters = (ext?: string[]) => {
   if (!ext || ext.length === 0) return undefined
@@ -79,7 +81,9 @@ export function registerIpcHandlers(deps: Deps) {
   ipc.handle("remote-ensure", (_event: IpcMainInvokeEvent, target: DesktopSshTarget) =>
     deps.remote.ensureWorkspace(target),
   )
-  ipc.handle("remote-stop", (_event: IpcMainInvokeEvent, id: string) => deps.remote.stopWorkspace(DesktopWorkspaceID.make(id)))
+  ipc.handle("remote-stop", (_event: IpcMainInvokeEvent, id: string) =>
+    deps.remote.stopWorkspace(DesktopWorkspaceID.make(id)),
+  )
   ipc.handle("remote-stop-all", () => deps.remote.stopAll())
   ipc.handle("remote-subscribe", (event) => {
     remoteSubscriptions.get(event.sender.id)?.()

@@ -7,11 +7,7 @@ type Project = {
   vcs?: string
 }
 
-export function resolveNewSessionWorktree(input: {
-  selected?: string
-  directory: string
-  projectWorktree?: string
-}) {
+export function resolveNewSessionWorktree(input: { selected?: string; directory: string; projectWorktree?: string }) {
   if (input.selected) return input.selected
   if (input.projectWorktree && input.directory !== input.projectWorktree) return input.directory
   return MAIN_NEW_SESSION_WORKTREE

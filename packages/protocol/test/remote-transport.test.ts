@@ -42,9 +42,7 @@ import {
 } from "../src/remote-transport"
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
-  Effect.runPromise(
-    Schema.decodeUnknownEffect(schema)(input) as Effect.Effect<S["Type"], Schema.SchemaError>,
-  )
+  Effect.runPromise(Schema.decodeUnknownEffect(schema)(input) as Effect.Effect<S["Type"], Schema.SchemaError>)
 
 const target = {
   hostID: "hst_desktop",
@@ -121,7 +119,7 @@ describe("remote transport protocol contracts", () => {
         path: "/api/session/ses_remote_1/message",
         query: "page=1&cursor=cur_events_1",
         headers: { "content-type": "application/json" },
-        body: utf8("{\"message\":\"hello\"}"),
+        body: utf8('{"message":"hello"}'),
       },
       {
         version: "v1",
@@ -133,7 +131,7 @@ describe("remote transport protocol contracts", () => {
         target,
         status: 200,
         headers: { "content-type": "application/json" },
-        body: utf8("{\"ok\":true}"),
+        body: utf8('{"ok":true}'),
       },
       {
         version: "v1",
@@ -385,18 +383,13 @@ describe("remote transport protocol contracts", () => {
     )
     const signed = await decode(RemoteTransportFrame, {
       ...request,
-      auth: { ...request.auth, proof: { ...request.auth.proof, signature: remoteTransportEncodeBase64Url(new Uint8Array(signature)) } },
+      auth: {
+        ...request.auth,
+        proof: { ...request.auth.proof, signature: remoteTransportEncodeBase64Url(new Uint8Array(signature)) },
+      },
     })
     if (signed.type !== "session.open") throw new Error("expected session.open")
-    expect(
-      await remoteTransportVerifySessionProof(
-        signed,
-        typedTarget,
-        async () => false,
-        challenges,
-        now,
-      ),
-    ).toBe(false)
+    expect(await remoteTransportVerifySessionProof(signed, typedTarget, async () => false, challenges, now)).toBe(false)
     expect(challenges.check(signed.auth.challenge, now)).toBe(true)
     expect(await remoteTransportSessionAuthMatches(signed, typedTarget, keys.publicKey, challenges, now)).toBe(true)
     expect(await remoteTransportVerifySessionProof(signed, typedTarget, keys.publicKey, challenges, now)).toBe(false)
@@ -445,28 +438,50 @@ describe("remote transport protocol contracts", () => {
       await expect(decode(RemoteTransportHttpRequest, { ...requestValue, query })).rejects.toThrow()
     }
     for (const path of ["/api%2f..%2fetc", "/api%5c..%5cetc", "/api%252e%252e/etc"]) {
-      await expect(
-        decode(RemoteTransportHttpRequest, { ...requestValue, query: undefined, path }),
-      ).rejects.toThrow()
+      await expect(decode(RemoteTransportHttpRequest, { ...requestValue, query: undefined, path })).rejects.toThrow()
     }
 
     const store = createRemoteTransportIdempotencyStore({ ttlMs: 1_000 })
     const registeredTarget = await decode(RemoteTransportTarget, target)
     const first = await remoteTransportClaimIdempotency(store, "ses_remote_1", registeredTarget, typedRequest)
     expect(first).toEqual({ status: "accepted", replay: false, state: "in-flight" })
-    expect(await remoteTransportReleaseIdempotency(store, "ses_remote_1", registeredTarget, typedRequest.idempotencyKey, typedRequest.requestDigest)).toBe(true)
+    expect(
+      await remoteTransportReleaseIdempotency(
+        store,
+        "ses_remote_1",
+        registeredTarget,
+        typedRequest.idempotencyKey,
+        typedRequest.requestDigest,
+      ),
+    ).toBe(true)
     expect(await remoteTransportClaimIdempotency(store, "ses_remote_1", registeredTarget, typedRequest)).toEqual({
       status: "accepted",
       replay: false,
       state: "in-flight",
     })
-    expect(await remoteTransportCompleteIdempotency(store, "ses_remote_1", registeredTarget, typedRequest.idempotencyKey, typedRequest.requestDigest)).toBe(true)
+    expect(
+      await remoteTransportCompleteIdempotency(
+        store,
+        "ses_remote_1",
+        registeredTarget,
+        typedRequest.idempotencyKey,
+        typedRequest.requestDigest,
+      ),
+    ).toBe(true)
     expect(await remoteTransportClaimIdempotency(store, "ses_remote_1", registeredTarget, typedRequest)).toEqual({
       status: "accepted",
       replay: true,
       state: "completed",
     })
-    expect(await remoteTransportReleaseIdempotency(store, "ses_remote_1", registeredTarget, typedRequest.idempotencyKey, typedRequest.requestDigest)).toBe(false)
+    expect(
+      await remoteTransportReleaseIdempotency(
+        store,
+        "ses_remote_1",
+        registeredTarget,
+        typedRequest.idempotencyKey,
+        typedRequest.requestDigest,
+      ),
+    ).toBe(false)
     const invalid = await remoteTransportClaimIdempotency(store, "ses_remote_1", registeredTarget, wrongRequest)
     expect(invalid).toMatchObject({ status: "invalid-digest" })
     const changedDigest = await remoteTransportComputeRequestDigest({ ...typedRequest, query: "different=1" })
@@ -490,20 +505,26 @@ describe("remote transport protocol contracts", () => {
       idempotencyKey: "idem_other_1",
       requestDigest: secondDigest,
     })
-    expect(await remoteTransportClaimIdempotency(bounded, "ses_remote_1", registeredTarget, typedRequest, 100)).toMatchObject({
+    expect(
+      await remoteTransportClaimIdempotency(bounded, "ses_remote_1", registeredTarget, typedRequest, 100),
+    ).toMatchObject({
       status: "accepted",
     })
-    expect(await remoteTransportClaimIdempotency(bounded, "ses_remote_1", registeredTarget, second, 100)).toMatchObject({
-      status: "capacity",
-    })
-    expect(await remoteTransportClaimIdempotency(bounded, "ses_remote_1", registeredTarget, second, 111)).toMatchObject({
-      status: "accepted",
-    })
+    expect(await remoteTransportClaimIdempotency(bounded, "ses_remote_1", registeredTarget, second, 100)).toMatchObject(
+      {
+        status: "capacity",
+      },
+    )
+    expect(await remoteTransportClaimIdempotency(bounded, "ses_remote_1", registeredTarget, second, 111)).toMatchObject(
+      {
+        status: "accepted",
+      },
+    )
   })
 
   test("orders canonical keys by UTF-8 bytes", () => {
-    const first = remoteTransportCanonicalJson({ "é": "accent", "2": "two", "10": "ten" })
-    const second = remoteTransportCanonicalJson({ "10": "ten", "é": "accent", "2": "two" })
+    const first = remoteTransportCanonicalJson({ é: "accent", "2": "two", "10": "ten" })
+    const second = remoteTransportCanonicalJson({ "10": "ten", é: "accent", "2": "two" })
     expect(first).toBe('{"10":"ten","2":"two","é":"accent"}')
     expect(second).toBe(first)
   })
@@ -518,9 +539,7 @@ describe("remote transport protocol contracts", () => {
     await expect(decode(RemoteTransportHeaders, { Connection: "close" })).rejects.toThrow()
     await expect(decode(RemoteTransportHeaders, { "X-Forwarded-For": "127.0.0.1" })).rejects.toThrow()
     await expect(decode(RemoteTransportHeaders, { "x-safe": "ok\u0007" })).rejects.toThrow()
-    await expect(
-      decode(RemoteTransportHeaders, JSON.parse('{"__proto__":"polluted"}')),
-    ).rejects.toThrow()
+    await expect(decode(RemoteTransportHeaders, JSON.parse('{"__proto__":"polluted"}'))).rejects.toThrow()
   })
 
   test("enforces discriminated UTF-8/base64 bodies and frame byte limits", async () => {
