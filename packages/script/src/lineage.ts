@@ -305,25 +305,7 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
   const upstream = await resolve(options.cwd, `refs/remotes/${options.remote}/${options.branch}`)
   if (!upstream)
     throw new Error(`Could not resolve freshly fetched canonical branch ${options.remote}/${options.branch}.`)
-  const stateSha = await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`)
-  const all = await releases(options.cwd, tags)
-  const anchor = stateSha ? all.find((item) => item.sha === stateSha) : undefined
-  const ancestry = stateSha ? await history(options.cwd, all, stateSha) : []
-  const family = stateSha
-    ? ancestry.filter(
-        (item) =>
-          item.ancestor &&
-          (!anchor ||
-            (semver.major(item.version) === semver.major(anchor.version) &&
-              semver.minor(item.version) === semver.minor(anchor.version))),
-      )
-    : all
-  const predecessor = stateSha && anchor ? ancestry.find((item) => semver.lt(item.version, anchor.version)) : undefined
-  const published = stateSha
-    ? [...family, ...(predecessor && !family.some((item) => item.tag === predecessor.tag) ? [predecessor] : [])].sort(
-        (a, b) => semver.rcompare(a.version, b.version) || b.tag.localeCompare(a.tag),
-      )
-    : all
+  const published = await releases(options.cwd, tags)
   return {
     ...options,
     target,
@@ -334,7 +316,7 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
     highest: published[0],
     priors: prior(published, targetVersion),
     targetSha: await resolve(options.cwd, `${tags}${target}`),
-    stateSha,
+    stateSha: await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`),
   } satisfies RemoteHistory
 }
 

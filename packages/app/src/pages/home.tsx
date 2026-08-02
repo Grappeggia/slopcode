@@ -47,6 +47,7 @@ import { useSettings } from "@/context/settings"
 import { ServerRowMenu } from "@/components/server/server-row-menu"
 import { ServerHealthIndicator } from "@/components/server/server-row"
 import { type ServerHealth } from "@/utils/server-health"
+import { openHomeSession, shouldOpenSessionInBackground, type HomeSessionOpenOptions } from "./home-session-open"
 
 const HOME_SESSION_LIMIT = 64
 const HOME_ROW_LAYOUT =
@@ -78,6 +79,35 @@ const HOME_SEARCH_RESULT_META =
   "min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-[13px] leading-4 tracking-[-0.04px] text-v2-text-text-muted [font-weight:440]"
 
 let pendingHomeNavigation: { server: ServerConnection.Key; href: string } | undefined
+
+const isMac = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform)
+
+function isBackgroundOpen(event: MouseEvent) {
+  return shouldOpenSessionInBackground({
+    button: event.button,
+    mac: isMac,
+    meta: event.metaKey,
+    ctrl: event.ctrlKey,
+    shift: event.shiftKey,
+    alt: event.altKey,
+  })
+}
+
+function handleSessionOpen(event: MouseEvent, open: (options?: HomeSessionOpenOptions) => void) {
+  const background = isBackgroundOpen(event)
+  if (background) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  open({ background })
+}
+
+function handleSessionAuxOpen(event: MouseEvent, open: (options?: HomeSessionOpenOptions) => void) {
+  if (!isBackgroundOpen(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  open({ background: true })
+}
 
 function buildHomeSessionRecords(input: {
   sync: Pick<ReturnType<typeof useServerSync>, "child">
@@ -134,6 +164,7 @@ function HomeDesign() {
   const global = useGlobal()
   const command = useCommand()
   const notification = useNotification()
+  const tabs = useTabs()
   let focusSessionSearch: (() => void) | undefined
   const [state, setState] = createStore({
     search: "",
@@ -209,9 +240,9 @@ function HomeDesign() {
     setState("searchFocused", false)
   }
 
-  function selectSearchSession(session: Session) {
-    openSession(session)
-    closeSearch()
+  function selectSearchSession(session: Session, options?: HomeSessionOpenOptions) {
+    openSession(session, options)
+    if (!options?.background) closeSearch()
   }
 
   command.register("home", () => [
@@ -223,7 +254,12 @@ function HomeDesign() {
         const conn = focusedServer()
         if (!conn) return
         const palette = await import("@/components/dialog-select-file")
-        void dialog.show(() => <palette.DialogHomeCommandPalette server={conn} />)
+        void dialog.show(() => (
+          <palette.DialogHomeCommandPalette
+            server={conn}
+            navigateOnServer={(_server, href) => navigateOnServer(conn, href)}
+          />
+        ))
       },
     },
     {
@@ -316,15 +352,20 @@ function HomeDesign() {
       .forEach((directory) => notification.project.markViewed(directory))
   }
 
-  function openSession(session: Session) {
+  function openSession(session: Session, options?: HomeSessionOpenOptions) {
     const project = projectForSession(session, projects(), projectByID())
     const conn = focusedServer()
     if (!conn) return
     const directory = project?.worktree ?? session.directory
     const ctx = global.createServerCtx(conn)
-    ctx.projects.open(directory)
-    ctx.projects.touch(directory)
-    navigateOnServer(conn, `/${base64Encode(session.directory)}/session/${session.id}`)
+    openHomeSession({
+      session,
+      server: ServerConnection.key(conn),
+      directory,
+      options,
+      tabs,
+      projects: ctx.projects,
+    })
   }
 
   function chooseProject(conn: ServerConnection.Any) {
@@ -768,7 +809,7 @@ function HomeSessionSearch(props: {
   onInput: (value: string) => void
   onFocus: () => void
   onClose: () => void
-  onSelect: (session: Session) => void
+  onSelect: (session: Session, options?: HomeSessionOpenOptions) => void
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({ active: "" })
@@ -881,7 +922,7 @@ function HomeSessionSearch(props: {
                               activeServer={props.activeServer}
                               selected={store.active === homeSessionSearchKey(record)}
                               onHighlight={() => setStore("active", homeSessionSearchKey(record))}
-                              onSelect={(session) => props.onSelect(session)}
+                              onSelect={(session, options) => props.onSelect(session, options)}
                             />
                           )}
                         </For>
@@ -967,7 +1008,7 @@ function HomeSessionSearchResultRow(props: {
   activeServer: boolean
   selected: boolean
   onHighlight: () => void
-  onSelect: (session: Session) => void
+  onSelect: (session: Session, options?: HomeSessionOpenOptions) => void
 }) {
   const title = createMemo(() => sessionTitle(props.record.session.title) || props.record.session.id)
 
@@ -986,7 +1027,11 @@ function HomeSessionSearchResultRow(props: {
         "bg-v2-overlay-simple-overlay-hover": props.selected,
       }}
       onMouseEnter={() => props.onHighlight()}
-      onClick={() => props.onSelect(props.record.session)}
+      onMouseDown={(event) => {
+        if (event.button === 1) event.preventDefault()
+      }}
+      onClick={(event) => handleSessionOpen(event, (options) => props.onSelect(props.record.session, options))}
+      onAuxClick={(event) => handleSessionAuxOpen(event, (options) => props.onSelect(props.record.session, options))}
     >
       <HomeSessionLeading
         project={props.record.project}
@@ -1035,7 +1080,7 @@ function HomeSessionRow(props: {
   record: HomeSessionRecord
   server: ServerConnection.Key
   activeServer: boolean
-  openSession: (session: Session) => void
+  openSession: (session: Session, options?: HomeSessionOpenOptions) => void
 }) {
   const title = createMemo(() => sessionTitle(props.record.session.title) || props.record.session.id)
 
@@ -1044,7 +1089,11 @@ function HomeSessionRow(props: {
       type="button"
       data-component="home-session-row"
       class={`${HOME_ROW} h-10 gap-2 px-6 py-3 pl-4`}
-      onClick={() => props.openSession(props.record.session)}
+      onMouseDown={(event) => {
+        if (event.button === 1) event.preventDefault()
+      }}
+      onClick={(event) => handleSessionOpen(event, (options) => props.openSession(props.record.session, options))}
+      onAuxClick={(event) => handleSessionAuxOpen(event, (options) => props.openSession(props.record.session, options))}
     >
       <HomeSessionLeading
         project={props.record.project}

@@ -1,9 +1,20 @@
 import type { AndroidCapabilities } from "./types"
+import {
+  parseRemoteJobAction,
+  parseRemoteJobList,
+  parseRemoteJobMessage,
+  parseRemoteSessionDeepLink,
+  type AndroidRemoteJobs,
+  type RemoteJobAction,
+  type RemoteJobActionPayload,
+  type RemoteJobStartInput,
+} from "./remote-jobs"
 
 export type NotificationPermission = "granted" | "denied" | "prompt"
 
 export const ANDROID_TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
 export const ANDROID_DEEP_LINK_CHANNEL = "slopcode.android.deep-links"
+export const ANDROID_REMOTE_JOB_CHANNEL = "slopcode.android.remote-jobs"
 
 type AndroidBridgePort = {
   postMessage(message: string): void
@@ -48,6 +59,10 @@ export type AndroidNativeBridge = {
   deepLinksReady(nonce: string): Promise<unknown>
   consumeDeepLinks(nonce: string): Promise<unknown>
   openLink(url: string): Promise<unknown>
+  remoteJobsReady(nonce: string): Promise<unknown>
+  remoteJobList(): Promise<unknown>
+  remoteJobStart(input: string): Promise<unknown>
+  remoteJobAction(jobID: string, action: RemoteJobAction, payload?: string): Promise<unknown>
 }
 
 const ports = new WeakMap<AndroidBridgePort, AndroidNativeBridge>()
@@ -63,9 +78,7 @@ function parseJson<T>(value: unknown, fallback: T) {
 
 const enabled = (value: unknown) => value === true
 
-export function getAndroidBridge(
-  target: Pick<Window, "SlopcodeAndroid"> = typeof window === "object" ? window : { SlopcodeAndroid: undefined },
-) {
+export function getAndroidBridge(target: Pick<Window, "SlopcodeAndroid"> = typeof window === "object" ? window : { SlopcodeAndroid: undefined }) {
   const port = target.SlopcodeAndroid
   if (!port) return
   const existing = ports.get(port)
@@ -119,6 +132,10 @@ export function getAndroidBridge(
     deepLinksReady: (nonce) => call("deepLinksReady", nonce),
     consumeDeepLinks: (nonce) => call("consumeDeepLinks", nonce),
     openLink: (url) => call("openLink", url),
+    remoteJobsReady: (nonce) => call("remoteJobsReady", nonce),
+    remoteJobList: () => call("remoteJobList"),
+    remoteJobStart: (input) => call("remoteJobStart", input),
+    remoteJobAction: (jobID, action, payload) => call("remoteJobAction", jobID, action, payload),
   } satisfies AndroidNativeBridge
 
   ports.set(port, bridge)
@@ -132,6 +149,8 @@ export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Pr
     notifications: false,
     deepLinks: false,
     remoteTransport: false,
+    backgroundExecution: false,
+    remoteJobs: false,
   }
   const raw = bridge ? await bridge.capabilities().catch(() => null) : null
   if (!isRecord(raw)) return fallback
@@ -141,6 +160,59 @@ export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Pr
     notifications: enabled(raw.notifications),
     deepLinks: enabled(raw.deepLinks),
     remoteTransport: false,
+    backgroundExecution: enabled(raw.backgroundExecution),
+    remoteJobs: enabled(raw.remoteJobs),
+  }
+}
+
+export function parseRemoteJobNonce(value: unknown) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) return
+  return value
+}
+
+export function parseRemoteJobActionValue(value: unknown) {
+  return parseRemoteJobAction(value)
+}
+
+export function encodeRemoteJobInput(input: RemoteJobStartInput) {
+  return JSON.stringify(input)
+}
+
+export function encodeRemoteJobAction(payload: RemoteJobActionPayload | undefined) {
+  return payload === undefined ? undefined : JSON.stringify(payload)
+}
+
+export function remoteJobsBridge(bridge: AndroidNativeBridge | undefined, enabled = true): AndroidRemoteJobs | undefined {
+  if (!bridge || !enabled) return
+  let nonce = ""
+  let ready: Promise<boolean> | undefined
+  const prepare = () => {
+    if (!nonce) return Promise.resolve(false)
+    ready ??= bridge.remoteJobsReady(nonce).then((value) => value === true)
+    return ready
+  }
+  return {
+    list: async () => parseRemoteJobList(await bridge.remoteJobList().catch(() => [])),
+    start: async (input) => {
+      const value = parseRemoteJobAction(await bridge.remoteJobStart(encodeRemoteJobInput(input)))
+      if (!value) throw new Error("Android did not return a valid remote job.")
+      return value
+    },
+    action: async (jobID, action, payload) =>
+      parseRemoteJobAction(await bridge.remoteJobAction(jobID, action, encodeRemoteJobAction(payload)).catch(() => undefined)),
+    subscribe(listener) {
+      nonce = crypto.randomUUID().replaceAll("-", "")
+      ready = undefined
+      const handler = (event: Event) => {
+        const message = event as MessageEvent
+        if (message.origin !== ANDROID_TRUSTED_ORIGIN || message.source !== window) return
+        const parsed = parseRemoteJobMessage(message.data, nonce, ANDROID_REMOTE_JOB_CHANNEL)
+        if (parsed) listener(parsed)
+      }
+      window.addEventListener("message", handler)
+      void prepare()
+      return () => window.removeEventListener("message", handler)
+    },
   }
 }
 
@@ -160,6 +232,9 @@ function supportedDeepLink(value: unknown) {
   try {
     const url = new URL(value)
     if (url.protocol !== "slopcode:" || url.username || url.password || url.hash) return false
+    if (url.hostname === "remote-session") {
+      return parseRemoteSessionDeepLink(value) !== undefined
+    }
     if (url.hostname !== "open-project" && url.hostname !== "new-session") return false
     if (url.port || (url.pathname !== "" && url.pathname !== "/")) return false
     const directory = url.searchParams.getAll("directory")
@@ -189,8 +264,7 @@ export function parseDeepLinkMessage(value: unknown, nonce: string) {
     parsed.channel !== ANDROID_DEEP_LINK_CHANNEL ||
     parsed.nonce !== nonce ||
     parsed.ready !== true
-  )
-    return []
+  ) return []
   return parseSupportedDeepLinks(parsed.urls)
 }
 

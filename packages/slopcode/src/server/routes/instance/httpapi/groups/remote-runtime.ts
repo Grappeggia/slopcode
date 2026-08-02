@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { PtyID } from "@slopcode-ai/core/pty/schema"
 import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
@@ -22,6 +22,14 @@ export const MAX_REMOTE_AGENT_COMMAND_DESCRIPTION_LENGTH = 512
 export const MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH = 128
 export const MAX_REMOTE_AGENT_CATALOG_BYTES = 128 * 1024
 export const REMOTE_AGENT_VERSION_TIMEOUT = "10 seconds"
+export const MAX_REMOTE_JOB_ID_LENGTH = 256
+export const MAX_REMOTE_JOB_OUTPUT_BYTES = 64 * 1024
+export const MAX_REMOTE_JOB_EVENTS = 2048
+export const MAX_REMOTE_REVIEW_FILES = 64
+export const MAX_REMOTE_REVIEW_DIFF_BYTES = 64 * 1024
+export const MAX_REMOTE_REVIEW_TESTS = 64
+export const MAX_REMOTE_REVIEW_SCREENSHOTS = 16
+export const MAX_REMOTE_REVIEW_COMMENTS = 128
 
 const BoundedPath = Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(MAX_REMOTE_PATH_LENGTH))
 const BoundedAuthority = Schema.String.check(Schema.isMinLength(3)).check(Schema.isMaxLength(320))
@@ -40,6 +48,19 @@ const BoundedCommandDescription = Schema.String.check(Schema.isMinLength(1))
 const BoundedCommandValue = Schema.String.check(Schema.isMinLength(1))
   .check(Schema.isMaxLength(MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH))
   .check(Schema.isPattern(/^[^\u0000-\u001f\u007f]+$/))
+const BoundedID = Schema.String.check(Schema.isMinLength(1))
+  .check(Schema.isMaxLength(MAX_REMOTE_JOB_ID_LENGTH))
+  .check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/))
+const ReviewText = Schema.String.check(Schema.isMaxLength(MAX_REMOTE_REVIEW_DIFF_BYTES))
+const ReviewPath = Schema.String.check(Schema.isMinLength(1))
+  .check(Schema.isMaxLength(MAX_REMOTE_PATH_LENGTH))
+  .check(Schema.isPattern(/^[^\u0000\r\n?#]+$/))
+const ReviewName = Schema.String.check(Schema.isMinLength(1))
+  .check(Schema.isMaxLength(256))
+  .check(Schema.isPattern(/^[^\u0000\r\n]+$/))
+const ReviewMessage = Schema.String.check(Schema.isMinLength(1))
+  .check(Schema.isMaxLength(4096))
+  .check(Schema.isPattern(/^[^\u0000]+$/))
 
 export const RemoteBrowseQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
@@ -101,6 +122,50 @@ export const RemoteAgentResult = Schema.Struct({
   output: Schema.String.check(Schema.isMaxLength(MAX_CODEX_OUTPUT_BYTES)),
   status: Schema.Literals(["completed", "failed", "timed_out"]),
   exitCode: Schema.optional(Schema.Number.check(Schema.isInt())),
+  commandPreview: Schema.optional(
+    Schema.Struct({
+      executable: ReviewName,
+      args: Schema.Array(ReviewMessage).check(Schema.isMaxLength(64)),
+      cwd: ReviewPath,
+    }),
+  ),
+  review: Schema.optional(
+    Schema.Struct({
+      files: Schema.Array(
+        Schema.Struct({
+          path: ReviewPath,
+          status: Schema.Literals(["added", "modified", "deleted", "renamed", "untracked"]),
+          additions: Schema.Number.check(Schema.isInt()),
+          deletions: Schema.Number.check(Schema.isInt()),
+          diff: ReviewText,
+        }),
+      ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_FILES)),
+      tests: Schema.Array(
+        Schema.Struct({
+          name: ReviewName,
+          status: Schema.Literals(["passed", "failed", "skipped"]),
+          durationMs: Schema.optional(Schema.Number.check(Schema.isInt())),
+          output: Schema.optional(ReviewText),
+        }),
+      ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_TESTS)),
+      screenshots: Schema.Array(
+        Schema.Struct({
+          name: ReviewName,
+          mime: Schema.String.check(Schema.isPattern(/^image\/[A-Za-z0-9.+-]+$/)),
+          data: Schema.String.check(Schema.isMaxLength(512 * 1024)),
+        }),
+      ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_SCREENSHOTS)),
+      comments: Schema.Array(
+        Schema.Struct({
+          id: BoundedID,
+          path: ReviewPath,
+          line: Schema.optional(Schema.Number.check(Schema.isInt())),
+          body: ReviewMessage,
+          createdAt: Schema.Number.check(Schema.isInt()),
+        }),
+      ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_COMMENTS)),
+    }),
+  ),
 })
 
 export const RemoteAgentSession = Schema.Struct({
@@ -123,11 +188,149 @@ export const RemoteAgentCatalog = Schema.Struct({
   commands: Schema.Array(RemoteAgentCommand).check(Schema.isMaxLength(MAX_REMOTE_AGENT_COMMANDS)),
 })
 
+export const RemoteCommandPreview = Schema.Struct({
+  executable: ReviewName,
+  args: Schema.Array(ReviewMessage).check(Schema.isMaxLength(64)),
+  cwd: ReviewPath,
+})
+
+export const RemoteApproval = Schema.Struct({
+  id: Schema.optional(BoundedID),
+  title: ReviewMessage,
+  command: Schema.optional(ReviewMessage),
+  cwd: Schema.optional(ReviewPath),
+  reason: Schema.optional(ReviewMessage),
+  risk: Schema.optional(Schema.Literals(["low", "medium", "high"])),
+})
+
+export const RemoteQuestion = Schema.Struct({
+  id: Schema.optional(BoundedID),
+  prompt: ReviewMessage,
+  options: Schema.optional(Schema.Array(ReviewMessage).check(Schema.isMaxLength(32))),
+  allowFreeform: Schema.optional(Schema.Boolean),
+})
+
+export const RemoteReview = Schema.Struct({
+  files: Schema.Array(
+    Schema.Struct({
+      path: ReviewPath,
+      status: Schema.Literals(["added", "modified", "deleted", "renamed", "untracked"]),
+      additions: Schema.Number.check(Schema.isInt()),
+      deletions: Schema.Number.check(Schema.isInt()),
+      diff: ReviewText,
+    }),
+  ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_FILES)),
+  tests: Schema.Array(
+    Schema.Struct({
+      name: ReviewName,
+      status: Schema.Literals(["passed", "failed", "skipped"]),
+      durationMs: Schema.optional(Schema.Number.check(Schema.isInt())),
+      output: Schema.optional(ReviewText),
+    }),
+  ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_TESTS)),
+  screenshots: Schema.Array(
+    Schema.Struct({
+      name: ReviewName,
+      mime: Schema.String.check(Schema.isPattern(/^image\/[A-Za-z0-9.+-]+$/)),
+      data: Schema.String.check(Schema.isMaxLength(512 * 1024)),
+    }),
+  ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_SCREENSHOTS)),
+  comments: Schema.Array(
+    Schema.Struct({
+      id: BoundedID,
+      path: ReviewPath,
+      line: Schema.optional(Schema.Number.check(Schema.isInt())),
+      body: ReviewMessage,
+      createdAt: Schema.Number.check(Schema.isInt()),
+    }),
+  ).check(Schema.isMaxLength(MAX_REMOTE_REVIEW_COMMENTS)),
+})
+
+export const RemoteAgentJobState = Schema.Struct({
+  id: BoundedID,
+  workspaceID: BoundedID,
+  directory: ReviewPath,
+  agent: RemoteAgent,
+  status: Schema.Literals([
+    "queued",
+    "running",
+    "waiting_approval",
+    "waiting_question",
+    "retrying",
+    "completed",
+    "failed",
+    "stopped",
+  ]),
+  sessionID: Schema.optional(PtyID),
+  cursor: Schema.optional(BoundedID),
+  output: Schema.optional(Schema.String.check(Schema.isMaxLength(MAX_REMOTE_JOB_OUTPUT_BYTES))),
+  error: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
+  progress: Schema.optional(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+  commandPreview: Schema.optional(RemoteCommandPreview),
+  approval: Schema.optional(RemoteApproval),
+  question: Schema.optional(RemoteQuestion),
+  review: Schema.optional(RemoteReview),
+  updatedAt: Schema.Number.check(Schema.isInt()),
+})
+
+export const RemoteAgentJobStart = Schema.Struct({
+  jobID: Schema.optional(BoundedID),
+  agent: RemoteAgent,
+  prompt: RemoteAgentPrompt.fields.prompt,
+  config: Schema.optional(RemoteAgentConfig),
+})
+
+export const RemoteAgentJobAction = Schema.Struct({
+  action: Schema.Literals(["approve", "reject", "answer", "steer", "comment", "stop", "retry"]),
+  answer: Schema.optional(ReviewMessage),
+  prompt: Schema.optional(ReviewMessage),
+  comment: Schema.optional(
+    Schema.Struct({
+      path: ReviewPath,
+      line: Schema.optional(Schema.Number.check(Schema.isInt())),
+      body: ReviewMessage,
+    }),
+  ),
+})
+
+export const RemoteAgentJobEventsQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  job: BoundedID,
+  path: Schema.optional(BoundedPath),
+  cursor: Schema.optional(BoundedID),
+})
+
+export const RemoteAgentJobActionQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  path: Schema.optional(BoundedPath),
+})
+
+export const RemoteAgentJobEvent = Schema.Struct({
+  id: BoundedID,
+  cursor: BoundedID,
+  jobID: BoundedID,
+  type: ReviewName,
+  data: Schema.Struct({
+    output: Schema.optional(Schema.String.check(Schema.isMaxLength(MAX_REMOTE_JOB_OUTPUT_BYTES))),
+    error: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
+    message: Schema.optional(ReviewMessage),
+    progress: Schema.optional(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+    sessionID: Schema.optional(PtyID),
+    commandPreview: Schema.optional(RemoteCommandPreview),
+    approval: Schema.optional(RemoteApproval),
+    question: Schema.optional(RemoteQuestion),
+    review: Schema.optional(RemoteReview),
+  }),
+})
+
 export const RemoteRuntimePaths = {
   browse: "/remote/ssh/browse",
   prompt: "/remote/agent/prompt",
   catalog: "/remote/agent/catalog",
   session: "/remote/agent/session",
+  job: "/remote/agent/job",
+  jobEvents: "/remote/agent/job/events",
+  jobAction: "/remote/agent/job/:jobID/action",
 } as const
 
 export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
@@ -184,6 +387,44 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
               "Run a fixed agent --version command and return bounded built-in and project-local command metadata without returning command templates.",
           }),
         ),
+        HttpApiEndpoint.post("job", RemoteRuntimePaths.job, {
+          query: RemoteAgentPromptQuery,
+          payload: RemoteAgentJobStart,
+          success: described(RemoteAgentJobState, "Accepted remote agent job"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "remote.agent.job",
+            summary: "Start a resumable remote agent job",
+            description:
+              "Start a remote agent with structured approval, question, steering, and review events. The job remains addressable by id while the client reconnects.",
+          }),
+        ),
+        HttpApiEndpoint.get("jobEvents", RemoteRuntimePaths.jobEvents, {
+          query: RemoteAgentJobEventsQuery,
+          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "remote.agent.job.events",
+            summary: "Stream remote agent job events",
+            description: "Replay events after a cursor and continue streaming structured remote agent updates.",
+          }),
+        ),
+        HttpApiEndpoint.post("jobAction", RemoteRuntimePaths.jobAction, {
+          params: { jobID: BoundedID },
+          query: RemoteAgentJobActionQuery,
+          payload: RemoteAgentJobAction,
+          success: described(RemoteAgentJobState, "Updated remote agent job"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "remote.agent.job.action",
+            summary: "Approve, answer, steer, review, stop, or retry a job",
+            description:
+              "Apply an idempotent user action to a remote job, including approval decisions, question answers, steering prompts, and review comments.",
+          }),
+        ),
       )
       .middleware(InstanceContextMiddleware)
       .middleware(WorkspaceRoutingMiddleware)
@@ -208,3 +449,13 @@ export type RemoteAgentResult = typeof RemoteAgentResult.Type
 export type RemoteAgentSession = typeof RemoteAgentSession.Type
 export type RemoteAgentCommand = typeof RemoteAgentCommand.Type
 export type RemoteAgentCatalog = typeof RemoteAgentCatalog.Type
+export type RemoteCommandPreview = typeof RemoteCommandPreview.Type
+export type RemoteApproval = typeof RemoteApproval.Type
+export type RemoteQuestion = typeof RemoteQuestion.Type
+export type RemoteReview = typeof RemoteReview.Type
+export type RemoteAgentJobState = typeof RemoteAgentJobState.Type
+export type RemoteAgentJobStart = typeof RemoteAgentJobStart.Type
+export type RemoteAgentJobAction = typeof RemoteAgentJobAction.Type
+export type RemoteAgentJobEventsQuery = typeof RemoteAgentJobEventsQuery.Type
+export type RemoteAgentJobActionQuery = typeof RemoteAgentJobActionQuery.Type
+export type RemoteAgentJobEvent = typeof RemoteAgentJobEvent.Type

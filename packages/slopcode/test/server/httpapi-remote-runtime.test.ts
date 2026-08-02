@@ -542,6 +542,54 @@ describe("remote agent runtime", () => {
     expect(buildAgentInteractiveCommand("opencode-cli", { permissionMode: "plan" })).toBeUndefined()
   })
 
+  test("keeps resumable job input bounded before starting a remote process", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const response = await request(RemoteRuntimePaths.job, tmp.path, { path: tmp.path }, {
+      method: "POST",
+      body: JSON.stringify({ agent: "codex-cli", prompt: "x".repeat(MAX_CODEX_PROMPT_LENGTH + 1) }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  test("streams structured job events with approval context and a terminal review", async () => {
+    if (process.platform === "win32") return
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    await using bin = await tmpdir({ config: { formatter: false, lsp: false } })
+    await writeFile(
+      path.join(bin.path, "codex"),
+      "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"approval\",\"approval\":{\"title\":\"Write files\",\"command\":\"touch result\"}}'\nprintf '%s\\n' '{\"type\":\"question\",\"question\":{\"prompt\":\"Which suite?\",\"options\":[\"unit\"]}}'\nprintf '%s\\n' '{\"type\":\"message\",\"text\":\"done\"}'\nsleep 2\n",
+      { mode: 0o755 },
+    )
+    const previous = process.env.PATH
+    process.env.PATH = `${bin.path}${path.delimiter}${previous ?? ""}`
+    try {
+      const started = await request(
+        RemoteRuntimePaths.job,
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ jobID: "job_structured", agent: "codex-cli", prompt: "run" }) },
+      )
+      expect(started.status).toBe(200)
+      expect((await started.json()).commandPreview).toMatchObject({ executable: "codex", cwd: tmp.path })
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const status = await request(RemoteRuntimePaths.job, tmp.path, { path: tmp.path }, {
+        method: "POST",
+        body: JSON.stringify({ jobID: "job_structured", agent: "codex-cli", prompt: "run" }),
+      })
+      expect(status.status).toBe(200)
+      expect((await status.json()).id).toBe("job_structured")
+      const events = await request(RemoteRuntimePaths.jobEvents, tmp.path, { job: "job_structured", path: tmp.path })
+      const body = await events.text()
+      expect(events.status).toBe(200)
+      expect(body).toContain("Write files")
+      expect(body).toContain("Which suite?")
+      expect(body).toContain("job.completed")
+    } finally {
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+    }
+  })
+
   test("runs selected executables with cwd and no client-controlled shell options", async () => {
     const commands: Array<{ command: string; args: readonly string[]; options: Record<string, unknown> }> = []
     const process = Layer.mock(AppProcess.Service)({
@@ -560,7 +608,12 @@ describe("remote agent runtime", () => {
       }).pipe(Effect.provide(process)),
     )
 
-    expect(result).toEqual({ output: "done", status: "completed", exitCode: 0 })
+    expect(result).toEqual({
+      output: "done",
+      status: "completed",
+      exitCode: 0,
+      commandPreview: { executable: "codex", args: ["exec", "--model", "gpt-5", "--", "<prompt>"], cwd: "/authorized/project" },
+    })
     expect(commands[0]).toMatchObject({
       command: "codex",
       args: ["exec", "--model", "gpt-5", "--", "inspect the project"],
@@ -574,7 +627,7 @@ describe("remote agent runtime", () => {
         Effect.provide(process),
       ),
     )
-    expect(commands[1]).toMatchObject({
+    expect(commands.find((item) => item.command === "opencode")).toMatchObject({
       command: "opencode",
       args: ["run", "--", "inspect with opencode"],
       options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
@@ -588,7 +641,7 @@ describe("remote agent runtime", () => {
         config: { permissionMode: "plan" },
       }).pipe(Effect.provide(process)),
     )
-    expect(commands[2]).toMatchObject({
+    expect(commands.find((item) => item.command === "claude")).toMatchObject({
       command: "claude",
       args: ["-p", "--permission-mode", "plan", "--", "inspect with Claude Code"],
       options: { cwd: "/authorized/project", stdin: "ignore", extendEnv: true },
@@ -619,8 +672,17 @@ describe("remote agent runtime", () => {
       ),
     ])
 
-    expect(failedResult).toEqual({ output: "failed", status: "failed", exitCode: 7 })
-    expect(timeoutResult).toEqual({ output: "timed out", status: "timed_out" })
+    expect(failedResult).toMatchObject({
+      output: "failed",
+      status: "failed",
+      exitCode: 7,
+      commandPreview: { executable: "codex", cwd: "/project" },
+    })
+    expect(timeoutResult).toMatchObject({
+      output: "timed out",
+      status: "timed_out",
+      commandPreview: { executable: "codex", cwd: "/project" },
+    })
     expect(JSON.stringify(timeoutResult)).not.toContain("secret prompt")
   })
 

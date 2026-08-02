@@ -7,6 +7,7 @@ import {
   normalizeHttpsUrl,
   normalizeRemoteWorkspaceState,
   rememberRemoteFolder,
+  rememberSshString,
   remoteFoldersForScope,
   type RemoteAgent,
   type RemoteWorkspaceCapability,
@@ -170,6 +171,13 @@ export function parseSshAuthority(value: string): SshAuthority | undefined {
   }
   if (!host) return
   return { user, host, port }
+}
+
+export function normalizeSshString(value: string) {
+  const parsed = parseSshAuthority(value)
+  if (!parsed) return
+  const host = parsed.host.includes(":") ? `[${parsed.host}]` : parsed.host
+  return `${parsed.user}@${host}${parsed.port === undefined ? "" : `:${parsed.port}`}`
 }
 
 function effectivePort(authority: SshAuthority, value: number | undefined) {
@@ -470,6 +478,7 @@ export type RemoteConnectInput = {
   directory: string
   agent?: RemoteAgent
   recentFolders?: readonly string[]
+  recentSshStrings?: readonly string[]
   deviceID?: string
   supervisorWaitMs?: number
 }
@@ -771,8 +780,12 @@ export async function connectRemoteWorkspace(
     scope,
     remoteDirectory,
   )
-  await save(state, secret)
-  return { state, secret, pairing: selectedRecord }
+  const nextState = rememberSshString(
+    { ...state, recentSshStrings: input.recentSshStrings ? [...input.recentSshStrings] : state.recentSshStrings },
+    input.sshAuthority,
+  )
+  await save(nextState, secret)
+  return { state: nextState, secret, pairing: selectedRecord }
 }
 
 function derivedWorkspaceID(authority: SshAuthority, port: number, directory: string, agent: RemoteAgent) {
@@ -803,12 +816,37 @@ export function RemoteConnect(props: Props) {
   const [busy, setBusy] = createSignal(false)
   const [browseBusy, setBrowseBusy] = createSignal(false)
   const [storedState, setStoredState] = createSignal<RemoteWorkspaceState>({ version: 1 })
+  const [sshString, setSshString] = createSignal("")
+  const [started, setStarted] = createSignal(false)
+  const [recentSshStrings, setRecentSshStrings] = createSignal<string[]>([])
 
   onMount(() => {
     void readInitialWorkspaceState()
-      .then((initial) => setStoredState(initial.state))
+      .then((initial) => {
+        setStoredState(initial.state)
+        setRecentSshStrings(initial.state.recentSshStrings ?? [])
+        setUrl(initial.state.serverUrl ?? "")
+      })
       .catch(() => undefined)
   })
+
+  const start = () => {
+    const parsed = parseSshAuthority(sshString())
+    const normalized = normalizeSshString(sshString())
+    if (!parsed || !normalized) {
+      setError("Enter an SSH target such as mac-user@mac.example.com or mac-user@[::1]:2222.")
+      return
+    }
+    const next = rememberSshString(storedState(), normalized)
+    setStoredState(next)
+    setRecentSshStrings(next.recentSshStrings ?? [])
+    setAuthority(normalized)
+    setUsername(parsed.user)
+    if (parsed.port) setPort(String(parsed.port))
+    setError("")
+    setStarted(true)
+    void persistRemoteWorkspace(next).catch(() => undefined)
+  }
 
   const storedFolders = () => {
     const parsed = parseSshAuthority(authority())
@@ -864,6 +902,7 @@ export function RemoteConnect(props: Props) {
         directory: directory(),
         agent: agent(),
         recentFolders: recentFolders(),
+        recentSshStrings: recentSshStrings(),
       })
       props.onConnected()
     } catch (cause) {
@@ -879,6 +918,10 @@ export function RemoteConnect(props: Props) {
         class="w-full max-w-xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4"
         onSubmit={(event) => {
           event.preventDefault()
+          if (!started()) {
+            start()
+            return
+          }
           void connect()
         }}
       >
@@ -889,33 +932,55 @@ export function RemoteConnect(props: Props) {
           </p>
         </div>
 
-        <label class="flex flex-col gap-1 text-14-medium">
-          Desktop HTTPS or relay URL
-          <input
-            required
-            type="url"
-            inputMode="url"
-            placeholder="https://desktop.example.com"
-            value={url()}
-            onInput={(event) => setUrl(event.currentTarget.value)}
-            class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-          />
-        </label>
-
-        <div class="grid grid-cols-2 gap-3">
+        <Show when={!started()}>
           <label class="flex flex-col gap-1 text-14-medium">
-            Username
+            SSH target
             <input
+              required
               type="text"
-              autocomplete="username"
-              value={username()}
-              onInput={(event) => setUsername(event.currentTarget.value)}
+              autocomplete="off"
+              placeholder="mac-user@mac.example.com[:port]"
+              value={sshString()}
+              onInput={(event) => setSshString(event.currentTarget.value)}
               class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
             />
           </label>
+          <Show when={recentSshStrings().length > 0}>
+            <div class="flex flex-col gap-2" aria-label="Recent SSH targets">
+              <span class="text-14-medium">Recent SSH targets</span>
+              <For each={recentSshStrings()}>
+                {(value) => (
+                  <button
+                    type="button"
+                    class="rounded-md border border-border-weak-base px-3 py-2 text-left"
+                    onClick={() => setSshString(value)}
+                  >
+                    {value}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+        </Show>
+
+        <Show when={started()}>
+          <label class="flex flex-col gap-1 text-14-medium">
+            Desktop HTTPS or relay URL
+            <input
+              required
+              type="url"
+              inputMode="url"
+              placeholder="https://desktop.example.com"
+              value={url()}
+              onInput={(event) => setUrl(event.currentTarget.value)}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            />
+          </label>
+
           <label class="flex flex-col gap-1 text-14-medium">
             Desktop password or token
             <input
+              required
               type="password"
               autocomplete="current-password"
               value={password()}
@@ -923,62 +988,12 @@ export function RemoteConnect(props: Props) {
               class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
             />
           </label>
-        </div>
 
-        <label class="flex flex-col gap-1 text-14-medium">
-          Workspace name
-          <input
-            type="text"
-            value={name()}
-            onInput={(event) => setName(event.currentTarget.value)}
-            class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-          />
-        </label>
+          <div class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 text-14-regular">
+            SSH target: {authority()}:{port()}
+          </div>
 
-        <label class="flex flex-col gap-1 text-14-medium">
-          Workspace ID (optional)
-          <input
-            type="text"
-            placeholder="Leave blank to derive one from SSH host and folder"
-            value={workspace()}
-            onInput={(event) => setWorkspace(event.currentTarget.value)}
-            class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-          />
-        </label>
-
-        <div class="grid grid-cols-[minmax(0,1fr)_6rem] gap-3">
-          <label class="flex flex-col gap-1 text-14-medium">
-            SSH authority
-            <input
-              required
-              type="text"
-              autocomplete="off"
-              placeholder="mac-user@mac.example.com"
-              value={authority()}
-              onInput={(event) => {
-                const value = event.currentTarget.value
-                setAuthority(value)
-                const parsed = parseSshAuthority(value)
-                if (parsed?.port) setPort(String(parsed.port))
-              }}
-              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-            />
-          </label>
-          <label class="flex flex-col gap-1 text-14-medium">
-            Port fallback
-            <input
-              required
-              type="number"
-              min="1"
-              max="65535"
-              value={port()}
-              onInput={(event) => setPort(event.currentTarget.value)}
-              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-            />
-          </label>
-        </div>
-
-        <div class="flex flex-col gap-2">
+          <div class="flex flex-col gap-2">
           <span class="text-14-medium">Remote folder</span>
           <div class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 text-14-regular">
             {directory() || "Choose a folder from the remote machine"}
@@ -991,9 +1006,9 @@ export function RemoteConnect(props: Props) {
           >
             {browseBusy() ? "Loading folders…" : "Browse remote folders"}
           </button>
-        </div>
+          </div>
 
-        <label class="flex flex-col gap-1 text-14-medium">
+          <label class="flex flex-col gap-1 text-14-medium">
           Agent
           <select
             value={agent()}
@@ -1008,9 +1023,9 @@ export function RemoteConnect(props: Props) {
             <option value="opencode-cli">OpenCode CLI — prompts/config are sent to OpenCode CLI</option>
             <option value="claude-code">Claude Code — prompts/config are sent to Claude Code</option>
           </select>
-        </label>
+          </label>
 
-        <Show when={listingState()}>
+          <Show when={listingState()}>
           <section
             class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3"
             aria-label="Remote folder browser"
@@ -1097,6 +1112,7 @@ export function RemoteConnect(props: Props) {
               Use current folder
             </button>
           </section>
+          </Show>
         </Show>
 
         <Show when={browseError()}>
@@ -1116,7 +1132,7 @@ export function RemoteConnect(props: Props) {
           disabled={busy()}
           class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 disabled:opacity-50"
         >
-          {busy() ? "Checking desktop…" : "Connect workspace"}
+          {!started() ? "Start SSH setup" : busy() ? "Checking desktop…" : "Connect workspace"}
         </button>
       </form>
     </main>

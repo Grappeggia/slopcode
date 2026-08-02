@@ -64,11 +64,8 @@ const boundedArray = <S extends Schema.Top>(schema: S, count: number, bytes: num
   )
 
 const exact = <S extends Schema.Top>(schema: S) =>
-  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
-    [schema],
-    ([codec]) =>
-      (u, _ast, options) =>
-        SchemaParser.decodeUnknownEffect(codec, { ...options, onExcessProperty: "error" })(u),
+  Schema.declareConstructor<S["Type"], S["Encoded"]>()([schema], ([codec]) => (u, _ast, options) =>
+    SchemaParser.decodeUnknownEffect(codec, { ...options, onExcessProperty: "error" })(u),
   )
 
 export const RemoteTransportVersion = RemoteVersion.annotate({ identifier: "RemoteTransportV1.Version" })
@@ -105,10 +102,11 @@ const isSafeAbsolutePath = (value: string) => {
 }
 
 export const RemoteTransportRemoteDirectory = AbsolutePath.check(
-  Schema.makeFilter<typeof AbsolutePath.Type>((value) =>
-    byteLength(value) <= RemoteTransportLimits.maxPathBytes && isSafeAbsolutePath(value)
-      ? undefined
-      : "remoteDirectory must be a bounded, normalized absolute POSIX path",
+  Schema.makeFilter<typeof AbsolutePath.Type>(
+    (value) =>
+      byteLength(value) <= RemoteTransportLimits.maxPathBytes && isSafeAbsolutePath(value)
+        ? undefined
+        : "remoteDirectory must be a bounded, normalized absolute POSIX path",
   ),
 ).pipe(Schema.brand("RemoteTransport.RemoteDirectory"))
 export type RemoteTransportRemoteDirectory = typeof RemoteTransportRemoteDirectory.Type
@@ -132,10 +130,18 @@ const isSafeHttpPath = (value: string) => {
   if (!value.startsWith("/") || value.includes("\\") || value.includes("\u0000") || value.includes("//")) return false
   if (/[?#\r\n]/.test(value)) return false
   const decoded = decodeUrlComponent(value)
-  if (decoded === undefined || decoded.includes("%") || /[\\\u0000-\u001f\u007f-\u009f?#]/.test(decoded)) return false
-  const segments = decoded.slice(1).split("/")
+  if (
+    decoded === undefined ||
+    decoded.includes("%") ||
+    /[\\\u0000-\u001f\u007f-\u009f?#]/.test(decoded)
+  )
+    return false
+  const segments = decoded
+    .slice(1)
+    .split("/")
   return segments.every(
-    (segment, index) => (segment.length > 0 || index === segments.length - 1) && segment !== "." && segment !== "..",
+    (segment, index) =>
+      (segment.length > 0 || index === segments.length - 1) && segment !== "." && segment !== "..",
   )
 }
 
@@ -148,8 +154,7 @@ const HttpPath = text(RemoteTransportLimits.maxPathBytes, "HTTP path is too larg
 export const RemoteTransportQuery = bounded(RemoteTransportLimits.maxQueryBytes, "HTTP query is too large").check(
   noControl("HTTP query contains control characters"),
   Schema.makeFilter((value: string) => {
-    if (value.includes("?") || value.includes("#") || value.includes("\\"))
-      return "HTTP query contains unsafe delimiters"
+    if (value.includes("?") || value.includes("#") || value.includes("\\")) return "HTTP query contains unsafe delimiters"
     const decoded = decodeUrlComponent(value)
     return decoded === undefined || /[\u0000-\u001f\u007f-\u009f#]/.test(decoded)
       ? "HTTP query contains malformed encoding or unsafe decoded characters"
@@ -167,14 +172,10 @@ const HeaderName = text(RemoteTransportLimits.maxHeaderNameBytes, "header name i
 const secretField = (value: string) =>
   /(?:password|passphrase|private[-_]?key|api[-_]?key|secret|token|authorization|cookie|credential)/i.test(value)
 const SafeFieldName = FieldName.check(
-  Schema.makeFilter((value: string) =>
-    secretField(value) ? "secret-shaped fields are not transport metadata" : undefined,
-  ),
+  Schema.makeFilter((value: string) => (secretField(value) ? "secret-shaped fields are not transport metadata" : undefined)),
 )
 const SafeHeaderName = HeaderName.check(
-  Schema.makeFilter((value: string) =>
-    secretField(value) ? "secret-shaped fields are not transport headers" : undefined,
-  ),
+  Schema.makeFilter((value: string) => (secretField(value) ? "secret-shaped fields are not transport headers" : undefined)),
 )
 const HeaderValue = bounded(RemoteTransportLimits.maxHeaderValueBytes, "header value is too large").check(
   noControl("header value contains control characters"),
@@ -221,7 +222,12 @@ const unsafeHeader = (name: string) => {
 }
 const prototypeKey = (name: string) => name === "__proto__" || name === "constructor" || name === "prototype"
 
-const boundedRecord = <S extends Schema.Top>(schema: S, entries: number, bytes: number, message: string) =>
+const boundedRecord = <S extends Schema.Top>(
+  schema: S,
+  entries: number,
+  bytes: number,
+  message: string,
+) =>
   schema.check(
     Schema.makeFilter<S["Type"]>((value) => {
       const values = Object.entries(value as Record<string, string>)
@@ -460,16 +466,8 @@ export type RemoteTransportIdempotencyStoreOptions = Readonly<{
 export const createRemoteTransportIdempotencyStore = (
   options: RemoteTransportIdempotencyStoreOptions = {},
 ): RemoteTransportIdempotencyStore => {
-  const maxEntries = boundedCount(
-    options.maxEntries,
-    RemoteTransportLimits.maxIdempotencyEntries,
-    RemoteTransportLimits.maxIdempotencyEntries,
-  )
-  const ttlMs = boundedPositive(
-    options.ttlMs,
-    RemoteTransportLimits.maxIdempotencyTtlMs,
-    RemoteTransportLimits.maxIdempotencyTtlMs,
-  )
+  const maxEntries = boundedCount(options.maxEntries, RemoteTransportLimits.maxIdempotencyEntries, RemoteTransportLimits.maxIdempotencyEntries)
+  const ttlMs = boundedPositive(options.ttlMs, RemoteTransportLimits.maxIdempotencyTtlMs, RemoteTransportLimits.maxIdempotencyTtlMs)
   const records = new Map<
     string,
     {
@@ -523,13 +521,7 @@ export const remoteTransportClaimIdempotency = async <
     requestDigest: RemoteTransportRequestDigest
     target: RemoteTransportTarget
   },
->(
-  store: RemoteTransportIdempotencyStore,
-  sessionID: string,
-  registeredTarget: RemoteTransportTarget,
-  request: T,
-  now?: number,
-) => {
+>(store: RemoteTransportIdempotencyStore, sessionID: string, registeredTarget: RemoteTransportTarget, request: T, now?: number) => {
   if (!sameTarget(request.target, registeredTarget)) return { status: "target-mismatch" } as const
   const expected = await remoteTransportComputeRequestDigest(request)
   if (request.requestDigest !== expected) return { status: "invalid-digest", expected } as const
@@ -600,15 +592,13 @@ export const RemoteTransportChallenge = exact(
     expiresAt: Timestamp,
     oneTime: Schema.Literal(true),
   }),
-)
-  .check(
-    Schema.makeFilter((value) =>
-      value.expiresAt > value.issuedAt && value.expiresAt - value.issuedAt <= 5 * 60 * 1000
-        ? undefined
-        : "challenge must expire within five minutes and after issuance",
-    ),
-  )
-  .annotate({ identifier: "RemoteTransportV1.Challenge" })
+).check(
+  Schema.makeFilter((value) =>
+    value.expiresAt > value.issuedAt && value.expiresAt - value.issuedAt <= 5 * 60 * 1000
+      ? undefined
+      : "challenge must expire within five minutes and after issuance",
+  ),
+).annotate({ identifier: "RemoteTransportV1.Challenge" })
 export type RemoteTransportChallenge = typeof RemoteTransportChallenge.Type
 
 export const RemoteTransportSessionProof = exact(
@@ -667,7 +657,11 @@ const eventFields = {
  * v1 strict semantics are negotiated explicitly. An updated peer must not
  * silently fall back to a legacy proof, frame, or upload interpretation.
  */
-export const RemoteTransportFeature = Schema.Literals(["proof.ed25519.v1", "frame.bounds.v1", "http.upload.v1"])
+export const RemoteTransportFeature = Schema.Literals([
+  "proof.ed25519.v1",
+  "frame.bounds.v1",
+  "http.upload.v1",
+])
 export type RemoteTransportFeature = typeof RemoteTransportFeature.Type
 
 const requiredFeatures: ReadonlyArray<RemoteTransportFeature> = [
@@ -691,26 +685,24 @@ export const RemoteTransportCapabilities = exact(
     offered: featureList,
     required: featureList,
   }),
-)
-  .check(
-    Schema.makeFilter((value) =>
-      requiredFeatures.every((feature) => value.required.includes(feature) && value.offered.includes(feature))
-        ? undefined
-        : "strict v1 capabilities are required",
-    ),
-  )
-  .annotate({ identifier: "RemoteTransportV1.Capabilities" })
+).check(
+  Schema.makeFilter((value) =>
+    requiredFeatures.every((feature) => value.required.includes(feature) && value.offered.includes(feature))
+      ? undefined
+      : "strict v1 capabilities are required",
+  ),
+).annotate({ identifier: "RemoteTransportV1.Capabilities" })
 export type RemoteTransportCapabilities = typeof RemoteTransportCapabilities.Type
 
-export const RemoteTransportAcceptedCapabilities = exact(Schema.Struct({ accepted: featureList }))
-  .check(
-    Schema.makeFilter((value) =>
-      requiredFeatures.every((feature) => value.accepted.includes(feature))
-        ? undefined
-        : "strict v1 capabilities were not negotiated",
-    ),
-  )
-  .annotate({ identifier: "RemoteTransportV1.AcceptedCapabilities" })
+export const RemoteTransportAcceptedCapabilities = exact(
+  Schema.Struct({ accepted: featureList }),
+).check(
+  Schema.makeFilter((value) =>
+    requiredFeatures.every((feature) => value.accepted.includes(feature))
+      ? undefined
+      : "strict v1 capabilities were not negotiated",
+  ),
+).annotate({ identifier: "RemoteTransportV1.AcceptedCapabilities" })
 export type RemoteTransportAcceptedCapabilities = typeof RemoteTransportAcceptedCapabilities.Type
 
 export const remoteTransportCapabilitiesMatch = (
@@ -769,8 +761,10 @@ const remoteTransportSessionAuthScopeMatches = async (
   open.auth.targetDigest === (await remoteTransportComputeTargetDigest(registeredTarget)) &&
   (await remoteTransportVerifyRequestDigest(open))
 
-export const remoteTransportChallengeIsFresh = (challenge: RemoteTransportChallenge, now = Date.now()) =>
-  challenge.issuedAt <= now && now < challenge.expiresAt
+export const remoteTransportChallengeIsFresh = (
+  challenge: RemoteTransportChallenge,
+  now = Date.now(),
+) => challenge.issuedAt <= now && now < challenge.expiresAt
 
 export type RemoteTransportChallengeStore = Readonly<{
   /** Checks exact server issuance and freshness without consuming the challenge. */
@@ -797,11 +791,7 @@ export type RemoteTransportChallengeIssuer = RemoteTransportChallengeStore &
 export const createRemoteTransportChallengeStore = (
   options: RemoteTransportChallengeStoreOptions = {},
 ): RemoteTransportChallengeIssuer => {
-  const maxEntries = boundedCount(
-    options.maxEntries,
-    RemoteTransportLimits.maxChallengeEntries,
-    RemoteTransportLimits.maxChallengeEntries,
-  )
+  const maxEntries = boundedCount(options.maxEntries, RemoteTransportLimits.maxChallengeEntries, RemoteTransportLimits.maxChallengeEntries)
   const ttlMs = boundedPositive(options.ttlMs, 60_000, 5 * 60 * 1000)
   const pending = new Map<string, RemoteTransportChallenge>()
   const prune = (now: number) => {
@@ -917,11 +907,11 @@ export type RemoteTransportSessionClosed = typeof RemoteTransportSessionClosed.T
 const base64ByteLength = (value: string) => {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return -1
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0
-  return (value.length / 4) * 3 - padding
+  return value.length / 4 * 3 - padding
 }
 
 const base64Data = (max: number, message: string) =>
-  bounded(Math.ceil((max * 4) / 3) + 4, message).check(
+  bounded(Math.ceil(max * 4 / 3) + 4, message).check(
     Schema.makeFilter((value: string) =>
       base64ByteLength(value) >= 0 && base64ByteLength(value) <= max ? undefined : message,
     ),
@@ -1182,18 +1172,14 @@ export const remoteTransportCreateStreamState = (
   windowBytes: 0,
   maxBytes: Math.min(maxBytes, RemoteTransportLimits.maxStreamBytes),
   maxWindowBytes: Math.min(maxWindowBytes, RemoteTransportLimits.maxStreamWindowBytes),
-  expectedBytes:
-    expectedBytes === undefined ? undefined : Math.min(expectedBytes, RemoteTransportLimits.maxStreamBytes),
+  expectedBytes: expectedBytes === undefined ? undefined : Math.min(expectedBytes, RemoteTransportLimits.maxStreamBytes),
 })
 
 export const RemoteTransportInitialStreamState = remoteTransportCreateStreamState()
 
-export const remoteTransportCreateUploadStreamState = (upload: Pick<RemoteTransportHttpUpload, "contentLength">) =>
-  remoteTransportCreateStreamState(
-    RemoteTransportLimits.maxStreamBytes,
-    RemoteTransportLimits.maxStreamWindowBytes,
-    upload.contentLength,
-  )
+export const remoteTransportCreateUploadStreamState = (
+  upload: Pick<RemoteTransportHttpUpload, "contentLength">,
+) => remoteTransportCreateStreamState(RemoteTransportLimits.maxStreamBytes, RemoteTransportLimits.maxStreamWindowBytes, upload.contentLength)
 
 /**
  * Advances a stream only for the next sequence number. Once a final chunk is
@@ -1202,10 +1188,7 @@ export const remoteTransportCreateUploadStreamState = (upload: Pick<RemoteTransp
  */
 export const remoteTransportAdvanceStream = (
   state: RemoteTransportStreamState,
-  chunk: Pick<
-    RemoteTransportHttpChunk | RemoteTransportHttpUploadChunk | RemoteTransportPtyOutput,
-    "sequence" | "final" | "chunk"
-  >,
+  chunk: Pick<RemoteTransportHttpChunk | RemoteTransportHttpUploadChunk | RemoteTransportPtyOutput, "sequence" | "final" | "chunk">,
 ) => {
   if (state.final || chunk.sequence !== state.nextSequence) return undefined
   const bytes = bodyByteLength(chunk.chunk)
@@ -1316,12 +1299,7 @@ export const RemoteTransportApprovalReply = exact(
 export type RemoteTransportApprovalReply = typeof RemoteTransportApprovalReply.Type
 
 const Answers = boundedArray(
-  boundedArray(
-    text(2 * 1024, "question answer is too large"),
-    16,
-    RemoteTransportLimits.maxArrayBytes,
-    "answers are too large",
-  ),
+  boundedArray(text(2 * 1024, "question answer is too large"), 16, RemoteTransportLimits.maxArrayBytes, "answers are too large"),
   8,
   RemoteTransportLimits.maxArrayBytes,
   "question answers are too large",

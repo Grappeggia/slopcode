@@ -106,6 +106,8 @@ export type ElectronAPI = {
   readClipboardImage: () => Promise<{ buffer: ArrayBuffer; width: number; height: number } | null>
   showNotification: (title: string, body?: string) => void
   getWindowFocused: () => Promise<boolean>
+  getWindowFullscreen: () => Promise<boolean>
+  onWindowFullscreenChanged: (cb: (fullscreen: boolean) => void) => () => void
   setWindowFocus: () => Promise<void>
   showWindow: () => Promise<void>
   relaunch: () => void
@@ -119,5 +121,7 @@ export type ElectronAPI = {
   runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
   setBackgroundColor: (color: string) => Promise<void>
   exportDebugLogs: () => Promise<string>
+  focusDebugEnabled: boolean
+  setForceFocus: (enabled: boolean) => Promise<void>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void>
 }

@@ -333,7 +333,10 @@ export function SessionSidePanel(props: {
                     <Show when={reviewTab() && props.canReview()}>
                       <Tabs.Content value="review" class="flex flex-col h-full overflow-hidden contain-strict">
                         <Show when={reviewOpen() && activeTab() === "review"}>
-                          <Show when={settings.general.newLayoutDesigns()} fallback={props.reviewPanel()}>
+                          <Show
+                            when={settings.general.newLayoutDesigns()}
+                            fallback={props.reviewPanel()}
+                          >
                             <ReviewPanelV2
                               diffs={props.diffs}
                               ready={props.diffsReady}
@@ -479,7 +482,10 @@ export function SessionSidePanel(props: {
                               />
                             }
                           >
-                            <FileTreeV2 kinds={kinds()} onFileClick={(node) => openTab(file.tab(node.path))} />
+                            <FileTreeV2
+                              kinds={kinds()}
+                              onFileClick={(node) => openTab(file.tab(node.path))}
+                            />
                           </Show>
                         </Match>
                       </Switch>

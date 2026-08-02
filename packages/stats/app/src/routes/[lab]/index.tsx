@@ -115,11 +115,7 @@ export default function StatsLab() {
       <Meta name="twitter:description" content={labDescription()} />
       <Meta name="twitter:image" content={statsUnfurlUrl} />
       <Meta name="twitter:image:alt" content={i18n.t("app.unfurlAlt")} />
-      <Header
-        githubStars={githubStars() ?? githubLink.fallbackStars}
-        links={labHeaderLinks()}
-        brandHref={import.meta.env.BASE_URL}
-      />
+      <Header githubStars={githubStars() ?? githubLink.fallbackStars} links={labHeaderLinks()} brandHref={import.meta.env.BASE_URL} />
       <div data-component="container">
         <div data-component="content">
           <Show when={catalog() !== undefined} fallback={<LabLoading />}>

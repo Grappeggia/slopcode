@@ -18,6 +18,7 @@ import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { NEW_SESSION_CONTENT_WIDTH } from "@/pages/session/new-session-layout"
+import { newSessionComposerVariant } from "@/pages/new-session/new-session-workspace-controller"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -264,7 +265,7 @@ export function SessionComposerRegion(props: {
                 fallback={
                   <Show when={!props.state.blocked()}>
                     <PromptInput
-                      variant={props.placement === "inline" ? "new-session" : undefined}
+                      variant={newSessionComposerVariant(route.params.id)}
                       ref={props.inputRef}
                       newSessionWorktree={props.newSessionWorktree}
                       onNewSessionWorktreeChange={props.onNewSessionWorktreeChange}

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   browseRemoteFolders,
   connectRemoteWorkspace,
+  normalizeSshString,
   parseSshAuthority,
   RemoteSelectionBindingRequiredError,
   RemoteSupervisorPendingError,
@@ -222,6 +223,12 @@ describe("Android SSH authority and folder browsing", () => {
       "marcos@mac.example.test && whoami",
       "mac.example.test",
     ].forEach((value) => expect(parseSshAuthority(value)).toBeUndefined())
+  })
+
+  test("normalizes the one-field SSH setup string for saved history", () => {
+    expect(normalizeSshString("  Marcos@[2001:DB8::1]:2222  ")).toBe("Marcos@[2001:db8::1]:2222")
+    expect(normalizeSshString("marcos@Mac.Example.Test")).toBe("marcos@mac.example.test")
+    expect(normalizeSshString("marcos@mac.example.test:0")).toBeUndefined()
   })
 
   test("browses bounded direct child folders with local recent pins", async () => {

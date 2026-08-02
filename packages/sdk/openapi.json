@@ -573,113 +573,6 @@
         ]
       }
     },
-    "/experimental/remote/supervisor/pairings": {
-      "get": {
-        "tags": ["remote supervisor"],
-        "operationId": "experimental.remote.supervisor.pairings",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Pending remote pairings",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RemoteV1PairingRecordWire"
-                  },
-                  "description": "Pending remote pairings"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/effect_HttpApiError_Forbidden"
-                }
-              }
-            }
-          }
-        },
-        "description": "List redacted remote pairings across instance scopes for an authenticated desktop supervisor.",
-        "summary": "List remote pairings for a supervisor",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.remote.supervisor.pairings({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/remote/supervisor/target": {
-      "post": {
-        "tags": ["remote supervisor"],
-        "operationId": "experimental.remote.supervisor.target",
-        "parameters": [],
-        "responses": {
-          "204": {
-            "description": "Remote target registered"
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/effect_HttpApiError_Forbidden"
-                }
-              }
-            }
-          }
-        },
-        "description": "Bind a validated loopback target to an exact pairing without relying on an instance-directory selector.",
-        "summary": "Register a remote target for a pairing",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceTargetPayload"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.remote.supervisor.target({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/event": {
       "get": {
         "tags": ["event"],
@@ -3681,9 +3574,19 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "McpServerNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerNotFoundError"
+                }
+              }
+            }
           }
         },
-        "description": "Complete OAuth authentication for the exact started flow using its state and authorization code.",
+        "description": "Complete OAuth authentication for a Model Context Protocol (MCP) server using the authorization code.",
         "summary": "Complete MCP OAuth",
         "requestBody": {
           "content": {
@@ -3691,19 +3594,15 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "state": {
-                    "type": "string"
-                  },
                   "code": {
                     "type": "string"
                   }
                 },
-                "required": ["state", "code"],
+                "required": ["code"],
                 "additionalProperties": false
               }
             }
-          },
-          "required": true
+          }
         },
         "x-codeSamples": [
           {
@@ -3755,14 +3654,11 @@
             }
           },
           "400": {
-            "description": "BadRequest | McpUnsupportedOAuthError | InvalidRequestError",
+            "description": "McpUnsupportedOAuthError | InvalidRequestError",
             "content": {
               "application/json": {
                 "schema": {
                   "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
                     {
                       "$ref": "#/components/schemas/McpUnsupportedOAuthError"
                     },
@@ -10275,1226 +10171,6 @@
         ]
       }
     },
-    "/experimental/workspace/remote/host": {
-      "get": {
-        "tags": ["workspace"],
-        "operationId": "experimental.workspace.remote.host.list",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Paired remote hosts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RemoteV1PairedHostWire"
-                  },
-                  "description": "Paired remote hosts"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          }
-        },
-        "description": "List paired hosts and their workspace pairings available to the current instance.",
-        "summary": "List paired remote hosts",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remote.host.list({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/workspace/remote/pairing": {
-      "post": {
-        "tags": ["workspace"],
-        "operationId": "experimental.workspace.remote.pairing.create",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Remote pairing created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RemoteV1PairingWire"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Create or refresh a persisted device pairing and return its one-time device-bound selection binding.",
-        "summary": "Create remote pairing",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RemoteV1PairingCreatePayload"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remote.pairing.create({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/workspace/remote/pairing/{pairingID}": {
-      "delete": {
-        "tags": ["workspace"],
-        "operationId": "experimental.workspace.remote.pairing.revoke",
-        "parameters": [
-          {
-            "name": "pairingID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^pair_[a-zA-Z0-9._:-]+$"
-            },
-            "required": true
-          },
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Remote pairing revoked"
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Revoke one persisted remote device pairing.",
-        "summary": "Revoke remote pairing",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remote.pairing.revoke({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/workspace/remote/ssh/validate": {
-      "post": {
-        "tags": ["workspace"],
-        "operationId": "experimental.workspace.remote.ssh.validate",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "SSH workspace validated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "WorkspaceRemoteSshValidationError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRemoteSshValidationError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Validate an SSH workspace selection against an authenticated desktop supervisor target registration.",
-        "summary": "Validate SSH workspace",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSshInput"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remote.ssh.validate({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/workspace/remote/select": {
-      "post": {
-        "tags": ["workspace"],
-        "operationId": "experimental.workspace.remote.select",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Remote workspace selected",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/RemoteV1PairingRecordWire"
-                    },
-                    {
-                      "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                    }
-                  ],
-                  "description": "Remote workspace selected"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "WorkspaceRemoteSelectError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRemoteSelectError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Activate one persisted remote workspace selection with its exact device-bound nonce and code only after a fail-closed supervisor target is available; the binding is consumed on success.",
-        "summary": "Select remote workspace",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSelectInput"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remote.select({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/workspace/remote/target": {
-      "post": {
-        "tags": ["workspace"],
-        "operationId": "experimental.workspace.remote.target.register",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Remote workspace target registered"
-          },
-          "400": {
-            "description": "WorkspaceRemoteTargetError | BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/WorkspaceRemoteTargetError"
-                    },
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "WorkspaceRemoteTargetUnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceRemoteTargetUnauthorizedError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Authenticated desktop supervisor handoff that registers the exact pairing, host, workspace, and validated target.",
-        "summary": "Register remote workspace target",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceTargetPayload"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remote.target.register({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/remote/ssh/browse": {
-      "get": {
-        "tags": ["remote runtime"],
-        "operationId": "remote.ssh.browse",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 4096
-            },
-            "required": false
-          },
-          {
-            "name": "sshAuthority",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 3,
-              "maxLength": 320
-            },
-            "required": false
-          },
-          {
-            "name": "sshPort",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Remote folder listing",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "root": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 4096
-                    },
-                    "current": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 4096
-                    },
-                    "parent": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 4096
-                        },
-                        {
-                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                        }
-                      ]
-                    },
-                    "entries": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "name": {
-                            "type": "string",
-                            "maxLength": 256
-                          },
-                          "path": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 4096
-                          },
-                          "type": {
-                            "type": "string",
-                            "enum": ["directory", "file", "symlink", "other"]
-                          }
-                        },
-                        "required": ["name", "path", "type"],
-                        "additionalProperties": false
-                      },
-                      "maxItems": 200
-                    }
-                  },
-                  "required": ["root", "current", "entries"],
-                  "additionalProperties": false,
-                  "description": "Remote folder listing"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError1"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "ForbiddenError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForbiddenError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "ServiceUnavailableError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ServiceUnavailableError"
-                }
-              }
-            }
-          }
-        },
-        "description": "List bounded metadata for folders within the current authenticated instance directory or a strict key-backed SSH authority; an omitted path starts at that root.",
-        "summary": "Browse remote folders",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote.ssh.browse({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/remote/agent/prompt": {
-      "post": {
-        "tags": ["remote runtime"],
-        "operationId": "remote.agent.prompt",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 4096
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Selected agent CLI result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "output": {
-                      "type": "string",
-                      "maxLength": 65536
-                    },
-                    "status": {
-                      "type": "string",
-                      "enum": ["completed", "failed", "timed_out"]
-                    },
-                    "exitCode": {
-                      "anyOf": [
-                        {
-                          "type": "integer"
-                        },
-                        {
-                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                        }
-                      ]
-                    }
-                  },
-                  "required": ["output", "status"],
-                  "additionalProperties": false,
-                  "description": "Selected agent CLI result"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError1"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "ForbiddenError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForbiddenError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "ServiceUnavailableError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ServiceUnavailableError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Run the fixed Codex, OpenCode, or Claude Code CLI executable selected by the caller in a bounded folder within the current authenticated instance directory with bounded output and allowlisted configuration.",
-        "summary": "Run a selected agent CLI prompt",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "agent": {
-                    "type": "string",
-                    "enum": ["codex-cli", "opencode-cli", "claude-code"]
-                  },
-                  "prompt": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 32768,
-                    "pattern": "^[^\\0]*$"
-                  },
-                  "config": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "model": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "profile": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "sandbox": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "enum": ["read-only", "workspace-write", "danger-full-access"]
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "approval": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "enum": ["untrusted", "on-failure", "on-request", "never"]
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "permissionMode": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "enum": ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          }
-                        },
-                        "additionalProperties": false
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "required": ["agent", "prompt"],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote.agent.prompt({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/remote/agent/session": {
-      "post": {
-        "tags": ["remote runtime"],
-        "operationId": "remote.agent.session",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 4096
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Interactive remote agent session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ptyID": {
-                      "type": "string",
-                      "pattern": "^pty"
-                    },
-                    "directory": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 4096
-                    },
-                    "ticket": {
-                      "type": "string"
-                    },
-                    "expires_in": {
-                      "type": "integer",
-                      "exclusiveMinimum": 0
-                    }
-                  },
-                  "required": ["ptyID", "directory", "ticket", "expires_in"],
-                  "additionalProperties": false,
-                  "description": "Interactive remote agent session"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError1"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "ForbiddenError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForbiddenError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "ServiceUnavailableError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ServiceUnavailableError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Start the selected fixed agent CLI in a bounded remote folder and return a single-use PTY WebSocket ticket.",
-        "summary": "Open an interactive remote agent session",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "agent": {
-                    "type": "string",
-                    "enum": ["codex-cli", "opencode-cli", "claude-code"]
-                  },
-                  "config": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "model": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "profile": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "sandbox": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "enum": ["read-only", "workspace-write", "danger-full-access"]
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "approval": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "enum": ["untrusted", "on-failure", "on-request", "never"]
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "permissionMode": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "enum": ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          }
-                        },
-                        "additionalProperties": false
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "required": ["agent"],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote.agent.session({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/remote/agent/catalog": {
-      "get": {
-        "tags": ["remote runtime"],
-        "operationId": "remote.agent.catalog",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "agent",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": ["codex-cli", "opencode-cli", "claude-code"]
-            },
-            "required": true
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 4096
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Remote agent version and command catalog",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "agent": {
-                      "type": "string",
-                      "enum": ["codex-cli", "opencode-cli", "claude-code"]
-                    },
-                    "version": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 128,
-                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                    },
-                    "commands": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "name": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128,
-                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
-                          },
-                          "description": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 512,
-                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "agent": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128,
-                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "model": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 128,
-                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          },
-                          "subtask": {
-                            "anyOf": [
-                              {
-                                "type": "boolean"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          }
-                        },
-                        "required": ["name"],
-                        "additionalProperties": false
-                      },
-                      "maxItems": 256
-                    }
-                  },
-                  "required": ["agent", "version", "commands"],
-                  "additionalProperties": false,
-                  "description": "Remote agent version and command catalog"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError1"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "ForbiddenError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForbiddenError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "ServiceUnavailableError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ServiceUnavailableError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Run a fixed agent --version command and return bounded built-in and project-local command metadata without returning command templates.",
-        "summary": "List remote agent commands",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote.agent.catalog({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/api/health": {
       "get": {
         "tags": ["slopcode HttpApi"],
@@ -11795,7 +10471,7 @@
                       "$ref": "#/components/schemas/InvalidCursorError"
                     },
                     {
-                      "$ref": "#/components/schemas/InvalidRequestError3"
+                      "$ref": "#/components/schemas/InvalidRequestError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -11878,65 +10554,30 @@
                 "type": "object",
                 "properties": {
                   "id": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "pattern": "^ses"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string",
+                    "pattern": "^ses"
                   },
                   "agent": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   },
                   "model": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "providerID": {
-                            "type": "string"
-                          },
-                          "variant": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                              }
-                            ]
-                          }
-                        },
-                        "required": ["id", "providerID"],
-                        "additionalProperties": false
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
                       },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                      "providerID": {
+                        "type": "string"
+                      },
+                      "variant": {
+                        "type": "string"
                       }
-                    ]
+                    },
+                    "required": ["id", "providerID"],
+                    "additionalProperties": false
                   },
                   "location": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/LocationRef1"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/LocationRef"
                   }
                 },
                 "additionalProperties": false
@@ -12218,39 +10859,18 @@
                 "type": "object",
                 "properties": {
                   "id": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "pattern": "^msg_"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string",
+                    "pattern": "^msg_"
                   },
                   "prompt": {
                     "$ref": "#/components/schemas/Prompt"
                   },
                   "delivery": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "enum": ["steer", "queue"]
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string",
+                    "enum": ["steer", "queue"]
                   },
                   "resume": {
-                    "anyOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "boolean"
                   }
                 },
                 "required": ["prompt"],
@@ -13052,14 +11672,7 @@
                       "$ref": "#/components/schemas/LocationInfo"
                     },
                     "data": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/IntegrationInfo"
-                        },
-                        {
-                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                        }
-                      ]
+                      "$ref": "#/components/schemas/IntegrationInfo"
                     }
                   },
                   "required": ["location", "data"],
@@ -13144,7 +11757,7 @@
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/InvalidRequestError3"
+                      "$ref": "#/components/schemas/InvalidRequestError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -13177,14 +11790,7 @@
                     "type": "string"
                   },
                   "label": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": ["key"],
@@ -13264,7 +11870,7 @@
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/InvalidRequestError3"
+                      "$ref": "#/components/schemas/InvalidRequestError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -13303,14 +11909,7 @@
                     }
                   },
                   "label": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": ["methodID", "inputs"],
@@ -13786,7 +12385,7 @@
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/InvalidRequestError3"
+                      "$ref": "#/components/schemas/InvalidRequestError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -13816,14 +12415,7 @@
                 "type": "object",
                 "properties": {
                   "code": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   }
                 },
                 "additionalProperties": false
@@ -14320,14 +12912,7 @@
                     "$ref": "#/components/schemas/PermissionV2Reply"
                   },
                   "message": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": ["reply"],
@@ -15331,14 +13916,7 @@
                     "type": "string"
                   },
                   "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": ["strategy", "directory"],
@@ -15494,771 +14072,6 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.projectCopy.refresh({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/api/pty": {
-      "get": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.list",
-        "parameters": [
-          {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "directory": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "required": false,
-            "style": "deepObject",
-            "explode": true
-          }
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "location": {
-                      "$ref": "#/components/schemas/LocationInfo"
-                    },
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Pty"
-                      }
-                    }
-                  },
-                  "required": ["location", "data"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          }
-        },
-        "description": "List PTY sessions for a location, including exited sessions retained until removal.",
-        "summary": "List PTY sessions",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.list({\n  ...\n})"
-          }
-        ]
-      },
-      "post": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.create",
-        "parameters": [
-          {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "directory": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "required": false,
-            "style": "deepObject",
-            "explode": true
-          }
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "location": {
-                      "$ref": "#/components/schemas/LocationInfo"
-                    },
-                    "data": {
-                      "$ref": "#/components/schemas/Pty"
-                    }
-                  },
-                  "required": ["location", "data"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Create a pseudo-terminal session for a location.",
-        "summary": "Create PTY session",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "command": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "args": {
-                    "anyOf": [
-                      {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "cwd": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "title": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "env": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "additionalProperties": {
-                          "type": "string"
-                        }
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.create({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/api/pty/{ptyID}": {
-      "get": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.get",
-        "parameters": [
-          {
-            "name": "ptyID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^pty"
-            },
-            "required": true
-          },
-          {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "directory": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "required": false,
-            "style": "deepObject",
-            "explode": true
-          }
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "location": {
-                      "$ref": "#/components/schemas/LocationInfo"
-                    },
-                    "data": {
-                      "$ref": "#/components/schemas/Pty"
-                    }
-                  },
-                  "required": ["location", "data"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "PtyNotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PtyNotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Get one PTY session, including its exit code once exited.",
-        "summary": "Get PTY session",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.get({\n  ...\n})"
-          }
-        ]
-      },
-      "put": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.update",
-        "parameters": [
-          {
-            "name": "ptyID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^pty"
-            },
-            "required": true
-          },
-          {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "directory": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "required": false,
-            "style": "deepObject",
-            "explode": true
-          }
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "location": {
-                      "$ref": "#/components/schemas/LocationInfo"
-                    },
-                    "data": {
-                      "$ref": "#/components/schemas/Pty"
-                    }
-                  },
-                  "required": ["location", "data"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "PtyNotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PtyNotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Update the title or viewport size of one PTY session.",
-        "summary": "Update PTY session",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "title": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "size": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "rows": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0
-                          },
-                          "cols": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0
-                          }
-                        },
-                        "required": ["rows", "cols"],
-                        "additionalProperties": false
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": true
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.update({\n  ...\n})"
-          }
-        ]
-      },
-      "delete": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.remove",
-        "parameters": [
-          {
-            "name": "ptyID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^pty"
-            },
-            "required": true
-          },
-          {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "directory": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "required": false,
-            "style": "deepObject",
-            "explode": true
-          }
-        ],
-        "security": [],
-        "responses": {
-          "204": {
-            "description": "<No Content>"
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "PtyNotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PtyNotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Terminate and remove one PTY session.",
-        "summary": "Remove PTY session",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.remove({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/api/pty/{ptyID}/connect-token": {
-      "post": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.connectToken",
-        "parameters": [
-          {
-            "name": "ptyID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^pty"
-            },
-            "required": true
-          },
-          {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "type": "object",
-              "properties": {
-                "directory": {
-                  "type": "string"
-                },
-                "workspace": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
-            },
-            "required": false,
-            "style": "deepObject",
-            "explode": true
-          }
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "location": {
-                      "$ref": "#/components/schemas/LocationInfo"
-                    },
-                    "data": {
-                      "type": "object",
-                      "properties": {
-                        "ticket": {
-                          "type": "string"
-                        },
-                        "expires_in": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0
-                        }
-                      },
-                      "required": ["ticket", "expires_in"],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": ["location", "data"],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "ForbiddenError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForbiddenError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "PtyNotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PtyNotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Create a short-lived single-use ticket for opening a PTY WebSocket connection.",
-        "summary": "Create PTY WebSocket token",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.connectToken({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/api/pty/{ptyID}/connect": {
-      "get": {
-        "tags": ["pty"],
-        "operationId": "v2.pty.connect",
-        "parameters": [
-          {
-            "name": "ptyID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^pty"
-            },
-            "required": true
-          },
-          {
-            "in": "query",
-            "name": "location[directory]",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "location[workspace]",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "cursor",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "ticket",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestError"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UnauthorizedError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnauthorizedError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "ForbiddenError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForbiddenError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "PtyNotFoundError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PtyNotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Establish a WebSocket connection streaming PTY output and accepting terminal input.",
-        "summary": "Connect to PTY session",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.pty.connect({\n  ...\n})"
           }
         ]
       }
@@ -22676,17 +20489,6 @@
         },
         "additionalProperties": false
       },
-      "effect_HttpApiError_Forbidden": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["Forbidden"]
-          }
-        },
-        "required": ["_tag"],
-        "additionalProperties": false
-      },
       "Model": {
         "type": "object",
         "properties": {
@@ -24680,162 +22482,6 @@
         "required": ["name", "data"],
         "additionalProperties": false
       },
-      "WorkspaceRemoteSshValidationError": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "enum": ["WorkspaceRemoteSshValidationError"]
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["name", "data"],
-        "additionalProperties": false
-      },
-      "WorkspaceRemoteSelectError": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "enum": ["WorkspaceRemoteSelectError"]
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["name", "data"],
-        "additionalProperties": false
-      },
-      "WorkspaceRemoteTargetError": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "enum": ["WorkspaceRemoteTargetError"]
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["name", "data"],
-        "additionalProperties": false
-      },
-      "WorkspaceRemoteTargetUnauthorizedError": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "enum": ["WorkspaceRemoteTargetUnauthorizedError"]
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["name", "data"],
-        "additionalProperties": false
-      },
-      "InvalidRequestError1": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["InvalidRequestError"]
-          },
-          "message": {
-            "type": "string"
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          },
-          "field": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          }
-        },
-        "required": ["_tag", "message"],
-        "additionalProperties": false
-      },
-      "ForbiddenError": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["ForbiddenError"]
-          },
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": ["_tag", "message"],
-        "additionalProperties": false
-      },
-      "ServiceUnavailableError": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["ServiceUnavailableError"]
-          },
-          "message": {
-            "type": "string"
-          },
-          "service": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          }
-        },
-        "required": ["_tag", "message"],
-        "additionalProperties": false
-      },
       "UnauthorizedError": {
         "type": "object",
         "properties": {
@@ -24863,24 +22509,10 @@
             "type": "object",
             "properties": {
               "previous": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "string"
               },
               "next": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "string"
               }
             },
             "additionalProperties": false
@@ -24898,40 +22530,6 @@
           },
           "message": {
             "type": "string"
-          }
-        },
-        "required": ["_tag", "message"],
-        "additionalProperties": false
-      },
-      "InvalidRequestError3": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["InvalidRequestError"]
-          },
-          "message": {
-            "type": "string"
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          },
-          "field": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
           }
         },
         "required": ["_tag", "message"],
@@ -24965,14 +22563,24 @@
             "type": "string"
           },
           "resource": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "message"],
+        "additionalProperties": false
+      },
+      "ServiceUnavailableError": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["ServiceUnavailableError"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
           }
         },
         "required": ["_tag", "message"],
@@ -24989,14 +22597,7 @@
             "type": "string"
           },
           "ref": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           }
         },
         "required": ["_tag", "message"],
@@ -25015,24 +22616,10 @@
             "type": "object",
             "properties": {
               "previous": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "string"
               },
               "next": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "string"
               }
             },
             "additionalProperties": false
@@ -25072,14 +22659,7 @@
                 "type": "string"
               },
               "forceRequired": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "boolean"
               }
             },
             "required": ["message"],
@@ -25087,6 +22667,17 @@
           }
         },
         "required": ["name", "data"],
+        "additionalProperties": false
+      },
+      "effect_HttpApiError_Forbidden": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["Forbidden"]
+          }
+        },
+        "required": ["_tag"],
         "additionalProperties": false
       },
       "Event.tui.prompt.append": {
@@ -28240,253 +25831,6 @@
         "required": ["action", "effect", "resource"],
         "additionalProperties": false
       },
-      "RemoteV1Version": {
-        "type": "string",
-        "enum": ["v1"]
-      },
-      "RemoteV1Device": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^dev_[a-zA-Z0-9._:-]+$"
-          },
-          "name": {
-            "type": "string"
-          },
-          "platform": {
-            "type": "string"
-          },
-          "arch": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        },
-        "required": ["id", "name", "platform", "arch", "version"],
-        "additionalProperties": false
-      },
-      "RemoteV1Mode": {
-        "type": "string",
-        "enum": ["local", "ssh"]
-      },
-      "RemoteV1Host": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^hst_[a-zA-Z0-9._:-]+$"
-          },
-          "name": {
-            "type": "string"
-          },
-          "platform": {
-            "type": "string"
-          },
-          "arch": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          },
-          "mode": {
-            "$ref": "#/components/schemas/RemoteV1Mode"
-          }
-        },
-        "required": ["id", "name", "platform", "arch", "version", "mode"],
-        "additionalProperties": false
-      },
-      "RemoteV1AgentMode": {
-        "type": "string",
-        "enum": ["local-slopcode", "codex-cli", "opencode-cli", "claude-code"]
-      },
-      "RemoteV1SshProfile": {
-        "type": "object",
-        "properties": {
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 65535
-          },
-          "user": {
-            "type": "string"
-          }
-        },
-        "required": ["host", "port", "user"],
-        "additionalProperties": false
-      },
-      "RemoteV1WorkspaceInput": {
-        "anyOf": [
-          {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "pattern": "^wrk"
-              },
-              "name": {
-                "type": "string"
-              },
-              "mode": {
-                "type": "string",
-                "enum": ["local"]
-              },
-              "directory": {
-                "type": "string"
-              }
-            },
-            "required": ["id", "name", "mode", "directory"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "pattern": "^wrk"
-              },
-              "name": {
-                "type": "string"
-              },
-              "mode": {
-                "type": "string",
-                "enum": ["ssh"]
-              },
-              "agent": {
-                "$ref": "#/components/schemas/RemoteV1AgentMode"
-              },
-              "directory": {
-                "type": "string"
-              },
-              "remoteDirectory": {
-                "type": "string"
-              },
-              "ssh": {
-                "$ref": "#/components/schemas/RemoteV1SshProfile"
-              }
-            },
-            "required": ["id", "name", "mode", "directory", "remoteDirectory", "ssh"],
-            "additionalProperties": false
-          }
-        ]
-      },
-      "RemoteV1Capability": {
-        "type": "object",
-        "properties": {
-          "fs": {
-            "type": "boolean"
-          },
-          "command": {
-            "type": "boolean"
-          },
-          "pty": {
-            "type": "boolean"
-          },
-          "events": {
-            "type": "boolean"
-          },
-          "localWorkspace": {
-            "type": "boolean"
-          },
-          "sshWorkspace": {
-            "type": "boolean"
-          }
-        },
-        "required": ["fs", "command", "pty", "events", "localWorkspace", "sshWorkspace"],
-        "additionalProperties": false
-      },
-      "RemoteV1PairingRecordWire": {
-        "type": "object",
-        "properties": {
-          "version": {
-            "$ref": "#/components/schemas/RemoteV1Version"
-          },
-          "id": {
-            "type": "string",
-            "pattern": "^pair_[a-zA-Z0-9._:-]+$"
-          },
-          "device": {
-            "$ref": "#/components/schemas/RemoteV1Device"
-          },
-          "host": {
-            "$ref": "#/components/schemas/RemoteV1Host"
-          },
-          "workspace": {
-            "$ref": "#/components/schemas/RemoteV1WorkspaceInput"
-          },
-          "capability": {
-            "$ref": "#/components/schemas/RemoteV1Capability"
-          }
-        },
-        "required": ["version", "id", "device", "host", "workspace", "capability"],
-        "additionalProperties": false
-      },
-      "RemoteV1TargetHeadersInput": {
-        "type": "object",
-        "properties": {
-          "x-slopcode-remote-capability": {
-            "type": "string"
-          }
-        },
-        "required": ["x-slopcode-remote-capability"],
-        "additionalProperties": false
-      },
-      "RemoteV1TargetInput": {
-        "anyOf": [
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["local"]
-              },
-              "directory": {
-                "type": "string"
-              }
-            },
-            "required": ["type", "directory"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["remote"]
-              },
-              "url": {
-                "type": "string"
-              },
-              "headers": {
-                "$ref": "#/components/schemas/RemoteV1TargetHeadersInput"
-              }
-            },
-            "required": ["type", "url"],
-            "additionalProperties": false
-          }
-        ]
-      },
-      "RemoteV1WorkspaceTargetPayload": {
-        "type": "object",
-        "properties": {
-          "pairingID": {
-            "type": "string",
-            "pattern": "^pair_[a-zA-Z0-9._:-]+$"
-          },
-          "workspace": {
-            "$ref": "#/components/schemas/RemoteV1WorkspaceInput"
-          },
-          "target": {
-            "$ref": "#/components/schemas/RemoteV1TargetInput"
-          }
-        },
-        "required": ["pairingID", "workspace", "target"],
-        "additionalProperties": false
-      },
       "MemoryScope": {
         "type": "string",
         "enum": ["project", "global"]
@@ -28535,146 +25879,6 @@
           "additionalProperties": false
         }
       },
-      "RemoteV1PairedHostWire": {
-        "type": "object",
-        "properties": {
-          "host": {
-            "$ref": "#/components/schemas/RemoteV1Host"
-          },
-          "pairings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RemoteV1PairingRecordWire"
-            }
-          }
-        },
-        "required": ["host", "pairings"],
-        "additionalProperties": false
-      },
-      "RemoteV1PairingCreatePayload": {
-        "type": "object",
-        "properties": {
-          "device": {
-            "$ref": "#/components/schemas/RemoteV1Device"
-          },
-          "workspace": {
-            "$ref": "#/components/schemas/RemoteV1WorkspaceInput"
-          },
-          "capability": {
-            "$ref": "#/components/schemas/RemoteV1Capability"
-          }
-        },
-        "required": ["device", "workspace"],
-        "additionalProperties": false
-      },
-      "RemoteV1PairingSelectionWire": {
-        "type": "object",
-        "properties": {
-          "nonce": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{16,128}$"
-          },
-          "deviceID": {
-            "type": "string",
-            "pattern": "^dev_[a-zA-Z0-9._:-]+$"
-          },
-          "code": {
-            "type": "string",
-            "pattern": "^[A-Z0-9]{6}$"
-          }
-        },
-        "required": ["nonce", "deviceID", "code"],
-        "additionalProperties": false
-      },
-      "RemoteV1PairingWire": {
-        "type": "object",
-        "properties": {
-          "version": {
-            "$ref": "#/components/schemas/RemoteV1Version"
-          },
-          "id": {
-            "type": "string",
-            "pattern": "^pair_[a-zA-Z0-9._:-]+$"
-          },
-          "code": {
-            "type": "string",
-            "pattern": "^[A-Z0-9]{6}$"
-          },
-          "selection": {
-            "$ref": "#/components/schemas/RemoteV1PairingSelectionWire"
-          },
-          "device": {
-            "$ref": "#/components/schemas/RemoteV1Device"
-          },
-          "host": {
-            "$ref": "#/components/schemas/RemoteV1Host"
-          },
-          "workspace": {
-            "$ref": "#/components/schemas/RemoteV1WorkspaceInput"
-          },
-          "capability": {
-            "$ref": "#/components/schemas/RemoteV1Capability"
-          }
-        },
-        "required": ["version", "id", "code", "selection", "device", "host", "workspace", "capability"],
-        "additionalProperties": false
-      },
-      "RemoteV1WorkspaceSshInput": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^wrk"
-          },
-          "name": {
-            "type": "string"
-          },
-          "mode": {
-            "type": "string",
-            "enum": ["ssh"]
-          },
-          "agent": {
-            "$ref": "#/components/schemas/RemoteV1AgentMode"
-          },
-          "directory": {
-            "type": "string"
-          },
-          "remoteDirectory": {
-            "type": "string"
-          },
-          "ssh": {
-            "$ref": "#/components/schemas/RemoteV1SshProfile"
-          }
-        },
-        "required": ["id", "name", "mode", "directory", "remoteDirectory", "ssh"],
-        "additionalProperties": false
-      },
-      "RemoteV1WorkspaceSsh": {
-        "type": "null"
-      },
-      "RemoteV1WorkspaceSelectInput": {
-        "type": "object",
-        "properties": {
-          "pairingID": {
-            "type": "string",
-            "pattern": "^pair_[a-zA-Z0-9._:-]+$"
-          },
-          "deviceID": {
-            "type": "string",
-            "pattern": "^dev_[a-zA-Z0-9._:-]+$"
-          },
-          "selectionNonce": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{16,128}$"
-          },
-          "selectionCode": {
-            "type": "string",
-            "pattern": "^[A-Z0-9]{6}$"
-          }
-        },
-        "required": ["pairingID", "deviceID", "selectionNonce", "selectionCode"],
-        "additionalProperties": false
-      },
       "LocationInfo": {
         "type": "object",
         "properties": {
@@ -28682,15 +25886,8 @@
             "type": "string"
           },
           "workspaceID": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^wrk"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string",
+            "pattern": "^wrk"
           },
           "project": {
             "type": "object",
@@ -28742,34 +25939,20 @@
             "type": "string"
           },
           "model": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "providerID": {
-                    "type": "string"
-                  },
-                  "variant": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "required": ["id", "providerID"],
-                "additionalProperties": false
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
               },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+              "providerID": {
+                "type": "string"
+              },
+              "variant": {
+                "type": "string"
               }
-            ]
+            },
+            "required": ["id", "providerID"],
+            "additionalProperties": false
           },
           "request": {
             "type": "object",
@@ -28788,24 +25971,10 @@
             "additionalProperties": false
           },
           "system": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "mode": {
             "type": "string",
@@ -28823,49 +25992,18 @@
               {
                 "type": "string",
                 "enum": ["primary", "secondary", "accent", "success", "warning", "error", "info"]
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
               }
             ]
           },
           "steps": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "exclusiveMinimum": 0
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "integer",
+            "exclusiveMinimum": 0
           },
           "permissions": {
             "$ref": "#/components/schemas/PermissionV2Ruleset"
           }
         },
         "required": ["id", "request", "mode", "hidden", "permissions"],
-        "additionalProperties": false
-      },
-      "LocationRef1": {
-        "type": "object",
-        "properties": {
-          "directory": {
-            "type": "string"
-          },
-          "workspaceID": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^wrk"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          }
-        },
-        "required": ["directory"],
         "additionalProperties": false
       },
       "SessionV2Info": {
@@ -28883,44 +26021,23 @@
             "type": "string"
           },
           "agent": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "model": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "providerID": {
-                    "type": "string"
-                  },
-                  "variant": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "required": ["id", "providerID"],
-                "additionalProperties": false
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
               },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+              "providerID": {
+                "type": "string"
+              },
+              "variant": {
+                "type": "string"
               }
-            ]
+            },
+            "required": ["id", "providerID"],
+            "additionalProperties": false
           },
           "cost": {
             "type": "number"
@@ -28964,14 +26081,7 @@
                 "type": "number"
               },
               "archived": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "number"
               }
             },
             "required": ["created", "updated"],
@@ -28981,17 +26091,10 @@
             "type": "string"
           },
           "location": {
-            "$ref": "#/components/schemas/LocationRef1"
+            "$ref": "#/components/schemas/LocationRef"
           },
           "subpath": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           }
         },
         "required": ["id", "projectID", "cost", "tokens", "time", "title", "location"],
@@ -29056,15 +26159,8 @@
             "type": "number"
           },
           "promotedSeq": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": ["admittedSeq", "id", "sessionID", "prompt", "delivery", "timeCreated"],
@@ -29078,14 +26174,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29116,14 +26205,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29149,14 +26231,7 @@
                 "type": "string"
               },
               "variant": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "string"
               }
             },
             "required": ["id", "providerID"],
@@ -29174,14 +26249,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29197,30 +26265,16 @@
             "type": "string"
           },
           "files": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/PromptFileAttachment"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptFileAttachment"
+            }
           },
           "agents": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/PromptAgentAttachment"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptAgentAttachment"
+            }
           },
           "type": {
             "type": "string",
@@ -29238,14 +26292,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29280,14 +26327,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29318,14 +26358,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29334,14 +26367,7 @@
                 "type": "number"
               },
               "completed": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "number"
               }
             },
             "required": ["created"],
@@ -29395,17 +26421,10 @@
             "type": "string"
           },
           "providerMetadata": {
-            "anyOf": [
-              {
-                "type": "object",
-                "additionalProperties": {
-                  "type": "object"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object",
+            "additionalProperties": {
+              "type": "object"
+            }
           }
         },
         "required": ["type", "id", "text"],
@@ -29466,17 +26485,10 @@
             "type": "object"
           },
           "attachments": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/PromptFileAttachment"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptFileAttachment"
+            }
           },
           "content": {
             "type": "array",
@@ -29492,29 +26504,15 @@
             }
           },
           "outputPaths": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "structured": {
             "type": "object"
           },
-          "result": {
-            "anyOf": [
-              {},
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          }
+          "result": {}
         },
         "required": ["status", "input", "content", "structured"],
         "additionalProperties": false
@@ -29548,14 +26546,7 @@
           "error": {
             "$ref": "#/components/schemas/SessionErrorUnknown"
           },
-          "result": {
-            "anyOf": [
-              {},
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          }
+          "result": {}
         },
         "required": ["status", "input", "content", "structured", "error"],
         "additionalProperties": false
@@ -29574,47 +26565,26 @@
             "type": "string"
           },
           "provider": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "executed": {
-                    "type": "boolean"
-                  },
-                  "metadata": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "additionalProperties": {
-                          "type": "object"
-                        }
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "resultMetadata": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "additionalProperties": {
-                          "type": "object"
-                        }
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "required": ["executed"],
-                "additionalProperties": false
+            "type": "object",
+            "properties": {
+              "executed": {
+                "type": "boolean"
               },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object"
+                }
+              },
+              "resultMetadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object"
+                }
               }
-            ]
+            },
+            "required": ["executed"],
+            "additionalProperties": false
           },
           "state": {
             "anyOf": [
@@ -29639,34 +26609,13 @@
                 "type": "number"
               },
               "ran": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "number"
               },
               "completed": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "number"
               },
               "pruned": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "number"
               }
             },
             "required": ["created"],
@@ -29684,14 +26633,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -29700,14 +26642,7 @@
                 "type": "number"
               },
               "completed": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "number"
               }
             },
             "required": ["created"],
@@ -29730,14 +26665,7 @@
                 "type": "string"
               },
               "variant": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                  }
-                ]
+                "type": "string"
               }
             },
             "required": ["id", "providerID"],
@@ -29760,103 +26688,54 @@
             }
           },
           "snapshot": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "start": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  },
-                  "end": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
-          },
-          "finish": {
-            "anyOf": [
-              {
+            "type": "object",
+            "properties": {
+              "start": {
                 "type": "string"
               },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+              "end": {
+                "type": "string"
               }
-            ]
+            },
+            "additionalProperties": false
+          },
+          "finish": {
+            "type": "string"
           },
           "cost": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "number"
           },
           "tokens": {
-            "anyOf": [
-              {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              },
+              "reasoning": {
+                "type": "number"
+              },
+              "cache": {
                 "type": "object",
                 "properties": {
-                  "input": {
+                  "read": {
                     "type": "number"
                   },
-                  "output": {
+                  "write": {
                     "type": "number"
-                  },
-                  "reasoning": {
-                    "type": "number"
-                  },
-                  "cache": {
-                    "type": "object",
-                    "properties": {
-                      "read": {
-                        "type": "number"
-                      },
-                      "write": {
-                        "type": "number"
-                      }
-                    },
-                    "required": ["read", "write"],
-                    "additionalProperties": false
                   }
                 },
-                "required": ["input", "output", "reasoning", "cache"],
+                "required": ["read", "write"],
                 "additionalProperties": false
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
               }
-            ]
+            },
+            "required": ["input", "output", "reasoning", "cache"],
+            "additionalProperties": false
           },
           "error": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SessionErrorUnknown"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "$ref": "#/components/schemas/SessionErrorUnknown"
           }
         },
         "required": ["id", "time", "type", "agent", "model", "content"],
@@ -29884,14 +26763,7 @@
             "pattern": "^msg_"
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "time": {
             "type": "object",
@@ -30013,24 +26885,10 @@
                     "type": "string"
                   },
                   "url": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   },
                   "settings": {
-                    "anyOf": [
-                      {
-                        "type": "object"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "object"
                   }
                 },
                 "required": ["type", "package"],
@@ -30044,14 +26902,7 @@
                     "enum": ["native"]
                   },
                   "url": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
+                    "type": "string"
                   },
                   "settings": {
                     "type": "object"
@@ -30113,24 +26964,10 @@
             "type": "string"
           },
           "placeholder": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "when": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IntegrationWhen"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "$ref": "#/components/schemas/IntegrationWhen"
           }
         },
         "required": ["type", "key", "message"],
@@ -30161,14 +26998,7 @@
                   "type": "string"
                 },
                 "hint": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                    }
-                  ]
+                  "type": "string"
                 }
               },
               "required": ["label", "value"],
@@ -30176,14 +27006,7 @@
             }
           },
           "when": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IntegrationWhen"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "$ref": "#/components/schemas/IntegrationWhen"
           }
         },
         "required": ["type", "key", "message", "options"],
@@ -30203,24 +27026,17 @@
             "type": "string"
           },
           "prompts": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/IntegrationTextPrompt"
-                    },
-                    {
-                      "$ref": "#/components/schemas/IntegrationSelectPrompt"
-                    }
-                  ]
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/IntegrationTextPrompt"
+                },
+                {
+                  "$ref": "#/components/schemas/IntegrationSelectPrompt"
                 }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+              ]
+            }
           }
         },
         "required": ["id", "type", "label"],
@@ -30234,14 +27050,7 @@
             "enum": ["key"]
           },
           "label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           }
         },
         "required": ["type"],
@@ -30434,37 +27243,16 @@
             }
           },
           "save": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "metadata": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "object"
           },
           "source": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PermissionV2Source"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "$ref": "#/components/schemas/PermissionV2Source"
           }
         },
         "required": ["id", "sessionID", "action", "resources"],
@@ -30516,64 +27304,29 @@
             "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "agent": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "model": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "providerID": {
-                    "type": "string"
-                  },
-                  "variant": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-                      }
-                    ]
-                  }
-                },
-                "required": ["id", "providerID"],
-                "additionalProperties": false
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
               },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+              "providerID": {
+                "type": "string"
+              },
+              "variant": {
+                "type": "string"
               }
-            ]
+            },
+            "required": ["id", "providerID"],
+            "additionalProperties": false
           },
           "subtask": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "boolean"
           }
         },
         "required": ["name", "template"],
@@ -30586,24 +27339,10 @@
             "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "slash": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "boolean"
           },
           "location": {
             "type": "string"
@@ -30634,14 +27373,7 @@
             "description": "Questions to ask"
           },
           "tool": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/QuestionV2Tool"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "$ref": "#/components/schemas/QuestionV2Tool"
           }
         },
         "required": ["id", "sessionID", "questions"],
@@ -30672,24 +27404,10 @@
             "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "hidden": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "boolean"
           }
         },
         "required": ["type", "path"],
@@ -30706,34 +27424,13 @@
             "type": "string"
           },
           "branch": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "hidden": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "boolean"
           }
         },
         "required": ["type", "repository"],
@@ -30749,24 +27446,10 @@
             "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "string"
           },
           "hidden": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
-              }
-            ]
+            "type": "boolean"
           },
           "source": {
             "anyOf": [
@@ -34258,10 +30941,6 @@
       "description": "Global server routes."
     },
     {
-      "name": "remote supervisor",
-      "description": "Authenticated desktop supervisor handoff routes."
-    },
-    {
       "name": "event",
       "description": "Instance event stream route."
     },
@@ -34330,10 +31009,6 @@
       "description": "Experimental HttpApi workspace routes."
     },
     {
-      "name": "remote runtime",
-      "description": "Authenticated runtime endpoints for remote folder browsing, agent prompts, and command catalogs."
-    },
-    {
       "name": "slopcode HttpApi",
       "description": "Experimental HttpApi surface for selected instance routes."
     },
@@ -34400,10 +31075,6 @@
     {
       "name": "projectCopy",
       "description": "Project copy management routes."
-    },
-    {
-      "name": "pty",
-      "description": "Experimental location-scoped PTY routes."
     },
     {
       "name": "pty",

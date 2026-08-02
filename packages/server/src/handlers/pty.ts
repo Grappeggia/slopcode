@@ -20,7 +20,8 @@ function missing(ptyID: string) {
 
 const prepareCreate = (input: typeof Pty.CreateInput.Type, directory: string): Pty.PreparedCreate => ({
   command:
-    input.command || (process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : process.env.SHELL || "/bin/sh"),
+    input.command ||
+    (process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : process.env.SHELL || "/bin/sh"),
   args: input.args ? [...input.args] : [],
   cwd: directory,
   title: input.title,
@@ -36,8 +37,7 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
     const tickets = yield* PtyTicket.Service
     const toFrame = (data: string | Uint8Array | ArrayBuffer) =>
       typeof data === "string" ? data : data instanceof Uint8Array ? data : new Uint8Array(data)
-    const toMessage = (data: string | Uint8Array) =>
-      typeof data === "string" ? data : new Uint8Array(data).slice().buffer
+    const toMessage = (data: string | Uint8Array) => (typeof data === "string" ? data : new Uint8Array(data).slice().buffer)
 
     const pty = Effect.fn("PtyHandler.pty")(function* <A, E>(effect: Effect.Effect<A, E, Pty.Service>) {
       return yield* effect
@@ -57,11 +57,9 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
       .handle(
         "pty.get",
         Effect.fn(function* (ctx) {
-          return yield* response(
-            pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
-              Effect.catchTag("Pty.NotFoundError", () => Effect.fail(missing(ctx.params.ptyID))),
-            ),
-          )
+          return yield* response(pty(Pty.Service.use((service) => service.get(ctx.params.ptyID))).pipe(
+            Effect.catchTag("Pty.NotFoundError", () => Effect.fail(missing(ctx.params.ptyID))),
+          ))
         }),
       )
       .handle(
@@ -135,33 +133,25 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
               : undefined
           const socket = yield* Effect.orDie(ctx.request.upgrade)
           const write = yield* socket.writer
-          const handler = yield* pty(
-            Pty.Service.use((service) =>
-              service.connect(
-                ctx.params.ptyID,
-                {
-                  get readyState() {
-                    return 1
-                  },
-                  send(data) {
-                    Effect.runFork(write(toFrame(data)).pipe(Effect.catch(() => Effect.void)))
-                  },
-                  close(code?: number, reason?: string) {
-                    Effect.runFork(write(new Socket.CloseEvent(code, reason)).pipe(Effect.catch(() => Effect.void)))
-                  },
-                },
-                cursor,
-              ),
-            ),
-          ).pipe(Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(undefined)))
+          const handler = yield* pty(Pty.Service.use((service) => service.connect(ctx.params.ptyID, {
+            get readyState() {
+              return 1
+            },
+            send(data) {
+              Effect.runFork(write(toFrame(data)).pipe(Effect.catch(() => Effect.void)))
+            },
+            close(code?: number, reason?: string) {
+              Effect.runFork(write(new Socket.CloseEvent(code, reason)).pipe(Effect.catch(() => Effect.void)))
+            },
+          }, cursor))).pipe(
+            Effect.catchTag("Pty.NotFoundError", () => Effect.succeed(undefined)),
+          )
           if (!handler) return HttpServerResponse.empty()
-          yield* socket
-            .runRaw((message) => handler.onMessage(toMessage(message)))
-            .pipe(
-              Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
-              Effect.ensuring(Effect.sync(handler.onClose)),
-              Effect.orDie,
-            )
+          yield* socket.runRaw((message) => handler.onMessage(toMessage(message))).pipe(
+            Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
+            Effect.ensuring(Effect.sync(handler.onClose)),
+            Effect.orDie,
+          )
           return HttpServerResponse.empty()
         }),
       )

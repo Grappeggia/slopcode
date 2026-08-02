@@ -20,9 +20,11 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { getRelativeTime } from "@/utils/time"
 import {
   commandPaletteEntries,
+  createServerFileSearch,
   createServerSessionSearch,
   filePaletteEntries,
   searchPaletteEntries,
+  selectPaletteFile,
   selectPaletteSession,
   uniquePaletteEntries,
   type PaletteEntry,
@@ -262,13 +264,17 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
   )
 }
 
-export function DialogHomeCommandPalette(props: { server: ServerConnection.Any }) {
+export function DialogHomeCommandPalette(props: {
+  server: ServerConnection.Any
+  navigateOnServer?: (server: ServerConnection.Key, href: string) => void
+}) {
   const command = useCommand()
   const language = useLanguage()
   const dialog = useDialog()
   const navigate = useNavigate()
   const global = useGlobal()
   const appTabs = useTabs()
+  const servers = useServer()
   const server = ServerConnection.key(props.server)
   const serverCtx = global.createServerCtx(props.server)
   const state = { cleanup: undefined as (() => void) | void, committed: false }
@@ -286,6 +292,17 @@ export function DialogHomeCommandPalette(props: { server: ServerConnection.Any }
     untitled: () => language.t("command.session.new"),
     category: () => language.t("command.category.session"),
   })
+  const files = createServerFileSearch({
+    server,
+    opened: serverCtx.projects.list,
+    stored: () => serverCtx.sync.data.project,
+    load: (directory, query, limit, signal) =>
+      serverCtx.sdk
+        .createClient({ directory, signal, throwOnError: true })
+        .find.files({ query, dirs: "false", type: "file", limit })
+        .then((result) => result.data ?? []),
+    category: () => language.t("palette.group.files"),
+  })
 
   const items = async (text: string) => {
     const query = text.trim()
@@ -296,7 +313,12 @@ export function DialogHomeCommandPalette(props: { server: ServerConnection.Any }
     return searchPaletteEntries({
       query,
       commands: commands.list(),
-      searchFiles: async () => [],
+      searchFileEntries: (search) =>
+        files.search(search).catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") return []
+          setFailure(language.t("toast.file.listFailed.title"))
+          return []
+        }),
       searchSessions: (search) =>
         sessions.search(search).catch((error) => {
           if (error instanceof DOMException && error.name === "AbortError") return []
@@ -323,10 +345,21 @@ export function DialogHomeCommandPalette(props: { server: ServerConnection.Any }
       item.option?.onSelect?.("palette")
       return
     }
+    if (item.type === "file") {
+      selectPaletteFile({
+        entry: item,
+        projects: serverCtx.projects,
+        activate: servers.setActive,
+        navigate,
+        navigateOnServer: props.navigateOnServer,
+      })
+      return
+    }
     selectPaletteSession({ entry: item, tabs: appTabs, projects: serverCtx.projects, navigate })
   }
 
   onCleanup(() => {
+    files.cancel()
     sessions.cancel()
     if (state.committed) return
     state.cleanup?.()
@@ -347,6 +380,7 @@ export function DialogHomeCommandPalette(props: { server: ServerConnection.Any }
         items={items}
         key={(item) => item.id}
         filterKeys={["title", "description", "category"]}
+        skipFilter={(item) => item.type === "file"}
         groupBy={grouped() ? (item) => item.category : () => ""}
         onMove={handleMove}
         onSelect={handleSelect}
@@ -364,13 +398,16 @@ function PaletteEntryRow(props: { item: Entry; language: ReturnType<typeof useLa
         <div class="w-full flex items-center justify-between rounded-md pl-1">
           <div class="flex items-center gap-x-3 grow min-w-0">
             <FileIcon node={{ path: props.item.path ?? "", type: "file" }} class="shrink-0 size-4" />
-            <div class="flex items-center text-14-regular">
+            <div class="flex items-center text-14-regular min-w-0">
               <span class="text-text-weak whitespace-nowrap overflow-hidden overflow-ellipsis truncate min-w-0">
                 {getDirectory(props.item.path ?? "")}
               </span>
               <span class="text-text-strong whitespace-nowrap">{getFilename(props.item.path ?? "")}</span>
             </div>
           </div>
+          <Show when={props.item.description}>
+            <span class="text-12-regular text-text-weak whitespace-nowrap ml-2">{props.item.description}</span>
+          </Show>
         </div>
       }
     >

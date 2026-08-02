@@ -37,6 +37,8 @@ describe("android bridge capability detection", () => {
             notifications: true,
             deepLinks: true,
             remoteTransport: true,
+            backgroundExecution: true,
+            remoteJobs: true,
           }
         }
         return null
@@ -49,6 +51,8 @@ describe("android bridge capability detection", () => {
       notifications: true,
       deepLinks: true,
       remoteTransport: false,
+      backgroundExecution: true,
+      remoteJobs: true,
     })
   })
 
@@ -59,6 +63,8 @@ describe("android bridge capability detection", () => {
       notifications: false,
       deepLinks: false,
       remoteTransport: false,
+      backgroundExecution: false,
+      remoteJobs: false,
     })
   })
 })
@@ -88,9 +94,7 @@ describe("android bridge parsing helpers", () => {
         nonce,
       ),
     ).toEqual(["slopcode://new-session?directory=/a&prompt=hi"])
-    expect(
-      parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }), nonce),
-    ).toEqual([])
+    expect(parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }), nonce)).toEqual([])
     expect(
       parseDeepLinkMessage(
         JSON.stringify({

@@ -1,7 +1,18 @@
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { bakedRemoteCommandCatalog, fetchRemoteAgentCatalog } from "./remote-commands"
 import { normalizeHttpsUrl, type RemoteAgent } from "./remote-workspace-state"
 import type { RemoteCommandCatalog } from "./remote-workspace-state"
+import {
+  remoteJobResultStatus,
+  remoteJobStatusLabel,
+  parseRemoteCommandPreview,
+  parseRemoteReview,
+  type AndroidRemoteJobs,
+  type RemoteJob,
+  type RemoteJobAction,
+  type RemoteJobActionPayload,
+  type RemoteReview,
+} from "./remote-jobs"
 
 type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>
 
@@ -29,6 +40,8 @@ export type RemoteAgentResult = {
   output: string
   status: RemoteAgentStatus
   exitCode?: number
+  commandPreview?: RemoteJob["commandPreview"]
+  review?: RemoteReview
 }
 export type CodexCliStatus = RemoteAgentStatus
 export type CodexCliResult = RemoteAgentResult
@@ -210,10 +223,7 @@ function connection(input: Omit<RemoteAgentPromptInput, "prompt">) {
 }
 
 function terminalSession(value: unknown): RemoteAgentTerminalSession | undefined {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key))
-  )
+  if (!isRecord(value) || Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key)))
     return
   const ptyID = text(value.ptyID, 256)
   const remoteDirectory = directory(value.directory)
@@ -247,8 +257,7 @@ export function remoteAgentTerminalUrl(
   endpoint.searchParams.set("directory", session.directory)
   endpoint.searchParams.set("cursor", "-1")
   endpoint.searchParams.set("ticket", session.ticket)
-  if (credentials?.password)
-    endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
+  if (credentials?.password) endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
   return endpoint.toString()
 }
 
@@ -259,13 +268,22 @@ export function parseRemoteAgentCommand(value: string) {
 }
 
 export function parseRemoteAgentResult(value: unknown): RemoteAgentResult | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["output", "status", "exitCode"].includes(key))) return
+  if (!isRecord(value) || Object.keys(value).some((key) => !["output", "status", "exitCode", "commandPreview", "review"].includes(key))) return
   const output = text(value.output, MAX_OUTPUT_LENGTH)
   const status = statuses.find((item) => item === value.status)
   if (output === undefined || !status) return
   if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isSafeInteger(value.exitCode)))
     return
-  return value.exitCode === undefined ? { output, status } : { output, status, exitCode: value.exitCode }
+  const commandPreview = value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
+  const review = value.review === undefined ? undefined : parseRemoteReview(value.review)
+  if ((value.commandPreview !== undefined && !commandPreview) || (value.review !== undefined && !review)) return
+  return {
+    output,
+    status,
+    ...(value.exitCode === undefined ? {} : { exitCode: value.exitCode }),
+    ...(commandPreview ? { commandPreview } : {}),
+    ...(review ? { review } : {}),
+  }
 }
 
 export function parseCodexCliResult(value: unknown): CodexCliResult | undefined {
@@ -385,6 +403,85 @@ export function promptClaudeCode(input: ClaudeCodePromptInput, fetcher: Fetcher 
 type Props = Omit<RemoteAgentPromptInput, "prompt"> & {
   catalog?: RemoteCommandCatalog
   onCatalog?: (catalog: RemoteCommandCatalog) => void
+  background?: AndroidRemoteJobs
+  jobID?: string
+  sessionID?: string
+}
+
+function CommandPreviewPanel(props: { value?: RemoteJob["commandPreview"] }) {
+  return (
+    <Show when={props.value}>
+      {(value) => (
+        <div class="rounded-md border border-border-weak-base p-3 flex flex-col gap-1 text-12-regular">
+          <div class="text-14-medium">Command preview</div>
+          <code class="whitespace-pre-wrap break-all">{[value().executable, ...value().args].join(" ")}</code>
+          <span class="text-text-weak">Working folder: {value().cwd}</span>
+        </div>
+      )}
+    </Show>
+  )
+}
+
+function ReviewPanel(props: { review?: RemoteReview }) {
+  return (
+    <Show when={props.review}>
+      {(review) => (
+        <article class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3" aria-label="Review artifacts">
+          <div class="text-14-medium">Review</div>
+          <Show when={review().files.length > 0}>
+            <section class="flex flex-col gap-2">
+              <div class="text-12-regular text-text-weak">Files and diffs</div>
+              <For each={review().files}>
+                {(file) => (
+                  <details class="rounded-md border border-border-weak-base p-2">
+                    <summary class="cursor-pointer text-12-regular">
+                      {file.path} · {file.status} · +{file.additions} / -{file.deletions}
+                    </summary>
+                    <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-12-regular">{file.diff}</pre>
+                  </details>
+                )}
+              </For>
+            </section>
+          </Show>
+          <Show when={review().tests.length > 0}>
+            <section class="flex flex-col gap-1">
+              <div class="text-12-regular text-text-weak">Tests</div>
+              <For each={review().tests}>
+                {(test) => (
+                  <div class="flex items-start justify-between gap-2 text-12-regular">
+                    <span>{test.name}</span>
+                    <span class={test.status === "passed" ? "text-text-success-base" : "text-text-on-critical-base"}>
+                      {test.status}
+                    </span>
+                  </div>
+                )}
+              </For>
+            </section>
+          </Show>
+          <Show when={review().screenshots.length > 0}>
+            <section class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <For each={review().screenshots}>
+                {(screenshot) => (
+                  <figure class="rounded-md border border-border-weak-base p-2">
+                    <img src={screenshot.data} alt={screenshot.name} class="max-h-64 w-full object-contain" />
+                    <figcaption class="text-12-regular text-text-weak">{screenshot.name}</figcaption>
+                  </figure>
+                )}
+              </For>
+            </section>
+          </Show>
+          <Show when={review().comments.length > 0}>
+            <section class="flex flex-col gap-1">
+              <div class="text-12-regular text-text-weak">Comments</div>
+              <For each={review().comments}>
+                {(comment) => <p class="text-12-regular">{comment.path}{comment.line ? `:${comment.line}` : ""}: {comment.body}</p>}
+              </For>
+            </section>
+          </Show>
+        </article>
+      )}
+    </Show>
+  )
 }
 
 export function RemoteAgentSession(props: Props) {
@@ -398,6 +495,11 @@ export function RemoteAgentSession(props: Props) {
   const [error, setError] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const [terminalOutput, setTerminalOutput] = createSignal("")
+  const [backgroundJob, setBackgroundJob] = createSignal<RemoteJob>()
+  const [answer, setAnswer] = createSignal("")
+  const [steering, setSteering] = createSignal("")
+  const [commentPath, setCommentPath] = createSignal("")
+  const [commentBody, setCommentBody] = createSignal("")
   let socket: WebSocket | undefined
   let session: RemoteAgentTerminalSession | undefined
   let opening: Promise<void> | undefined
@@ -423,8 +525,28 @@ export function RemoteAgentSession(props: Props) {
   }
 
   const input = () => {
-    const { catalog: _catalog, onCatalog: _onCatalog, ...rest } = props
+    const { catalog: _catalog, onCatalog: _onCatalog, background: _background, ...rest } = props
     return { ...rest, config: config() }
+  }
+
+  const match = (item: RemoteJob) =>
+    item.workspaceID === props.workspaceID &&
+    item.directory === props.directory &&
+    item.agent === props.agent &&
+    (props.jobID === undefined ||
+      (item.id === props.jobID && (props.sessionID === undefined || item.sessionID === props.sessionID)))
+
+  const selectJob = async () => {
+    const items = await props.background?.list()
+    const current = items?.filter(match).toSorted((left, right) => right.updatedAt - left.updatedAt)[0]
+    if (current) setBackgroundJob(current)
+  }
+
+  const action = async (value: RemoteJobAction, payload?: RemoteJobActionPayload) => {
+    const current = backgroundJob()
+    if (!current || !props.background) return
+    const next = await props.background.action(current.id, value, payload)
+    if (next) setBackgroundJob(next)
   }
 
   const appendTerminalOutput = (chunk: string) => {
@@ -535,14 +657,34 @@ export function RemoteAgentSession(props: Props) {
 
   onMount(() => {
     void refresh()
+    const stopJobs = props.background?.subscribe((message) => {
+      if (!message.job || !match(message.job)) return
+      setBackgroundJob(message.job)
+      if (["completed", "failed", "stopped"].includes(message.job.status)) {
+        setResult({
+          output: message.job.output ?? message.job.error ?? "",
+          status: remoteJobResultStatus(message.job.status),
+          ...(message.job.commandPreview ? { commandPreview: message.job.commandPreview } : {}),
+          ...(message.job.review ? { review: message.job.review } : {}),
+        })
+      }
+    })
     const timer = setInterval(() => void refresh(), 30_000)
     const onFocus = () => void refresh()
     window.addEventListener("focus", onFocus)
     onCleanup(() => {
+      stopJobs?.()
       clearInterval(timer)
       window.removeEventListener("focus", onFocus)
       void closeTerminal()
     })
+  })
+
+  createEffect(() => {
+    props.background
+    props.jobID
+    props.sessionID
+    void selectJob()
   })
 
   const execute = async (raw: string) => {
@@ -558,6 +700,23 @@ export function RemoteAgentSession(props: Props) {
         if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("Remote agent PTY is not connected.")
         socket.send(`${command ? `/${command.name}${command.args ? ` ${command.args}` : ""}` : value}\r`)
         setResult({ output: terminalOutput(), status: "completed" })
+      } else if (props.background) {
+        const selectedConfig = Object.fromEntries(
+          Object.entries(config() ?? {}).flatMap(([key, item]) => (typeof item === "string" ? [[key, item]] : [])),
+        )
+        const queued = await props.background.start({
+          ...input(),
+          prompt: value,
+          config: selectedConfig,
+        })
+        setBackgroundJob(queued)
+        setResult({
+          output: `Background job ${queued.id} queued.`,
+          status: "completed",
+          ...(queued.commandPreview ? { commandPreview: queued.commandPreview } : {}),
+          ...(queued.review ? { review: queued.review } : {}),
+        })
+        setPrompt("")
       } else {
         setResult(await promptRemoteAgent({ ...input(), prompt: value }))
       }
@@ -718,6 +877,140 @@ export function RemoteAgentSession(props: Props) {
           Workspace: {props.workspaceID} · {props.directory}
         </div>
 
+        <Show when={backgroundJob()}>
+          {(job) => (
+            <article class="rounded-md border border-border-weak-base p-3 flex flex-col gap-2" aria-label="Background job">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-14-medium">Background job</span>
+                <span class="text-12-regular text-text-weak">{remoteJobStatusLabel(job().status)}</span>
+              </div>
+              <CommandPreviewPanel value={job().commandPreview} />
+              <Show when={job().approval}>
+                {(approval) => (
+                  <div class="rounded-md bg-surface-base p-2 flex flex-col gap-1 text-12-regular">
+                    <div class="text-14-medium">Approval context</div>
+                    <p>{approval().title}</p>
+                    <Show when={approval().command}>
+                      <code class="whitespace-pre-wrap break-all">{approval().command}</code>
+                    </Show>
+                    <Show when={approval().reason}>
+                      <p class="text-text-weak">{approval().reason}</p>
+                    </Show>
+                    <Show when={approval().risk}>
+                      <p class="text-text-weak">Risk: {approval().risk}</p>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+              <Show when={job().question}>
+                {(question) => (
+                  <div class="rounded-md bg-surface-base p-2 flex flex-col gap-2 text-12-regular">
+                    <div class="text-14-medium">Agent question</div>
+                    <p>{question().prompt}</p>
+                    <Show when={question().options}>
+                      {(options) => (
+                        <div class="flex flex-wrap gap-2">
+                          <For each={options()}>
+                            {(option) => (
+                              <button type="button" class="rounded-md border border-border-weak-base px-2 py-1" onClick={() => void action("answer", { answer: option })}>
+                                {option}
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      )}
+                    </Show>
+                    <div class="flex gap-2">
+                      <input
+                        value={answer()}
+                        onInput={(event) => setAnswer(event.currentTarget.value)}
+                        placeholder="Answer"
+                        class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-base px-2 py-1"
+                      />
+                      <button type="button" class="rounded-md border border-border-weak-base px-3 py-1" onClick={() => void action("answer", { answer: answer() })}>
+                        Answer
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </Show>
+              <div class="flex gap-2">
+                <input
+                  value={steering()}
+                  onInput={(event) => setSteering(event.currentTarget.value)}
+                  placeholder="Steer the agent"
+                  class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-12-regular"
+                />
+                <button type="button" class="rounded-md border border-border-weak-base px-3 py-1 text-12-regular" onClick={() => void action("steer", { prompt: steering() })}>
+                  Steer
+                </button>
+              </div>
+              <Show when={job().review}>
+                <div class="flex flex-col gap-2 rounded-md bg-surface-base p-2">
+                  <span class="text-12-regular text-text-weak">Add a review comment</span>
+                  <input
+                    value={commentPath() || job().review?.files[0]?.path || ""}
+                    onInput={(event) => setCommentPath(event.currentTarget.value)}
+                    placeholder="File path"
+                    class="rounded-md border border-border-weak-base bg-surface-raised-base px-2 py-1 text-12-regular"
+                  />
+                  <div class="flex gap-2">
+                    <input
+                      value={commentBody()}
+                      onInput={(event) => setCommentBody(event.currentTarget.value)}
+                      placeholder="Comment"
+                      class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-2 py-1 text-12-regular"
+                    />
+                    <button
+                      type="button"
+                      class="rounded-md border border-border-weak-base px-3 py-1 text-12-regular"
+                      onClick={() => void action("comment", { comment: { path: commentPath() || job().review?.files[0]?.path || "", body: commentBody() } })}
+                    >
+                      Comment
+                    </button>
+                  </div>
+                </div>
+              </Show>
+              <div class="flex flex-wrap gap-2">
+                <Show when={job().status === "waiting_approval"}>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border-weak-base px-3 py-1"
+                    onClick={() => void action("approve")}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border-weak-base px-3 py-1"
+                    onClick={() => void action("reject")}
+                  >
+                    Reject
+                  </button>
+                </Show>
+                <Show when={["queued", "running", "waiting_approval", "waiting_question", "retrying"].includes(job().status)}>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border-weak-base px-3 py-1"
+                    onClick={() => void action("stop")}
+                  >
+                    Stop
+                  </button>
+                </Show>
+                <Show when={job().status === "failed"}>
+                  <button
+                    type="button"
+                    class="rounded-md border border-border-weak-base px-3 py-1"
+                    onClick={() => void action("retry")}
+                  >
+                    Retry
+                  </button>
+                </Show>
+              </div>
+            </article>
+          )}
+        </Show>
+
         <Show when={error()}>
           <p role="alert" class="text-14-regular text-text-on-critical-base">
             {error()}
@@ -736,10 +1029,12 @@ export function RemoteAgentSession(props: Props) {
         <Show when={result()}>
           <article class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3">
             <div class="text-14-medium">Status: {result()?.status}</div>
+            <CommandPreviewPanel value={result()?.commandPreview} />
             <pre class="whitespace-pre-wrap text-14-regular">{result()?.output}</pre>
             <Show when={result()?.exitCode !== undefined}>
               <p class="text-12-regular text-text-weak">Exit code: {result()?.exitCode}</p>
             </Show>
+            <ReviewPanel review={result()?.review} />
           </article>
         </Show>
       </section>

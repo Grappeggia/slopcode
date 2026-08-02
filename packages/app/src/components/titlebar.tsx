@@ -76,6 +76,7 @@ const legacyTitlebarHeight = 40
 const v2TitlebarHeight = 36
 const minTitlebarZoom = 0.25
 const windowsControlsBaseWidth = 138 // 3 native Windows caption buttons at 46px each.
+const macTrafficLightsBaseWidth = 84
 
 export type TitlebarUpdate = {
   version: () => string | undefined
@@ -101,6 +102,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   const electronWindows = createMemo(() => windows() && !tauriApi())
   const linux = createMemo(() => platform.platform === "desktop" && platform.os === "linux")
   const web = createMemo(() => platform.platform === "web")
+  const macTrafficLights = createMemo(() => mac() && !platform.windowFullscreen?.())
   const zoom = () => platform.webviewZoom?.() ?? 1
   const titlebarZoom = () => (windows() ? Math.max(zoom(), minTitlebarZoom) : zoom())
   const counterZoom = () => (windows() && titlebarZoom() < 1 ? 1 / titlebarZoom() : 1)
@@ -298,7 +300,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
       }}
       style={{
         "min-height": minHeight(),
-        "padding-left": mac() ? `${84 / zoom()}px` : 0,
+        "padding-left": macTrafficLights() ? `${macTrafficLightsBaseWidth / zoom()}px` : 0,
         width: electronWindows() ? `env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()}))` : undefined,
         "max-width": electronWindows()
           ? `env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()}))`
@@ -454,8 +456,8 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
               <div
                 class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 pr-3 pt-2"
                 classList={{
-                  "pl-2": mac(),
-                  "pl-4": !mac(),
+                  "pl-2": macTrafficLights(),
+                  "pl-4": !macTrafficLights(),
                 }}
               >
                 <ChannelIndicator />
@@ -628,7 +630,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
             <div
               classList={{
                 "flex items-center min-w-0": true,
-                "pl-2": !mac(),
+                "pl-2": !macTrafficLights(),
               }}
             >
               <Show when={windows() || linux()}>

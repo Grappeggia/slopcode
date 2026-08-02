@@ -13,6 +13,8 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { ChildProcess } from "effect/unstable/process"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpServerResponse } from "effect/unstable/http"
+import * as Sse from "effect/unstable/encoding/Sse"
 import { type ParseError as JsoncParseError, parse as parseJsonc } from "jsonc-parser"
 import {
   CODEX_TIMEOUT,
@@ -31,6 +33,11 @@ import {
   RemoteAgentCatalogQuery,
   RemoteAgentCommand,
   RemoteAgentConfig,
+  RemoteAgentJobAction,
+  RemoteAgentJobActionQuery,
+  RemoteAgentJobEventsQuery,
+  RemoteAgentJobStart,
+  RemoteCommandPreview,
   RemoteAgentPrompt,
   RemoteAgentPromptQuery,
   RemoteAgentSession,
@@ -39,6 +46,12 @@ import {
   RemoteRuntimeApi,
   REMOTE_AGENT_VERSION_TIMEOUT,
 } from "../groups/remote-runtime"
+import {
+  collectRemoteAgentReview,
+  RemoteAgentJobNotFoundError,
+  Service as RemoteAgentJobs,
+  layer as remoteAgentJobsLayer,
+} from "./remote-agent-jobs"
 import { ApiNotFoundError, ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "../errors"
 
 const CODEX_FORCE_KILL_AFTER = Duration.seconds(2)
@@ -514,6 +527,15 @@ function timedOut(error: AppProcess.AppProcessError) {
 
 export const buildAgentCommand = agentCommand
 
+function agentCommandPreview(agent: Agent, directory: string, prompt: string, config?: Config): RemoteCommandPreview {
+  const selected = agentCommand(agent, prompt, config)!
+  return {
+    executable: selected.executable,
+    args: selected.args.map((value) => (value === prompt ? "<prompt>" : value)),
+    cwd: directory,
+  }
+}
+
 function agentInteractiveCommand(agent: Agent, config?: Config) {
   const executable = AGENT_EXECUTABLES[agent]
   if (!executable) return undefined
@@ -743,12 +765,7 @@ function parseOpenCodeCommand(name: string, value: unknown) {
         ? undefined
         : null
       : metadataText(value.model, MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH)
-  if (
-    description === null ||
-    agent === null ||
-    model === null ||
-    (value.subtask !== undefined && typeof value.subtask !== "boolean")
-  )
+  if (description === null || agent === null || model === null || (value.subtask !== undefined && typeof value.subtask !== "boolean"))
     return
   return {
     name: next,
@@ -863,7 +880,7 @@ export const runAgentPrompt = Effect.fn("RemoteRuntime.agentPrompt")(function* (
     stdin: "ignore",
     forceKillAfter: CODEX_FORCE_KILL_AFTER,
   })
-  return yield* process
+  const result = yield* process
     .run(command, {
       timeout: CODEX_TIMEOUT,
       maxOutputBytes: MAX_CODEX_OUTPUT_BYTES,
@@ -883,6 +900,15 @@ export const runAgentPrompt = Effect.fn("RemoteRuntime.agentPrompt")(function* (
         }),
       ),
     )
+  const review = yield* collectRemoteAgentReview(input.directory, process).pipe(
+    Effect.catch(() => Effect.succeed(undefined)),
+  )
+  const hasReview = review && (review.files.length > 0 || review.tests.length > 0 || review.screenshots.length > 0 || review.comments.length > 0)
+  return {
+    ...result,
+    commandPreview: agentCommandPreview(input.agent, input.directory, input.prompt, input.config),
+    ...(hasReview ? { review } : {}),
+  }
 })
 
 export const runAgentSession = Effect.fn("RemoteRuntime.agentSession")(function* (input: {
@@ -1007,8 +1033,29 @@ export const resolveRemoteFolder = Effect.fn("RemoteRuntime.resolveFolder")(func
   return { root, current }
 })
 
+function remoteJobEventData(event: { id: string; cursor: string; jobID: string; type: string; data: unknown }): Sse.Event {
+  return {
+    _tag: "Event",
+    event: event.type,
+    id: event.cursor,
+    data: JSON.stringify(event),
+  }
+}
+
+function isTerminalJobEvent(type: string) {
+  return type.endsWith("completed") || type.endsWith("failed") || type.endsWith("stopped")
+}
+
+function remoteJobError(error: unknown) {
+  if (error instanceof RemoteAgentJobNotFoundError)
+    return new ApiNotFoundError({ name: "NotFoundError", data: { message: error.message } })
+  if (error instanceof Error && error.message.includes("required")) return new InvalidRequestError({ message: error.message })
+  return new ServiceUnavailableError({ message: "remote agent job is unavailable" })
+}
+
 export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "remote-runtime", (handlers) =>
   Effect.gen(function* () {
+    const jobs = yield* RemoteAgentJobs
     const browse = Effect.fn("RemoteRuntimeHttpApi.browse")(function* (ctx: {
       query: { path?: string; sshAuthority?: string; sshPort?: number }
     }) {
@@ -1073,10 +1120,66 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       return yield* runAgentCatalog({ agent: ctx.query.agent, directory: folder.current })
     })
 
+    const job = Effect.fn("RemoteRuntimeHttpApi.job")(function* (ctx: {
+      query: typeof RemoteAgentPromptQuery.Type
+      payload: typeof RemoteAgentJobStart.Type
+    }) {
+      const instance = yield* InstanceRef
+      if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
+      const folder = yield* resolveRemoteFolder({
+        root: instance.directory,
+        current: ctx.query.path ?? instance.directory,
+      })
+      return yield* jobs.start({
+        id: ctx.payload.jobID ?? `job_${crypto.randomUUID().replaceAll("-", "")}`,
+        workspaceID: (yield* WorkspaceRef) ?? "local",
+        root: instance.directory,
+        directory: folder.current,
+        agent: ctx.payload.agent,
+        prompt: ctx.payload.prompt,
+        config: ctx.payload.config,
+      })
+    })
+
+    const jobEvents = Effect.fn("RemoteRuntimeHttpApi.jobEvents")(function* (ctx: {
+      query: typeof RemoteAgentJobEventsQuery.Type
+    }) {
+      const source = yield* jobs.stream({ jobID: ctx.query.job, cursor: ctx.query.cursor }).pipe(
+        Effect.catch((error) => Effect.fail(remoteJobError(error))),
+      )
+      const stream = source.pipe(
+        Stream.takeUntil((event) => isTerminalJobEvent(event.type)),
+        Stream.map(remoteJobEventData),
+        Stream.pipeThroughChannel(Sse.encode()),
+        Stream.encodeText,
+      )
+      return HttpServerResponse.stream(stream, {
+        contentType: "text/event-stream",
+        headers: {
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+          "X-Content-Type-Options": "nosniff",
+        },
+      })
+    })
+
+    const jobAction = Effect.fn("RemoteRuntimeHttpApi.jobAction")(function* (ctx: {
+      params: { jobID: string }
+      query: typeof RemoteAgentJobActionQuery.Type
+      payload: typeof RemoteAgentJobAction.Type
+    }) {
+      return yield* jobs.action({ jobID: ctx.params.jobID, action: ctx.payload }).pipe(
+        Effect.catch((error) => Effect.fail(remoteJobError(error))),
+      )
+    })
+
     return handlers
       .handle("browse", browse)
       .handle("prompt", prompt)
       .handle("session", session)
       .handle("catalog", catalog)
+      .handle("job", job)
+      .handle("jobEvents", jobEvents)
+      .handle("jobAction", jobAction)
   }),
-).pipe(Layer.provide(LocationServiceMap.layer))
+).pipe(Layer.provide(remoteAgentJobsLayer), Layer.provide(LocationServiceMap.layer))

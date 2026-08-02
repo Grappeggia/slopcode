@@ -1,6 +1,15 @@
 export const MAIN_NEW_SESSION_WORKTREE = "main"
 export const CREATE_NEW_SESSION_WORKTREE = "create"
 
+export function newSessionComposerVariant(sessionID?: string) {
+  if (sessionID) return
+  return "new-session" as const
+}
+
+export function isNewSessionWorkspaceVariant(variant?: "dock" | "new-session") {
+  return variant === "new-session"
+}
+
 type Project = {
   worktree: string
   sandboxes?: string[]

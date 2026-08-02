@@ -100,6 +100,15 @@ if (mode !== "publish") {
 
 const forceBuild = process.env.SLOPCODE_FORCE_BUILD === "true"
 const skipBuild = process.env.SLOPCODE_SKIP_BUILD === "true"
+const buildAndroid = async () => {
+  const android = path.join(dir, "packages", "android")
+  const dist = path.join(dir, "packages", "slopcode", "dist")
+  await $`bun run build:web`.cwd(android)
+  await $`./gradlew :app:assembleDebug -PslopcodeVersion=${Script.version}`.cwd(android)
+  const source = path.join(android, "app", "build", "outputs", "apk", "debug", "app-debug.apk")
+  await Bun.write(path.join(dist, "slopcode-android-debug.apk"), Bun.file(source))
+  await Bun.write(path.join(dist, `slopcode-android-v${Script.version}-debug.apk`), Bun.file(source))
+}
 const buildLocal = async () => {
   if (Script.release) {
     if (skipBuild) {
@@ -107,6 +116,7 @@ const buildLocal = async () => {
     }
     console.log("\n=== local build ===\n")
     await import(`../packages/slopcode/script/build.ts`)
+    await buildAndroid()
     return
   }
 
@@ -154,7 +164,12 @@ if (mode !== "publish" && lineage) {
     upload: async () => {
       const files = (await Array.fromAsync(new Bun.Glob("*").scan({ cwd: dist })))
         .filter(
-          (name) => name === manifestName || name.endsWith(".zip") || name.endsWith(".tar.gz") || name.endsWith(".deb"),
+          (name) =>
+            name === manifestName ||
+            name.endsWith(".zip") ||
+            name.endsWith(".tar.gz") ||
+            name.endsWith(".deb") ||
+            name.endsWith(".apk"),
         )
         .map((name) => path.join(dist, name))
       await $`gh release upload ${lineage.target} ${files} --clobber --repo ${repo}`
@@ -189,15 +204,15 @@ if (mode === "prep") {
   await import(`../packages/slopcode/script/publish.ts`)
 
   if (Script.release && !Script.preview) {
-    type Release = { id: number; tag_name: string; draft: boolean }
-    const repo = process.env.GH_REPO ?? "teamslop/slopcode"
-    const releases = (await $`gh api repos/${repo}/releases?per_page=100`.json()) as Release[]
-    const release = releases.find((item) => item.tag_name === `v${Script.version}`)
-    if (!release) throw new Error(`Could not find release v${Script.version}.`)
-    if (release.draft) {
-      await $`gh api --method PATCH repos/${repo}/releases/${release.id} -f draft=false`
-    } else {
+    const draft = (
+      await $`gh release view v${Script.version} --json isDraft --jq .isDraft --repo ${process.env.GH_REPO}`.text()
+    ).trim()
+    if (draft === "true") {
+      await $`gh release edit v${Script.version} --draft=false --repo ${process.env.GH_REPO}`
+    } else if (draft === "false") {
       console.log(`release: already finalized v${Script.version}`)
+    } else {
+      throw new Error(`Could not verify draft state for v${Script.version}.`)
     }
   }
 }

@@ -6,9 +6,7 @@ const rendererStorePattern = new RegExp(
 )
 
 export function isRendererStoreName(value: unknown): value is string {
-  return (
-    typeof value === "string" && value.length <= 255 && basename(value) === value && rendererStorePattern.test(value)
-  )
+  return typeof value === "string" && value.length <= 255 && basename(value) === value && rendererStorePattern.test(value)
 }
 
 export function assertRendererStoreName(value: unknown) {

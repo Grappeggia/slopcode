@@ -84,6 +84,7 @@ import { getFilename } from "@slopcode-ai/core/util/path"
 import { displayName } from "@/pages/layout/helpers"
 import {
   CREATE_NEW_SESSION_WORKTREE,
+  isNewSessionWorkspaceVariant,
   MAIN_NEW_SESSION_WORKTREE,
   newSessionWorkspaceOptions,
   shouldResetNewSessionWorktree,
@@ -1368,7 +1369,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     },
   }))
 
-  const newSession = () => props.variant === "new-session"
+  const newSession = () => isNewSessionWorkspaceVariant(props.variant)
   const projects = createMemo(() => layout.projects.list())
   const projectForDirectory = (directory: string | undefined) => {
     if (!directory) return

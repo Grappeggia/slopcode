@@ -12,7 +12,7 @@ android {
     minSdk = 29
     targetSdk = 35
     versionCode = 1
-    versionName = "0.1.0"
+    versionName = (project.findProperty("slopcodeVersion") as String? ?: "0.1.0").trim()
     buildConfigField("String", "SLOPCODE_WEB_ENTRY", "\"https://appassets.androidplatform.net/site/index.html\"")
     buildConfigField(
       "String",
@@ -59,4 +59,8 @@ dependencies {
   implementation("androidx.security:security-crypto:1.1.0-alpha06")
   implementation("androidx.webkit:webkit:1.12.1")
   implementation("com.google.android.material:material:1.12.0")
+  implementation("com.squareup.okhttp3:okhttp:4.12.0")
+  implementation("com.google.firebase:firebase-messaging:24.1.2")
+  testImplementation("junit:junit:4.13.2")
+  testImplementation("org.json:json:20240303")
 }

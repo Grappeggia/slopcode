@@ -16,6 +16,7 @@ import { createWindowRegistry } from "./window-registry"
 import { safeWindowURL } from "./window-state"
 import { createUnresponsiveSampler } from "./unresponsive"
 import { ipcAuthorization, isTrustedRendererUrl, protectWindow } from "./security"
+import { wireWindowFullscreen } from "./window-fullscreen"
 
 const root = dirname(fileURLToPath(import.meta.url))
 const rendererRoot = join(root, "../renderer")
@@ -204,6 +205,7 @@ export function createMainWindow(id: string = randomUUID()) {
   registerWindow(win, id)
   loadWindow(win, "index.html", dev)
   wireZoom(win)
+  wireWindowFullscreen(win)
 
   win.once("ready-to-show", () => {
     win.show()
@@ -380,7 +382,12 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
   })
   win.webContents.on("render-process-gone", (_event, details) => {
     sampler.stopAndFlush()
-    writeLog("window", "renderer process gone", { window: name, currentURL: safeWindowURL(win), details }, "error")
+    writeLog(
+      "window",
+      "renderer process gone",
+      { window: name, currentURL: safeWindowURL(win), details },
+      "error",
+    )
     void show(
       "SlopCode window terminated unexpectedly",
       [`Window: ${name}`, `Reason: ${details.reason}`, `Code: ${details.exitCode ?? "<unknown>"}`].join("\n"),

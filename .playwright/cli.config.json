@@ -1,0 +1,13 @@
+{
+  "browser": {
+    "launchOptions": {
+      "executablePath": "/opt/SlopCode Dev/ai.slopcode.desktop.dev",
+      "args": ["--no-sandbox"],
+      "timeout": 30000
+    },
+    "readyCondition": {
+      "waitForLoadState": "domcontentloaded",
+      "timeout": 30000
+    }
+  }
+}

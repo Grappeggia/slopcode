@@ -52,11 +52,7 @@ export function ReviewPanelV2(props: {
           <div class="flex-1 min-h-0 overflow-hidden p-2">
             <Show
               when={props.ready()}
-              fallback={
-                <div class="px-2 py-2 text-12-regular text-text-weak">
-                  {language.t("session.review.loadingChanges")}
-                </div>
-              }
+              fallback={<div class="px-2 py-2 text-12-regular text-text-weak">{language.t("session.review.loadingChanges")}</div>}
             >
               <Show
                 when={props.state.filter().trim().length > 0}

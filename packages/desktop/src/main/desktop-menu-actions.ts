@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron"
 import type { DesktopMenuAction } from "@slopcode-ai/app/desktop-menu"
 import { createMainWindow, updateTitlebar } from "./windows"
+import { toggleWindowFullscreen } from "./window-fullscreen"
 
 export type DesktopMenuActionHandlers = Partial<{
   checkForUpdates: () => void
@@ -51,7 +52,7 @@ export function runDesktopMenuAction(
       setZoom(win, (win?.webContents.getZoomFactor() ?? 1) - 0.2)
       return
     case "view.toggleFullscreen":
-      win?.setFullScreen(!win.isFullScreen())
+      toggleWindowFullscreen(win)
       return
     case "edit.undo":
       win?.webContents.undo()

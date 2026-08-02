@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   CREATE_NEW_SESSION_WORKTREE,
   MAIN_NEW_SESSION_WORKTREE,
+  isNewSessionWorkspaceVariant,
+  newSessionComposerVariant,
   newSessionWorkspaceOptions,
   normalizeNewSessionWorktree,
   resolveNewSessionWorktree,
@@ -9,6 +11,13 @@ import {
 } from "./new-session-workspace-controller"
 
 describe("new session workspace selection", () => {
+  test("exposes workspace controls for legacy no-session composers only", () => {
+    expect(newSessionComposerVariant(undefined)).toBe("new-session")
+    expect(isNewSessionWorkspaceVariant(newSessionComposerVariant(undefined))).toBe(true)
+    expect(newSessionComposerVariant("session-1")).toBeUndefined()
+    expect(isNewSessionWorkspaceVariant(newSessionComposerVariant("session-1"))).toBe(false)
+  })
+
   test("uses the draft directory when it is an existing sandbox", () => {
     expect(
       resolveNewSessionWorktree({

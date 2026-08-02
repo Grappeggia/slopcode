@@ -30,6 +30,8 @@ import "./styles.css"
 import { Splash } from "@slopcode-ai/ui/logo"
 import { useTheme } from "@slopcode-ai/ui/theme/context"
 import { DesktopFirstLaunchOnboarding } from "./onboarding"
+import { windowFullscreen } from "./window-fullscreen"
+import { createFocusDebugAction } from "./focus-debug"
 
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -198,6 +200,10 @@ const createPlatform = (): Platform => {
 
     exportDebugLogs: () => window.api.exportDebugLogs(),
 
+    setForceFocus: createFocusDebugAction(import.meta.env.DEV, window.api.focusDebugEnabled, (enabled) =>
+      window.api.setForceFocus(enabled),
+    ),
+
     recordFatalRendererError: (error) => window.api.recordFatalRendererError(error),
 
     restart: async () => {
@@ -249,6 +255,8 @@ const createPlatform = (): Platform => {
     parseMarkdown: (markdown: string) => window.api.parseMarkdownCommand(markdown),
 
     webviewZoom,
+
+    windowFullscreen,
 
     getPinchZoomEnabled: () => window.api.getPinchZoomEnabled(),
 
@@ -324,8 +332,8 @@ render(() => {
   function App() {
     const wslServers = useWslServers()
     const wslStartup = createMemo(() => wslStartupReady(wslServers.data, wslServers.isPending))
-    const wslCatalogUnavailable = createMemo(() =>
-      Boolean(platform.wslServers && !wslServers.isPending && !wslServers.data),
+    const wslCatalogUnavailable = createMemo(
+      () => Boolean(platform.wslServers && !wslServers.isPending && !wslServers.data),
     )
     const wslCatalogReady = createMemo(() => wslStartup() || wslCatalogUnavailable())
     const splash = (

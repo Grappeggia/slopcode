@@ -7,6 +7,7 @@ import {
   parsePermission,
   parseSupportedDeepLinks,
   parseStringArray,
+  remoteJobsBridge,
   type AndroidNativeBridge,
 } from "./bridge"
 import {
@@ -135,6 +136,7 @@ export type AndroidWorkspaceBootstrap = Awaited<ReturnType<typeof readInitialWor
 export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
   const native = bridge ?? undefined
   const capabilities = await detectAndroidCapabilities(native)
+  const remoteJobs = remoteJobsBridge(native, capabilities.backgroundExecution && capabilities.remoteJobs)
   const nonce = native && capabilities.deepLinks ? crypto.randomUUID().replaceAll("-", "") : undefined
   let ready: Promise<boolean> | undefined
   const prepareDeepLinks = () => {
@@ -190,5 +192,6 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
       const value = await bridge?.scanQrPairing().catch(() => null)
       return typeof value === "string" && value ? value : null
     },
+    remoteJobs,
   }
 }

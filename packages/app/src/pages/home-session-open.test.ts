@@ -99,4 +99,17 @@ describe("openHomeSession", () => {
     expect(state.added).toEqual([])
     expect(state.selected).toEqual([])
   })
+
+  test("selects an existing foreground tab without duplicating it", () => {
+    const first = setup()
+    const tab = openHomeSession({ session, server, directory: session.directory, ...first })
+    const state = setup([tab])
+
+    openHomeSession({ session, server, directory: session.directory, ...state })
+
+    expect(state.store).toEqual([tab])
+    expect(state.added).toEqual([])
+    expect(state.selected).toEqual([tab])
+    expect(state.touched).toEqual([session.directory])
+  })
 })

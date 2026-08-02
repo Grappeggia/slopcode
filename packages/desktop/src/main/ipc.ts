@@ -9,19 +9,19 @@ import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../prel
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
 import { guardIpc } from "./security"
+import { focusDebugEnabled, setForceFocus } from "./debug"
 import { getStore, removeStoreFileIfEmpty, runStoreOperation } from "./store"
 import { assertRendererStoreName } from "./store-name"
-import {
-  openExternalURL,
-  openLocalFileURL,
-  getPinchZoomEnabled,
-  setPinchZoomEnabled,
-  setTitlebar,
-  updateTitlebar,
-} from "./windows"
+import { openExternalURL, openLocalFileURL, getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
-import { DesktopWorkspaceID, publicRemoteState, type DesktopRemoteHostService, type DesktopSshTarget } from "./remote"
+import { getWindowFullscreen } from "./window-fullscreen"
+import {
+  DesktopWorkspaceID,
+  publicRemoteState,
+  type DesktopRemoteHostService,
+  type DesktopSshTarget,
+} from "./remote"
 
 const pickerFilters = (ext?: string[]) => {
   if (!ext || ext.length === 0) return undefined
@@ -81,9 +81,7 @@ export function registerIpcHandlers(deps: Deps) {
   ipc.handle("remote-ensure", (_event: IpcMainInvokeEvent, target: DesktopSshTarget) =>
     deps.remote.ensureWorkspace(target),
   )
-  ipc.handle("remote-stop", (_event: IpcMainInvokeEvent, id: string) =>
-    deps.remote.stopWorkspace(DesktopWorkspaceID.make(id)),
-  )
+  ipc.handle("remote-stop", (_event: IpcMainInvokeEvent, id: string) => deps.remote.stopWorkspace(DesktopWorkspaceID.make(id)))
   ipc.handle("remote-stop-all", () => deps.remote.stopAll())
   ipc.handle("remote-subscribe", (event) => {
     remoteSubscriptions.get(event.sender.id)?.()
@@ -258,6 +256,15 @@ export function registerIpcHandlers(deps: Deps) {
   ipc.handle("get-window-focused", (event: IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     return win?.isFocused() ?? false
+  })
+
+  ipc.handle("get-window-fullscreen", (event: IpcMainInvokeEvent) => {
+    return getWindowFullscreen(BrowserWindow.fromWebContents(event.sender))
+  })
+
+  ipc.handle("set-force-focus", (event: IpcMainInvokeEvent, enabled: boolean) => {
+    if (typeof enabled !== "boolean") throw new Error("Invalid focus debug state")
+    return setForceFocus(event.sender, enabled, focusDebugEnabled(app.isPackaged))
   })
 
   ipc.handle("set-window-focus", (event: IpcMainInvokeEvent) => {

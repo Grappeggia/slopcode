@@ -46,3 +46,25 @@ test("keeps a hidden prod launcher for old Linux pins", async () => {
   expect(desktop).toContain("StartupWMClass=ai.slopcode.desktop")
   expect(desktop).toContain("NoDisplay=true")
 })
+
+for (const target of [
+  ["x86_64-unknown-linux-gnu", "slopcode-cli"],
+  ["x86_64-apple-darwin", "slopcode-cli"],
+  ["x86_64-pc-windows-msvc", "slopcode-cli.exe"],
+] as const) {
+  test(`packages the background CLI for ${target[0]}`, async () => {
+    const previous = process.env.RUST_TARGET
+    process.env.RUST_TARGET = target[0]
+    const module = await import(`./electron-builder.config.ts?background-cli=${target[0]}`)
+    const config = module.default as Configuration
+
+    if (previous === undefined) delete process.env.RUST_TARGET
+    else process.env.RUST_TARGET = previous
+
+    expect(config.files).toContain("!resources/slopcode-cli*")
+    expect(config.extraResources).toContainEqual({
+      from: `resources/${target[1]}`,
+      to: target[1],
+    })
+  })
+}

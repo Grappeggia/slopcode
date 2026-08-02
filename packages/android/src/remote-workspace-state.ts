@@ -91,6 +91,7 @@ export type RemoteWorkspaceState = {
   workspace?: RemoteWorkspaceRecord
   commandCatalog?: RemoteCommandCatalog
   recentFolders?: RemoteFolderHistory[]
+  recentSshStrings?: string[]
   savedAt?: string
 }
 
@@ -111,6 +112,7 @@ const LEGACY_SECRET_KEY = "remote.workspace.secret"
 const NAMESPACE = "slopcode.android.remote.dat"
 const MAX_RECENT_SCOPES = 8
 const MAX_RECENT_FOLDERS = 3
+const MAX_RECENT_SSH_STRINGS = 8
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -330,6 +332,16 @@ function normalizeRecentFolders(value: unknown) {
   })
 }
 
+function normalizeRecentSshStrings(value: unknown) {
+  if (!Array.isArray(value)) return
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map(safeAuthority)
+    .filter((item): item is string => !!item)
+    .filter((item, index, all) => all.indexOf(item) === index)
+    .slice(0, MAX_RECENT_SSH_STRINGS)
+}
+
 function normalizeWorkspaceRecord(value: unknown): RemoteWorkspaceRecord | undefined {
   if (!isRecord(value)) return
   const record = clean({
@@ -391,6 +403,7 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
   const selection = normalizeServerSelection(value.serverSelection, serverUrl)
   const selectedUrl = selection?.url ?? serverUrl
   const recentFolders = normalizeRecentFolders(value.recentFolders)
+  const recentSshStrings = normalizeRecentSshStrings(value.recentSshStrings)
   const catalog = commandCatalog(value.commandCatalog)
   return {
     version: 1,
@@ -414,7 +427,21 @@ export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceSt
     workspace: normalizeWorkspaceRecord(value.workspace ?? value.pairing),
     ...(catalog ? { commandCatalog: catalog } : {}),
     ...(recentFolders ? { recentFolders } : {}),
+    ...(recentSshStrings ? { recentSshStrings } : {}),
     savedAt: text(value.savedAt),
+  }
+}
+
+export function rememberSshString(state: RemoteWorkspaceState, value: string) {
+  const next = safeAuthority(value)
+  if (!next) return normalizeRemoteWorkspaceState(state)
+  const current = normalizeRemoteWorkspaceState(state)
+  return {
+    ...current,
+    recentSshStrings: [next, ...(current.recentSshStrings ?? []).filter((item) => item !== next)].slice(
+      0,
+      MAX_RECENT_SSH_STRINGS,
+    ),
   }
 }
 
@@ -505,7 +532,8 @@ function hasState(state: RemoteWorkspaceState) {
     !!state.workspace ||
     !!state.savedAt ||
     !!state.serverSelection ||
-    !!state.recentFolders?.length
+    !!state.recentFolders?.length ||
+    !!state.recentSshStrings?.length
   )
 }
 

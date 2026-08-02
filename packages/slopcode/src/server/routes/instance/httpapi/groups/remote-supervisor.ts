@@ -30,15 +30,9 @@ export const RemoteSupervisorApi = HttpApi.make("remote-supervisor").add(
         OpenApi.annotations({
           identifier: "experimental.remote.supervisor.target",
           summary: "Register a remote target for a pairing",
-          description:
-            "Bind a validated loopback target to an exact pairing without relying on an instance-directory selector.",
+          description: "Bind a validated loopback target to an exact pairing without relying on an instance-directory selector.",
         }),
       ),
     )
-    .annotateMerge(
-      OpenApi.annotations({
-        title: "remote supervisor",
-        description: "Authenticated desktop supervisor handoff routes.",
-      }),
-    ),
+    .annotateMerge(OpenApi.annotations({ title: "remote supervisor", description: "Authenticated desktop supervisor handoff routes." })),
 )

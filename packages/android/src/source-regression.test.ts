@@ -33,9 +33,7 @@ describe("android security source regressions", () => {
     expect(activity).toContain("grantResults.isEmpty()")
     expect(activity).not.toContain("addJavascriptInterface(")
     expect(manifest).not.toContain('android:usesCleartextTraffic="true"')
-    expect(bridge).toContain(
-      'if (uri.scheme != "slopcode" || uri.userInfo != null || uri.fragment != null) return null',
-    )
+    expect(bridge).toContain('if (uri.scheme != "slopcode" || uri.userInfo != null || uri.fragment != null) return null')
     expect(bridge).toContain('put("remoteTransport", false)')
     expect(bridge).toContain("WebViewCompat.postWebMessage")
     expect(bridge).toContain("sourceOrigin.toString() != TRUSTED_ORIGIN")
@@ -76,9 +74,7 @@ describe("android security source regressions", () => {
     expect(bridge).toContain('notificationState.getInt("notification_observed_api", -1)')
     expect(bridge).toContain('notificationState.getString("notification_observed_permission", null)')
     expect(bridge).toContain('notificationState.getBoolean("notification_denied", false)')
-    expect(bridge).toContain(
-      "activity.shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)",
-    )
+    expect(bridge).toContain("activity.shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)")
     expect(bridge).toContain("NotificationManagerCompat.from(activity).areNotificationsEnabled()")
     expect(bridge).not.toContain("lastUpdateTime")
     expect(bridge).not.toContain("firstInstallTime")

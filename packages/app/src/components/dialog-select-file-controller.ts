@@ -75,16 +75,81 @@ export function commandPaletteEntries(options: CommandOption[], category: string
     )
 }
 
-export function filePaletteEntries(paths: string[], category: string) {
+export function filePaletteEntries(
+  paths: string[],
+  category: string,
+  scope?: { server: ServerConnection.Key; directory: string; project?: PaletteProject },
+) {
   return paths.map(
     (path): PaletteEntry => ({
-      id: "file:" + path,
+      id: scope ? `file:${base64Encode(scope.server)}:${base64Encode(scope.directory)}:${path}` : "file:" + path,
       type: "file",
       title: path,
       category,
       path,
+      ...(scope
+        ? {
+            description: scope.project ? displayName(scope.project) : getFilename(scope.directory),
+            directory: scope.directory,
+            server: scope.server,
+            project: scope.project,
+          }
+        : {}),
     }),
   )
+}
+
+export function createServerFileSearch(input: {
+  server: ServerConnection.Key
+  opened: () => PaletteProject[]
+  stored: () => PaletteProject[]
+  load: (directory: string, search: string, limit: number, signal: AbortSignal) => Promise<string[]>
+  category: () => string
+  limit?: number
+}) {
+  let active: AbortController | undefined
+
+  return {
+    cancel() {
+      active?.abort()
+    },
+    async search(text: string) {
+      const query = text.trim()
+      active?.abort()
+      if (!query) return [] as PaletteEntry[]
+
+      const current = new AbortController()
+      active = current
+      const projects = [...input.opened(), ...input.stored()].filter(
+        (project, index, all) =>
+          all.findIndex((candidate) => pathKey(candidate.worktree) === pathKey(project.worktree)) === index,
+      )
+      const limit = input.limit ?? 20
+      const results = await Promise.allSettled(
+        projects.map(async (project) => ({
+          project,
+          paths: (await input.load(project.worktree, query, limit, current.signal)).slice(0, limit),
+        })),
+      )
+      if (current.signal.aborted) return [] as PaletteEntry[]
+
+      const success = results.filter((result) => result.status === "fulfilled")
+      if (projects.length > 0 && success.length === 0) {
+        const failure = results.find((result) => result.status === "rejected")
+        if (failure?.status === "rejected") throw failure.reason
+      }
+
+      return uniquePaletteEntries(
+        success.flatMap((result) =>
+          filePaletteEntries(result.value.paths, input.category(), {
+            server: input.server,
+            directory: result.value.project.worktree,
+            project: result.value.project,
+          }),
+        ),
+      )
+    },
+  }
 }
 
 function projectForSession(session: PaletteSession, projects: PaletteProject[]) {
@@ -152,18 +217,23 @@ export function createServerSessionSearch(input: {
 export async function searchPaletteEntries(input: {
   query: string
   commands: PaletteEntry[]
-  searchFiles: (query: string) => Promise<string[]>
+  searchFiles?: (query: string) => Promise<string[]>
+  searchFileEntries?: (query: string) => Promise<PaletteEntry[]>
   searchSessions: (query: string) => Promise<PaletteEntry[]>
   fileCategory: string
 }) {
   const query = input.query.trim()
   if (!query) return [] as PaletteEntry[]
-  const [files, sessions] = await Promise.all([input.searchFiles(query), input.searchSessions(query)])
+  const [files, sessions] = await Promise.all([
+    input.searchFileEntries?.(query) ??
+      input.searchFiles?.(query).then((paths) => filePaletteEntries(paths, input.fileCategory)),
+    input.searchSessions(query),
+  ])
   const value = query.toLowerCase()
   const commands = input.commands.filter((entry) =>
     [entry.title, entry.description, entry.category].some((text) => text?.toLowerCase().includes(value)),
   )
-  return [...commands, ...sessions, ...filePaletteEntries(files, input.fileCategory)]
+  return [...commands, ...sessions, ...(files ?? [])]
 }
 
 export function selectPaletteSession(input: {
@@ -204,4 +274,32 @@ export function selectPaletteSession(input: {
   }
   void input.navigate(tabHref(tab))
   return tab
+}
+
+export function selectPaletteFile(input: {
+  entry: PaletteEntry
+  projects: {
+    open: (directory: string) => void
+    touch: (directory: string) => void
+  }
+  activate: (server: ServerConnection.Key) => void
+  navigate: (href: string) => void | Promise<void>
+  navigateOnServer?: (server: ServerConnection.Key, href: string) => void
+}) {
+  const entry = input.entry
+  if (entry.type !== "file" || !entry.server || !entry.directory || !entry.path) return
+
+  const directory = entry.project?.worktree ?? entry.directory
+  input.projects.open(directory)
+  input.projects.touch(directory)
+
+  // File tabs belong to a session-scoped FileProvider. Home has no such provider,
+  // so retain the file identity while routing to the owning project's composer.
+  const href = `/${base64Encode(entry.directory)}/session`
+  if (input.navigateOnServer) input.navigateOnServer(entry.server, href)
+  else {
+    input.activate(entry.server)
+    void input.navigate(href)
+  }
+  return { server: entry.server, directory: entry.directory, path: entry.path, opened: false as const }
 }

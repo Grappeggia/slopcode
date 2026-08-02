@@ -250,10 +250,8 @@ describe("HttpApi authorization middleware", () => {
 
   itV2Secret.live("accepts an internal remote-target capability", () =>
     Effect.gen(function* () {
-      const response = yield* HttpClientRequest.get("/api/probe").pipe(
-        HttpClientRequest.setHeader("x-slopcode-remote-capability", "secret"),
-        HttpClient.execute,
-      )
+      const response = yield* HttpClientRequest.get("/api/probe")
+        .pipe(HttpClientRequest.setHeader("x-slopcode-remote-capability", "secret"), HttpClient.execute)
 
       expect(response.status).toBe(200)
     }),

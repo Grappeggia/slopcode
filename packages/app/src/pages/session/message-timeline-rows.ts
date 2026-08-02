@@ -105,10 +105,7 @@ export namespace TimelineRow {
   }
 }
 
-export function reconcileTimelineRows(
-  previous: TimelineRow.TimelineRow[] | undefined,
-  rows: TimelineRow.TimelineRow[],
-) {
+export function reconcileTimelineRows(previous: TimelineRow.TimelineRow[] | undefined, rows: TimelineRow.TimelineRow[]) {
   if (!previous?.length) return rows
   const byKey = new Map(previous.map((row) => [TimelineRow.key(row), row] as const))
   return rows.map((row) => {

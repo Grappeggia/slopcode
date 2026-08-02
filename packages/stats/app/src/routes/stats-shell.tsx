@@ -184,7 +184,10 @@ function DataWordmark() {
   return (
     <svg data-slot="stats-wordmark" width="66" height="20" viewBox="0 0 66 20" fill="none" aria-hidden="true">
       <path opacity="0.2" d="M10 11H6V13H10V11Z" fill="currentColor" />
-      <path d="M12 3H4V5H12V3ZM6 5H4V7H6V5ZM12 7H4V9H12V7ZM12 9H10V11H12V9ZM12 11H4V13H12V11Z" fill="currentColor" />
+      <path
+        d="M12 3H4V5H12V3ZM6 5H4V7H6V5ZM12 7H4V9H12V7ZM12 9H10V11H12V9ZM12 11H4V13H12V11Z"
+        fill="currentColor"
+      />
       <path
         d="M63.3543 16L62.5119 12.8711H58.6437L57.8013 16H55.7383L59.2454 4H61.9618L65.4689 16H63.3543ZM61.0678 7.851L60.6896 5.94269H60.4489L60.0707 7.851L59.1595 11.1347H61.9962L61.0678 7.851Z"
         fill="currentColor"

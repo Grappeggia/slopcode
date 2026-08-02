@@ -4,6 +4,7 @@ import {
   readRemoteWorkspace,
   normalizeHttpsUrl,
   normalizeRemoteWorkspaceState,
+  rememberSshString,
   rememberRemoteFolder,
   remoteFoldersForScope,
   readRemoteWorkspaceSecret,
@@ -407,5 +408,24 @@ describe("remote workspace state persistence", () => {
       version: "2.1.0",
       commands: [{ name: "review", description: "Review changes" }],
     })
+  })
+
+  test("persists only bounded, shell-safe recent SSH strings with newest first", () => {
+    const state = normalizeRemoteWorkspaceState({
+      version: 1,
+      recentSshStrings: [
+        "alice@mac.example.test:22",
+        "bob@mac.example.test",
+        "alice@mac.example.test:22",
+        "bad;command@example.test",
+      ],
+    })
+    expect(state.recentSshStrings).toEqual(["alice@mac.example.test:22", "bob@mac.example.test"])
+    expect(rememberSshString(state, "carol@mac.example.test").recentSshStrings).toEqual([
+      "carol@mac.example.test",
+      "alice@mac.example.test:22",
+      "bob@mac.example.test",
+    ])
+    expect(rememberSshString(state, "bad;command@example.test")).toEqual(state)
   })
 })

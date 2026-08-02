@@ -264,9 +264,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       if (!url_) return
       const conn: ServerConnection.Http = { ...input, authToken: undefined, http: { ...input.http, url: url_ } }
       return batch(() => {
-        const existing = store.list.findIndex(
-          (x) => ServerConnection.key(storedConnection(x)) === ServerConnection.key(conn),
-        )
+        const existing = store.list.findIndex((x) => ServerConnection.key(storedConnection(x)) === ServerConnection.key(conn))
         if (existing !== -1) {
           setStore("list", existing, conn)
         } else {

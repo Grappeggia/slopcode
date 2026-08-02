@@ -1,4 +1,5 @@
 import { HashRouter } from "@solidjs/router"
+import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { AppBaseProviders, AppInterface, type Platform, PlatformProvider, ServerConnection } from "@slopcode-ai/app"
 import "@slopcode-ai/app/index.css"
@@ -14,6 +15,7 @@ import { RemoteAgentSession } from "./codex-cli"
 import type { RemoteCommandCatalog } from "./remote-workspace-state"
 import { RemoteConnect } from "./remote-connect"
 import { remoteCapabilityEnabled } from "./remote-workspace-state"
+import { parseRemoteSessionDeepLink, type RemoteSessionDeepLink } from "./remote-jobs"
 
 function emitDeepLinks(urls: string[]) {
   if (urls.length === 0) return
@@ -27,8 +29,16 @@ export async function mountAndroidApp() {
   const root = document.getElementById("root")
   if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
 
+  const [remoteSession, setRemoteSession] = createSignal<RemoteSessionDeepLink>()
   const [shell, initial] = await Promise.all([shellBridge(), readInitialWorkspaceState()])
-  if (shell.capabilities.deepLinks) shell.subscribeDeepLinks(emitDeepLinks)
+  if (shell.capabilities.deepLinks)
+    shell.subscribeDeepLinks((urls) => {
+      const session = urls
+        .map(parseRemoteSessionDeepLink)
+        .find((item): item is RemoteSessionDeepLink => item !== undefined)
+      if (session) setRemoteSession(session)
+      emitDeepLinks(urls)
+    })
   const workspace = initial.state.workspace?.workspace
   if (
     !initial.state.serverUrl ||
@@ -56,6 +66,9 @@ export async function mountAndroidApp() {
           password={initial.secret?.password ?? ""}
           workspaceID={selection.workspaceID ?? ""}
           directory={selection.directory ?? ""}
+          jobID={remoteSession()?.jobID}
+          sessionID={remoteSession()?.sessionID}
+          background={shell.remoteJobs}
           catalog={initial.state.commandCatalog}
           onCatalog={(catalog: RemoteCommandCatalog) =>
             void persistRemoteWorkspace(

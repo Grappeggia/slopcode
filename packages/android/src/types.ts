@@ -4,6 +4,8 @@ export type AndroidCapabilities = {
   notifications: boolean
   deepLinks: boolean
   remoteTransport: boolean
+  backgroundExecution: boolean
+  remoteJobs: boolean
 }
 
 export type AndroidSecureStorage = {

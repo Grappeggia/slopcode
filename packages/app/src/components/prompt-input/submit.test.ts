@@ -1,5 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { Prompt } from "@/context/prompt"
+import {
+  normalizeNewSessionWorktree,
+  resolveNewSessionWorktree,
+} from "@/pages/new-session/new-session-workspace-controller"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
@@ -18,6 +22,7 @@ const optimistic: Array<{
 const optimisticSeeded: boolean[] = []
 const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
+const navigated: string[] = []
 const sentShell: string[] = []
 const syncedDirectories: string[] = []
 
@@ -59,7 +64,7 @@ beforeAll(async () => {
   const rootClient = clientFor("/repo/main")
 
   mock.module("@solidjs/router", () => ({
-    useNavigate: () => () => undefined,
+    useNavigate: () => (path: string) => navigated.push(path),
     useParams: () => params,
     useLocation: () => ({}),
     useSearchParams: () => [{}, () => undefined],
@@ -222,6 +227,7 @@ beforeEach(() => {
   optimistic.length = 0
   optimisticSeeded.length = 0
   promoted.length = 0
+  navigated.length = 0
   params = {}
   sentShell.length = 0
   syncedDirectories.length = 0
@@ -231,6 +237,48 @@ beforeEach(() => {
 })
 
 describe("prompt submit worktree selection", () => {
+  test("routes a session-route workspace selection through the actual submission directory", async () => {
+    let routeSelection: string | undefined
+    const directory = "/repo/main"
+    const projectWorktree = "/repo/main"
+    routeSelection = normalizeNewSessionWorktree("/repo/worktree-a", directory, projectWorktree)
+
+    const submit = createPromptSubmit({
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () =>
+        resolveNewSessionWorktree({
+          selected: routeSelection,
+          directory,
+          projectWorktree,
+        }),
+      onNewSessionWorktreeReset: () => {
+        routeSelection = undefined
+      },
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(createdClients).toEqual(["/repo/worktree-a"])
+    expect(createdSessions).toEqual(["/repo/worktree-a"])
+    expect(sentShell).toEqual(["/repo/worktree-a"])
+    expect(promoted).toEqual([{ directory: "/repo/worktree-a", sessionID: "session-1" }])
+    expect(navigated).toEqual(["//repo/worktree-a/session/session-1"])
+    expect(routeSelection).toBeUndefined()
+  })
+
   test("reads the latest worktree accessor value per submit", async () => {
     const submit = createPromptSubmit({
       info: () => undefined,
@@ -295,9 +343,11 @@ describe("prompt submit worktree selection", () => {
     expect(createdSessions).toEqual(["/repo/main/new"])
     expect(sentShell).toEqual(["/repo/main/new"])
     expect(promoted).toEqual([{ directory: "/repo/main/new", sessionID: "session-1" }])
+    expect(navigated).toEqual(["//repo/main/new/session/session-1"])
   })
 
   test("applies auto-accept to newly created sessions", async () => {
+    selected = "main"
     const submit = createPromptSubmit({
       info: () => undefined,
       imageAttachments: () => [],
@@ -321,11 +371,17 @@ describe("prompt submit worktree selection", () => {
 
     await submit.handleSubmit(event)
 
-    expect(enabledAutoAccept).toEqual([{ sessionID: "session-1", directory: "/repo/worktree-a" }])
+    expect(enabledAutoAccept).toEqual([{ sessionID: "session-1", directory: "/repo/main" }])
+    expect(createdClients).toEqual([])
+    expect(createdSessions).toEqual(["/repo/main"])
+    expect(sentShell).toEqual(["/repo/main"])
+    expect(promoted).toEqual([{ directory: "/repo/main", sessionID: "session-1" }])
+    expect(navigated).toEqual(["//repo/main/session/session-1"])
   })
 
   test("includes the selected variant on optimistic prompts", async () => {
     params = { id: "session-1" }
+    selected = "create"
     variant = "high"
 
     const submit = createPromptSubmit({
@@ -342,6 +398,7 @@ describe("prompt submit worktree selection", () => {
       resetHistoryNavigation: () => undefined,
       setMode: () => undefined,
       setPopover: () => undefined,
+      newSessionWorktree: () => selected,
       onSubmit: () => undefined,
     })
 
@@ -356,6 +413,10 @@ describe("prompt submit worktree selection", () => {
         model: { providerID: "provider", modelID: "model", variant: "high" },
       },
     })
+    expect(createdClients).toEqual([])
+    expect(createdSessions).toEqual([])
+    expect(promoted).toEqual([])
+    expect(navigated).toEqual([])
   })
 
   test("seeds new sessions before optimistic prompts are added", async () => {

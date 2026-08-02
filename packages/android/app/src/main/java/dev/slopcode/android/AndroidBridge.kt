@@ -3,13 +3,17 @@ package dev.slopcode.android
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.webkit.WebView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.webkit.JavaScriptReplyProxy
@@ -30,13 +34,30 @@ class AndroidBridge(
   private val channelId = "slopcode.android"
   private val manager = activity.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as NotificationManager
   private val key = MasterKey.Builder(activity).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+  private val jobs = RemoteJobStore(activity)
   @Volatile private var rendererReady = false
   @Volatile private var rendererNonce: String? = null
+  @Volatile private var jobsReady = false
+  @Volatile private var jobsNonce: String? = null
+  private val jobReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (!jobsReady || jobsNonce == null) return
+      val job = intent?.getStringExtra(RemoteJobStore.EXTRA_JOB) ?: return
+      val event = intent.getStringExtra(RemoteJobStore.EXTRA_EVENT) ?: return
+      postJobEvent(job, event)
+    }
+  }
 
   init {
     val channel = NotificationChannel(channelId, "SlopCode", NotificationManager.IMPORTANCE_DEFAULT)
     manager.createNotificationChannel(channel)
     permissionState()
+    ContextCompat.registerReceiver(
+      activity,
+      jobReceiver,
+      IntentFilter(RemoteJobStore.ACTION_JOB_CHANGED),
+      ContextCompat.RECEIVER_NOT_EXPORTED,
+    )
   }
 
   private fun prefs(namespace: String) = EncryptedSharedPreferences.create(
@@ -178,6 +199,18 @@ class AndroidBridge(
     if (uri.scheme != "slopcode" || uri.userInfo != null || uri.fragment != null) return null
     if (uri.port != -1 || (uri.path != null && uri.path != "" && uri.path != "/")) return null
     val host = uri.host ?: return null
+    if (host == "remote-session") {
+      if (uri.queryParameterNames.any { it != "job" && it != "session" }) return null
+      val job = uri.getQueryParameters("job")
+      val session = uri.getQueryParameters("session")
+      if (
+        job.size != 1 ||
+        !job[0].matches(Regex("(?:job|pty|ses)_[A-Za-z0-9._:-]+")) ||
+        session.size > 1 ||
+        (session.singleOrNull()?.matches(Regex("(?:ses|pty)_[A-Za-z0-9._:-]+")) == false)
+      ) return null
+      return url
+    }
     if (host != "open-project" && host != "new-session") return null
     val directories = uri.getQueryParameters("directory")
     val directory = directories.singleOrNull() ?: return null
@@ -202,6 +235,8 @@ class AndroidBridge(
   fun onRendererNavigation() {
     rendererReady = false
     rendererNonce = null
+    jobsReady = false
+    jobsNonce = null
   }
 
   fun flushDeepLinks() {
@@ -240,6 +275,8 @@ class AndroidBridge(
       .put("notifications", true)
       .put("deepLinks", true)
       .put("remoteTransport", false)
+      .put("backgroundExecution", true)
+      .put("remoteJobs", true)
 
   fun listener() = WebViewCompat.WebMessageListener { _, message, sourceOrigin, isMainFrame, replyProxy ->
     if (!isMainFrame || sourceOrigin.toString() != TRUSTED_ORIGIN) {
@@ -351,6 +388,35 @@ class AndroidBridge(
           arity(args, 1)
           reply(replyProxy, bridgeResult(id, openLink(argText(args, 0, MAX_URL_BYTES) ?: error("Invalid URL"))))
         }
+        "remoteJobsReady" -> {
+          arity(args, 1)
+          jobsNonce = deepLinkNonce(args, 0)
+          jobsReady = true
+          reply(replyProxy, bridgeResult(id, true))
+        }
+        "remoteJobList" -> {
+          arity(args, 0)
+          val list = JSONArray()
+          jobs.list().forEach { list.put(it.publicJson()) }
+          reply(replyProxy, bridgeResult(id, list))
+        }
+        "remoteJobStart" -> {
+          arity(args, 1)
+          val raw = argText(args, 0, MAX_VALUE_BYTES) ?: error("Invalid remote job")
+          val spec = RemoteJobSpec.parse(raw) ?: error("Invalid remote job")
+          reply(replyProxy, bridgeResult(id, RemoteJobService.enqueue(activity, spec).publicJson()))
+        }
+        "remoteJobAction" -> {
+          arity(args, 2, 3)
+          val jobID = argText(args, 0, MAX_ID_BYTES) ?: error("Invalid remote job ID")
+          check(jobID.matches(Regex("job_[A-Za-z0-9._:-]{1,240}"))) { "Invalid remote job ID" }
+          val action = argText(args, 1, 32) ?: error("Invalid remote job action")
+          check(RemoteJobAction.valid(action)) { "Invalid remote job action" }
+          val payload = argText(args, 2, 16 * 1024, required = false)
+          payload?.let { check(runCatching { JSONObject(it) }.isSuccess) { "Invalid remote job payload" } }
+          RemoteJobService.action(activity, jobID, action, payload)
+          reply(replyProxy, bridgeResult(id, jobs.get(jobID)?.publicJson() ?: JSONObject.NULL))
+        }
         else -> reply(replyProxy, bridgeError(id, "unknown_method", "Unsupported bridge method"))
       }
     }.onFailure {
@@ -400,8 +466,28 @@ class AndroidBridge(
     callbacks.forEach { it(state) }
   }
 
+  private fun postJobEvent(job: String, event: String) {
+    val nonce = jobsNonce ?: return
+    val payload = JSONObject()
+      .put("type", "slopcode.remote-job")
+      .put("channel", REMOTE_JOB_CHANNEL)
+      .put("nonce", nonce)
+      .put("job", JSONObject(job))
+      .put("event", JSONObject(event))
+      .toString()
+    webView.post {
+      if (!jobsReady || jobsNonce != nonce) return@post
+      WebViewCompat.postWebMessage(webView, WebMessageCompat(payload), Uri.parse(TRUSTED_ORIGIN))
+    }
+  }
+
+  fun close() {
+    runCatching { activity.unregisterReceiver(jobReceiver) }
+  }
+
   companion object {
     private const val TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
+    private const val REMOTE_JOB_CHANNEL = "slopcode.android.remote-jobs"
     private const val DEEP_LINK_CHANNEL = "slopcode.android.deep-links"
     private const val MAX_MESSAGE_BYTES = 256 * 1024
     private const val MAX_ID_BYTES = 128

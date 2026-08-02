@@ -349,104 +349,98 @@ describe("workspace HttpApi", () => {
     }),
   )
 
-  it.live(
-    "scopes shared /api session, fs, permission, question, and PTY handlers to the selected local workspace",
-    () =>
-      Effect.gen(function* () {
-        Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES = true
-        const dir = yield* tmpdirScoped({ git: true })
-        const workspaceDir = path.join(dir, ".workspace-v2-local")
-        const project = yield* Project.use.fromDirectory(dir)
-        registerAdapter(project.project.id, "local-v2-target", localAdapter(workspaceDir))
-        const created = yield* request(WorkspacePaths.list, dir, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ type: "local-v2-target", branch: null }),
-        })
-        const workspace = (yield* created.json) as Workspace.Info
+  it.live("scopes shared /api session, fs, permission, question, and PTY handlers to the selected local workspace", () =>
+    Effect.gen(function* () {
+      Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES = true
+      const dir = yield* tmpdirScoped({ git: true })
+      const workspaceDir = path.join(dir, ".workspace-v2-local")
+      const project = yield* Project.use.fromDirectory(dir)
+      registerAdapter(project.project.id, "local-v2-target", localAdapter(workspaceDir))
+      const created = yield* request(WorkspacePaths.list, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "local-v2-target", branch: null }),
+      })
+      const workspace = (yield* created.json) as Workspace.Info
 
-        yield* Effect.promise(() => Bun.write(path.join(workspaceDir, "target.txt"), "workspace-local"))
+      yield* Effect.promise(() => Bun.write(path.join(workspaceDir, "target.txt"), "workspace-local"))
 
-        const locationURL = new URL("http://localhost/api/location")
-        locationURL.searchParams.set("workspace", workspace.id)
-        locationURL.searchParams.set("location[directory]", dir)
-        const location = yield* requestDefault(locationURL.toString(), dir)
-        expect(location.status).toBe(200)
-        expect(yield* location.json).toMatchObject({
-          directory: workspaceDir,
-          workspaceID: workspace.id,
-        })
+      const locationURL = new URL("http://localhost/api/location")
+      locationURL.searchParams.set("workspace", workspace.id)
+      locationURL.searchParams.set("location[directory]", dir)
+      const location = yield* requestDefault(locationURL.toString(), dir)
+      expect(location.status).toBe(200)
+      expect(yield* location.json).toMatchObject({
+        directory: workspaceDir,
+        workspaceID: workspace.id,
+      })
 
-        const fsURL = new URL("http://localhost/api/fs/list")
-        fsURL.searchParams.set("workspace", workspace.id)
-        fsURL.searchParams.set("path", ".")
-        fsURL.searchParams.set("location[directory]", dir)
-        const fs = yield* requestDefault(fsURL.toString(), dir)
-        expect(fs.status).toBe(200)
-        expect(yield* fs.json).toMatchObject({
-          location: expect.objectContaining({ directory: workspaceDir, workspaceID: workspace.id }),
-          data: expect.arrayContaining([expect.objectContaining({ path: "target.txt" })]),
-        })
+      const fsURL = new URL("http://localhost/api/fs/list")
+      fsURL.searchParams.set("workspace", workspace.id)
+      fsURL.searchParams.set("path", ".")
+      fsURL.searchParams.set("location[directory]", dir)
+      const fs = yield* requestDefault(fsURL.toString(), dir)
+      expect(fs.status).toBe(200)
+      expect(yield* fs.json).toMatchObject({
+        location: expect.objectContaining({ directory: workspaceDir, workspaceID: workspace.id }),
+        data: expect.arrayContaining([expect.objectContaining({ path: "target.txt" })]),
+      })
 
-        for (const route of ["/api/permission/request", "/api/question/request"]) {
-          const url = new URL(`http://localhost${route}`)
-          url.searchParams.set("workspace", workspace.id)
-          url.searchParams.set("location[directory]", dir)
-          const response = yield* requestDefault(url.toString(), dir)
-          expect(response.status).toBe(200)
-          expect(yield* response.json).toMatchObject({
-            location: { directory: workspaceDir, workspaceID: workspace.id },
-            data: [],
-          })
-        }
-
-        const session = yield* requestDefault(`/api/session?workspace=${workspace.id}`, dir, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ location: { directory: dir } }),
-        })
-        expect(session.status).toBe(200)
-        const sessionBody = (yield* session.json) as {
-          data: { id: string; location: { directory: string; workspaceID?: string } }
-        }
-        expect(sessionBody).toMatchObject({
-          data: {
-            location: {
-              directory: workspaceDir,
-              workspaceID: workspace.id,
-            },
-          },
-        })
-
-        const messages = yield* requestDefault(`/api/session/${sessionBody.data.id}/message`, dir)
-        expect(messages.status).toBe(200)
-        expect(yield* messages.json).toMatchObject({ data: [] })
-
-        const pty = yield* requestDefault(
-          `/api/pty?workspace=${workspace.id}&location[directory]=${encodeURIComponent(dir)}`,
-          dir,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ title: "scoped-v2-pty" }),
-          },
-        )
-        expect(pty.status).toBe(200)
-        const ptyBody = (yield* pty.json) as {
-          location: { directory: string; workspaceID?: string }
-          data: { id: string; cwd: string; title: string }
-        }
-        expect(ptyBody).toMatchObject({
+      for (const route of ["/api/permission/request", "/api/question/request"]) {
+        const url = new URL(`http://localhost${route}`)
+        url.searchParams.set("workspace", workspace.id)
+        url.searchParams.set("location[directory]", dir)
+        const response = yield* requestDefault(url.toString(), dir)
+        expect(response.status).toBe(200)
+        expect(yield* response.json).toMatchObject({
           location: { directory: workspaceDir, workspaceID: workspace.id },
-          data: { cwd: workspaceDir, title: "scoped-v2-pty" },
+          data: [],
         })
-        const removed = yield* requestDefault(`/api/pty/${ptyBody.data.id}?workspace=${workspace.id}`, dir, {
-          method: "DELETE",
-        })
-        expect(removed.status).toBe(204)
+      }
 
-        yield* request(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
-      }),
+      const session = yield* requestDefault(`/api/session?workspace=${workspace.id}`, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ location: { directory: dir } }),
+      })
+      expect(session.status).toBe(200)
+      const sessionBody = (yield* session.json) as {
+        data: { id: string; location: { directory: string; workspaceID?: string } }
+      }
+      expect(sessionBody).toMatchObject({
+        data: {
+          location: {
+            directory: workspaceDir,
+            workspaceID: workspace.id,
+          },
+        },
+      })
+
+      const messages = yield* requestDefault(`/api/session/${sessionBody.data.id}/message`, dir)
+      expect(messages.status).toBe(200)
+      expect(yield* messages.json).toMatchObject({ data: [] })
+
+      const pty = yield* requestDefault(`/api/pty?workspace=${workspace.id}&location[directory]=${encodeURIComponent(dir)}`, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "scoped-v2-pty" }),
+      })
+      expect(pty.status).toBe(200)
+      const ptyBody = (yield* pty.json) as {
+        location: { directory: string; workspaceID?: string }
+        data: { id: string; cwd: string; title: string }
+      }
+      expect(ptyBody).toMatchObject({
+        location: { directory: workspaceDir, workspaceID: workspace.id },
+        data: { cwd: workspaceDir, title: "scoped-v2-pty" },
+      })
+      const removed = yield* requestDefault(`/api/pty/${ptyBody.data.id}?workspace=${workspace.id}`, dir, {
+        method: "DELETE",
+      })
+      expect(removed.status).toBe(204)
+
+      yield* request(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
+    }),
   )
 
   it.live("proxies remote workspace HTTP requests with sanitized forwarding", () =>

@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type { DesktopRemotePublicEvent, ElectronAPI, WslServersEvent } from "./types"
 import type { UpdaterState } from "@slopcode-ai/app/updater"
+import { onWindowFullscreenChanged } from "./window-fullscreen"
+import { focusDebugRequested } from "../focus-debug"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
 let updaterState: UpdaterState | undefined
@@ -115,6 +117,8 @@ const api: ElectronAPI = {
   readClipboardImage: () => ipcRenderer.invoke("read-clipboard-image"),
   showNotification: (title, body) => ipcRenderer.send("show-notification", title, body),
   getWindowFocused: () => ipcRenderer.invoke("get-window-focused"),
+  getWindowFullscreen: () => ipcRenderer.invoke("get-window-fullscreen"),
+  onWindowFullscreenChanged: (cb) => onWindowFullscreenChanged(ipcRenderer, cb),
   setWindowFocus: () => ipcRenderer.invoke("set-window-focus"),
   showWindow: () => ipcRenderer.invoke("show-window"),
   relaunch: () => ipcRenderer.send("relaunch"),
@@ -136,6 +140,8 @@ const api: ElectronAPI = {
   runDesktopMenuAction: (action) => ipcRenderer.invoke("run-desktop-menu-action", action),
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
+  focusDebugEnabled: focusDebugRequested(),
+  setForceFocus: (enabled) => ipcRenderer.invoke("set-force-focus", enabled),
   recordFatalRendererError: (error) => ipcRenderer.invoke("record-fatal-renderer-error", error),
 }
 

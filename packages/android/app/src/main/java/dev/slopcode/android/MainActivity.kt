@@ -83,6 +83,12 @@ class MainActivity : AppCompatActivity() {
     handleIntent(intent, true)
   }
 
+  override fun onDestroy() {
+    if (::bridge.isInitialized) bridge.close()
+    if (::webView.isInitialized) webView.destroy()
+    super.onDestroy()
+  }
+
   private fun installBridge() {
     check(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
       "Origin-restricted WebView bridge is unavailable"

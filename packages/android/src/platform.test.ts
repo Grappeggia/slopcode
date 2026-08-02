@@ -45,6 +45,10 @@ function native(permission: NotificationPermission = "granted", result: Notifica
       calls.push("show")
     },
     openLink: async () => false,
+    remoteJobsReady: async () => true,
+    remoteJobList: async () => [],
+    remoteJobStart: async () => undefined,
+    remoteJobAction: async () => undefined,
   } satisfies AndroidNativeBridge
   return { bridge, calls, values }
 }
@@ -90,7 +94,11 @@ describe("android storage boundaries", () => {
     expect(await appStorage(null)().getItem("theme")).toBeNull()
 
     await expect(
-      persistRemoteWorkspace({ version: 1, serverUrl: "https://remote.example.test" }, { password: "secret" }, null),
+      persistRemoteWorkspace(
+        { version: 1, serverUrl: "https://remote.example.test" },
+        { password: "secret" },
+        null,
+      ),
     ).rejects.toThrow("secure storage")
     await expect(readInitialWorkspaceState(null)).resolves.toEqual({ state: { version: 1 } })
   })

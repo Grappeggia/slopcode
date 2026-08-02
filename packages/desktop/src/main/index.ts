@@ -13,6 +13,7 @@ import contextMenu from "electron-context-menu"
 
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
+import { backgroundCliSource, createBackgroundCli, type BackgroundCli } from "./background-cli"
 import { CHANNEL } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
@@ -50,6 +51,8 @@ import {
 } from "./onboarding"
 import { safeWebContentsURL } from "./window-state"
 import { createRemoteSupervisor, createSshRemoteHostService } from "./remote"
+import { rendererCorsOrigins } from "../security"
+import { stopServices } from "./shutdown"
 
 const APP_NAMES: Record<string, string> = {
   dev: "SlopCode Dev",
@@ -62,11 +65,18 @@ const APP_IDS: Record<string, string> = {
   prod: "ai.slopcode.desktop",
 }
 const TEST_ONBOARDING = process.env.SLOPCODE_TEST_ONBOARDING === "1"
+const SIDECAR_VERSION =
+  process.env.SLOPCODE_SIDECAR_V2 === "0"
+    ? "v1"
+    : app.isPackaged || process.env.SLOPCODE_SIDECAR_V2 === "1"
+      ? "v2"
+      : "v1"
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 
 let logger: ReturnType<typeof initLogging>
 let mainWindow: BrowserWindow | null = null
 let server: SidecarListener | null = null
+let background: BackgroundCli | undefined
 let stopRemoteSupervisor: (() => void) | undefined
 const remoteHost = createSshRemoteHostService()
 
@@ -91,6 +101,9 @@ function emitDeepLinks(urls: string[]) {
 async function killSidecar() {
   stopRemoteSupervisor?.()
   stopRemoteSupervisor = undefined
+  const service = background
+  background = undefined
+  await service?.stop()
   if (!server) return
   const current = server
   server = null
@@ -115,6 +128,20 @@ function ensureLoopbackNoProxy() {
 
   upsert("NO_PROXY")
   upsert("no_proxy")
+}
+
+async function waitForEmbeddedHealth(wait: Promise<void>) {
+  const expired = Promise.withResolvers<never>()
+  const timer = setTimeout(
+    () => expired.reject(new Error("Embedded sidecar health check timed out after 30000ms")),
+    30_000,
+  )
+  timer.unref()
+  try {
+    await Promise.race([wait, expired.promise])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 const main = Effect.gen(function* () {
@@ -168,16 +195,21 @@ const main = Effect.gen(function* () {
       },
     },
   )
-  const stopSidecars = async () => {
-    await killSidecar()
-    await remoteHost.stopAll()
-    wslServers.stopAll()
+  let stopping: Promise<void> | undefined
+  const stopSidecars = () => {
+    if (stopping) return stopping
+    stopping = stopServices([killSidecar(), remoteHost.stopAll()], () => wslServers.stopAll()).finally(() => {
+      stopping = undefined
+    })
+    return stopping
   }
   const relaunch = () => {
-    void stopSidecars().finally(() => {
-      app.relaunch()
-      app.exit(0)
-    })
+    void stopSidecars()
+      .catch((error) => logger.error("sidecar cleanup failed before relaunch", error))
+      .finally(() => {
+        app.relaunch()
+        app.exit(0)
+      })
   }
 
   try {
@@ -225,13 +257,19 @@ const main = Effect.gen(function* () {
     emitDeepLinks([url])
   })
 
-  app.on("before-quit", () => {
+  let quitting = false
+  app.on("before-quit", (event) => {
     setAppQuitting()
+    if (quitting) return
+    event.preventDefault()
+    quitting = true
     void stopSidecars()
+      .catch((error) => logger.error("sidecar cleanup failed before quit", error))
+      .finally(() => app.quit())
   })
 
   app.on("will-quit", () => {
-    void stopSidecars()
+    setAppQuitting()
   })
 
   app.on("child-process-gone", (_event, details) => {
@@ -249,7 +287,9 @@ const main = Effect.gen(function* () {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       setAppQuitting()
-      void stopSidecars().finally(() => app.exit(0))
+      void stopSidecars()
+        .catch((error) => logger.error("sidecar cleanup failed after signal", { signal, error }))
+        .finally(() => app.exit(0))
     })
   }
 
@@ -349,35 +389,61 @@ const main = Effect.gen(function* () {
   const remoteSupervisorToken = randomUUID()
 
   const loadingTask = yield* Effect.gen(function* () {
-    logger.log("sidecar connection started", { url })
+    logger.log("sidecar connection started", { url, version: SIDECAR_VERSION })
 
     ensureLoopbackNoProxy()
     useEnvProxy()
 
-    logger.log("spawning sidecar", { url })
-    const { listener, health } = yield* Effect.promise(() =>
-      spawnLocalServer(hostname, port, password, {
+    const data = yield* Effect.promise(async () => {
+      if (SIDECAR_VERSION === "v2") {
+        background = createBackgroundCli({
+          source: backgroundCliSource(app.isPackaged, process.resourcesPath),
+          userData: app.getPath("userData"),
+          hostname,
+          port,
+          username: "slopcode",
+          password,
+          cors: rendererCorsOrigins(process.env.ELECTRON_RENDERER_URL),
+          remote: { hostID: remoteHostID, token: remoteSupervisorToken },
+          env: app.isPackaged ? undefined : { SLOPCODE_DISABLE_CHANNEL_DB: "1" },
+          logger: {
+            log: (message, meta) => logger.log(message, meta),
+            warn: (message, meta) => logger.warn(message, meta),
+            error: (message, meta) => logger.error(message, meta),
+          },
+        })
+        return background.start()
+      }
+
+      logger.log("spawning embedded sidecar", { url })
+      const result = await spawnLocalServer(hostname, port, password, {
         userDataPath: app.getPath("userData"),
         remoteHostID,
         remoteSupervisorToken,
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
-      }),
-    )
-    server = listener
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username: "slopcode",
-      password,
+      })
+      server = result.listener
+      await waitForEmbeddedHealth(result.health.wait).catch((error) =>
+        logger.error("embedded sidecar health check failed", error),
+      )
+      return {
+        url,
+        username: "slopcode" as const,
+        password,
+        remoteHostID,
+        remoteSupervisorToken,
+      }
     })
+    yield* Deferred.succeed(serverReady, data)
     const supervisor = createRemoteSupervisor({
       service: remoteHost,
-      serverUrl: url,
-      username: "slopcode",
-      password,
-      token: remoteSupervisorToken,
-      hostID: remoteHostID,
+      serverUrl: data.url,
+      username: data.username,
+      password: data.password,
+      token: data.remoteSupervisorToken,
+      hostID: data.remoteHostID,
     })
     stopRemoteSupervisor = supervisor.start()
     void supervisor.reconcile().catch((error) => logger.warn("remote supervisor reconciliation failed", error))
@@ -385,15 +451,6 @@ const main = Effect.gen(function* () {
     if (process.platform === "win32") {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
-
-    yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("30 seconds"),
-      Effect.catch((e) =>
-        Effect.sync(() => {
-          logger.error("sidecar health check failed", e.toString())
-        }),
-      ),
-    )
 
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)
