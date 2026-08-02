@@ -61,6 +61,13 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
+      - name: Setup release token
+        id: committer
+        uses: ./.github/actions/setup-git-committer
+        with:
+          slopcode-app-id: ${{ vars.SLOPCODE_APP_ID }}
+          slopcode-app-secret: ${{ secrets.SLOPCODE_APP_SECRET }}
+
       - name: Verify release provenance from canonical dev
         id: version
         run: |
@@ -76,7 +83,7 @@ jobs:
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "repo=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
           VERSION: ${{ inputs.version }}
           SOURCE: ${{ inputs.source_sha }}
           PREVIOUS: ${{ inputs.previous_tag }}
