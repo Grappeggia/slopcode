@@ -202,9 +202,7 @@ if (plan === "success") {
   console.log(`Recovered successful publish.yml run: ${existing?.url ?? `run ${existing?.databaseId}`}`)
   process.exit(0)
 }
-const draft = (
-  await $`gh release view ${prepared.tag} --json isDraft --jq .isDraft --repo ${repo}`.text()
-).trim()
+const draft = (await $`gh release view ${prepared.tag} --json isDraft --jq .isDraft --repo ${repo}`.text()).trim()
 if (draft === "true") {
   await $`gh release edit ${prepared.tag} --draft=false --repo ${repo}`
 } else if (draft !== "false") {
