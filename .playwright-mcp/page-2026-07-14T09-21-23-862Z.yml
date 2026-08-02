@@ -1,306 +1,306 @@
 - generic [active] [ref=e1]:
-  - link "Skip to content" [ref=e2] [cursor=pointer]:
-    - /url: "#_top"
-  - generic [ref=e3]:
-    - banner [ref=e4]:
-      - link "SlopCode" [ref=e7] [cursor=pointer]:
-        - /url: /docs/
-        - generic [ref=e8]: SlopCode
-    - navigation "Main":
-      - button "Menu" [ref=e9] [cursor=pointer]:
-        - img [ref=e10]
-      - option "English" [selected]
-      - option "العربية"
-      - option "Bosanski"
-      - option "Dansk"
-      - option "Deutsch"
-      - option "Español"
-      - option "Français"
-      - option "Italiano"
-      - option "日本語"
-      - option "한국어"
-      - option "Norsk Bokmål"
-      - option "Polski"
-      - option "Português (Brasil)"
-      - option "Русский"
-      - option "ไทย"
-      - option "Türkçe"
-      - option "简体中文"
-      - option "繁體中文"
-    - generic [ref=e13]:
-      - complementary:
-        - navigation "On this page Overview" [ref=e214]:
-          - group [ref=e15]:
-            - generic "On this page Overview" [ref=e215]:
-              - generic [ref=e17] [cursor=pointer]:
-                - text: On this page
-                - img [ref=e18]
-              - generic [ref=e216]: Overview
-      - main [ref=e21]:
-        - generic [ref=e23]:
-          - heading "Changelog" [level=1] [ref=e24]
-          - paragraph [ref=e25]: Release notes for SlopCode.
-        - generic [ref=e27]:
-          - generic [ref=e28]:
-            - heading "v0.2.198" [level=2] [ref=e29]:
-              - link "v0.2.198" [ref=e30]:
-                - /url: "#v02198"
-            - paragraph [ref=e31]: Released July 13, 2026.
-            - list [ref=e32]:
-              - listitem [ref=e33]:
-                - text: Added ephemeral multi-turn
-                - code [ref=e34]: "`/btw`"
-                - text: follow-ups.
-              - listitem [ref=e35]: Allowed up to five already-permitted text-file reads per question.
-              - listitem [ref=e36]: Hardened tool, permission, path, and context isolation.
-            - heading "v0.2.197" [level=2] [ref=e37]:
-              - link "v0.2.197" [ref=e38]:
-                - /url: "#v02197"
-            - paragraph [ref=e39]: Released July 13, 2026.
-            - list [ref=e40]:
-              - listitem [ref=e41]:
-                - text: Added ChatGPT Codex usage to
-                - code [ref=e42]: "`/status`"
-                - text: for legacy and V2 OpenAI providers.
-              - listitem [ref=e43]: Added durable GPT-5.6 V2 execution, retries, and restart recovery.
-              - listitem [ref=e44]: Hardened OAuth, MCP, shell, formatter, and file-mutation boundaries.
-            - heading "v0.2.196" [level=2] [ref=e45]:
-              - link "v0.2.196" [ref=e46]:
-                - /url: "#v02196"
-            - paragraph [ref=e47]: Released July 12, 2026.
-            - list [ref=e48]:
-              - listitem [ref=e49]:
-                - text: Fixed
-                - code [ref=e50]: "`/btw`"
-                - text: side questions leaking structured model-stream logs into the TUI.
-              - listitem [ref=e51]: Preserved configured logging across lazy side-question SSE responses.
-              - listitem [ref=e52]: Added deferred stream logger-context regression coverage.
-            - heading "v0.2.195" [level=2] [ref=e53]:
-              - link "v0.2.195" [ref=e54]:
-                - /url: "#v02195"
-            - paragraph [ref=e55]: Released July 12, 2026.
-            - list [ref=e56]:
-              - listitem [ref=e57]:
-                - text: Fixed
-                - code [ref=e58]: "`/btw`"
-                - text: freezes with a non-blocking inline side-question panel.
-              - listitem [ref=e59]: Kept live agent output visible while preserving prompt drafts and history isolation.
-              - listitem [ref=e60]: Added cancellation, retry, timeout, focus, and streaming regression coverage.
-            - heading "v0.2.192" [level=2] [ref=e61]:
-              - link "v0.2.192" [ref=e62]:
-                - /url: "#v02192"
-            - paragraph [ref=e63]: Released July 10, 2026.
-            - list [ref=e64]:
-              - listitem [ref=e65]: Native V2 sessions claim explicit runtime ownership.
-              - listitem [ref=e66]: Restart recovery resumes pending durable inputs with epoch fencing.
-              - listitem [ref=e67]: Runtime owner, state, and epoch are visible through API and TUI status.
-            - heading "v0.2.191" [level=2] [ref=e68]:
-              - link "v0.2.191" [ref=e69]:
-                - /url: "#v02191"
-            - paragraph [ref=e70]: Released July 10, 2026.
-            - list [ref=e71]:
-              - listitem [ref=e72]: Hardened shell and tool authorization and symlink boundaries.
-              - listitem [ref=e73]: Isolated MCP OAuth credentials by server.
-              - listitem [ref=e74]: Hid empty reasoning placeholders.
-            - heading "v0.2.190" [level=2] [ref=e75]:
-              - link "v0.2.190" [ref=e76]:
-                - /url: "#v02190"
-            - paragraph [ref=e77]: Released July 10, 2026.
-            - list [ref=e78]:
-              - listitem [ref=e79]: Added owner-aware SessionControl gateway.
-              - listitem [ref=e80]: Fenced V1 and V2 runtime execution.
-              - listitem [ref=e81]: Added focused routing and fencing tests.
-            - heading "v0.2.189" [level=2] [ref=e82]:
-              - link "v0.2.189" [ref=e83]:
-                - /url: "#v02189"
-            - paragraph [ref=e84]: Released July 10, 2026.
-            - list [ref=e85]:
-              - listitem [ref=e86]: Added V2 session runtime ownership and migration fencing groundwork.
-              - listitem [ref=e87]: Hardened desktop navigation, IPC, and CORS handling.
-              - listitem [ref=e88]: Strengthened Zen usage settlement and legacy cutoff safeguards.
-            - heading "v0.2.188" [level=2] [ref=e89]:
-              - link "v0.2.188" [ref=e90]:
-                - /url: "#v02188"
-            - paragraph [ref=e91]: Released July 9, 2026.
-            - list [ref=e92]:
-              - listitem [ref=e93]: Added GPT-5.6, Sol, Terra, and Luna with all six reasoning budgets and Fast variants.
-              - listitem [ref=e94]: Added scoped memory with secret redaction and explicit global consent.
-              - listitem [ref=e95]: Hardened provider discovery, offline catalogs, and release packaging.
-            - heading "v0.2.187" [level=2] [ref=e96]:
-              - link "v0.2.187" [ref=e97]:
-                - /url: "#v02187"
-            - paragraph [ref=e98]: Released July 5, 2026.
-            - list [ref=e99]:
-              - listitem [ref=e100]: Restored bundled SlopCode model providers when upstream catalogs omit them.
-              - listitem [ref=e101]:
-                - text: Preserved custom
-                - code [ref=e102]: "`SLOPCODE_MODELS_PATH`"
-                - text: catalogs as exact overrides.
-              - listitem [ref=e103]: Published rebuilt 0.2.187 CLI binaries.
-            - heading "v0.2.186" [level=2] [ref=e104]:
-              - link "v0.2.186" [ref=e105]:
-                - /url: "#v02186"
-            - paragraph [ref=e106]: Released July 5, 2026.
-            - list [ref=e107]:
-              - listitem [ref=e108]: Safe referenced file reads and searches.
-              - listitem [ref=e109]: CI, app, and desktop parity fixes.
-              - listitem [ref=e110]: Prebuilt 0.2.186 release assets.
-            - heading "v0.2.185" [level=2] [ref=e111]:
-              - link "v0.2.185" [ref=e112]:
-                - /url: "#v02185"
-            - paragraph [ref=e113]: Released July 4, 2026.
-            - list [ref=e114]:
-              - listitem [ref=e115]: Tightened compact TUI transcript spacing.
-              - listitem [ref=e116]: Reduced prompt, dialog, and permission gutters.
-              - listitem [ref=e117]: Slimmed diff, which-key, and toast chrome.
-            - heading "v0.2.184" [level=2] [ref=e118]:
-              - link "v0.2.184" [ref=e119]:
-                - /url: "#v02184"
-            - paragraph [ref=e120]: Released July 3, 2026.
-            - list [ref=e121]:
-              - listitem [ref=e122]: Added Goal mode regression coverage.
-              - listitem [ref=e123]: Hardened Windows compaction retry-backoff coverage.
-            - heading "v0.2.183" [level=2] [ref=e124]:
-              - link "v0.2.183" [ref=e125]:
-                - /url: "#v02183"
-            - paragraph [ref=e126]: Released July 3, 2026.
-            - list [ref=e127]:
-              - listitem [ref=e128]: Added Goal mode for persistent session goals.
-              - listitem [ref=e129]: Remind active sessions of their current goal.
-              - listitem [ref=e130]: Moved Docs out of primary agent tab rotation.
-            - heading "v0.2.182" [level=2] [ref=e131]:
-              - link "v0.2.182" [ref=e132]:
-                - /url: "#v02182"
-            - paragraph [ref=e133]: Released July 2, 2026.
-            - list [ref=e134]:
-              - listitem [ref=e135]:
-                - text: Added Claude-compatible
-                - code [ref=e136]: "`/model`"
-                - text: and
-                - code [ref=e137]: "`/mcp`"
-                - text: TUI aliases.
-              - listitem [ref=e138]:
-                - text: Made
-                - code [ref=e139]: "`/copy`"
-                - text: copy the last assistant response, with transcript copy at
-                - code [ref=e140]: "`/copy-session`"
-                - text: and
-                - code [ref=e141]: "`/transcript`"
-                - text: .
-              - listitem [ref=e142]:
-                - text: Added
-                - code [ref=e143]: "`/usage`"
-                - text: with
-                - code [ref=e144]: "`/cost`"
-                - text: and
-                - code [ref=e145]: "`/stats`"
-                - text: aliases for session tokens and cost.
-            - heading "v0.2.181" [level=2] [ref=e146]:
-              - link "v0.2.181" [ref=e147]:
-                - /url: "#v02181"
-            - paragraph [ref=e148]: Released July 2, 2026.
-            - list [ref=e149]:
-              - listitem [ref=e150]:
-                - text: Ask quick
-                - code [ref=e151]: "`/btw`"
-                - text: side questions without interrupting the main session.
-              - listitem [ref=e152]: Stream side-question answers in a dismissible TUI overlay.
-              - listitem [ref=e153]: Keep side-question answers out of chat history and tool execution.
-            - heading "v0.2.180" [level=2] [ref=e154]:
-              - link "v0.2.180" [ref=e155]:
-                - /url: "#v02180"
-            - paragraph [ref=e156]: Released July 2, 2026.
-            - list [ref=e157]:
-              - listitem [ref=e158]: Compact TUI spacing for small terminals.
-              - listitem [ref=e159]: Reduced prompt, transcript, sidebar, dialog, and diff viewer gutters.
-              - listitem [ref=e160]: Preserved home zero-state layout while improving session density.
-            - heading "v0.2.179" [level=2] [ref=e161]:
-              - link "v0.2.179" [ref=e162]:
-                - /url: "#v02179"
-            - paragraph [ref=e163]: Released July 2, 2026.
-            - list [ref=e164]:
-              - listitem [ref=e165]: Fixed the TUI exit epilogue SlopCode wordmark.
-            - heading "v0.2.178" [level=2] [ref=e166]:
-              - link "v0.2.178" [ref=e167]:
-                - /url: "#v02178"
-            - paragraph [ref=e168]: Released July 2, 2026.
-            - list [ref=e169]:
-              - listitem [ref=e170]: Fixed Ripgrep fallback search startup on Windows.
-              - listitem [ref=e171]: Stabilized Windows path, prompt, and compaction tests.
-              - listitem [ref=e172]: Updated post-release docs and CI metadata.
-            - heading "v0.2.177" [level=2] [ref=e173]:
-              - link "v0.2.177" [ref=e174]:
-                - /url: "#v02177"
-            - paragraph [ref=e175]: Released July 2, 2026.
-            - list [ref=e176]:
-              - listitem [ref=e177]:
-                - text: Added upstream-compatible
-                - code [ref=e178]: "`--mini`"
-                - text: ","
-                - code [ref=e179]: "`--auto`"
-                - text: ", and"
-                - code [ref=e180]: "`--yolo`"
-                - text: run modes.
-              - listitem [ref=e181]:
-                - text: Added
-                - code [ref=e182]: "`slopcode attach --mini`"
-                - text: with replay controls.
-              - listitem [ref=e183]: Added TUI auto-permission handling and location-aware file autocomplete.
-            - heading "v0.2.148" [level=2] [ref=e184]:
-              - link "v0.2.148" [ref=e185]:
-                - /url: "#v02148"
-            - paragraph [ref=e186]: Released June 13, 2026.
-            - list [ref=e187]:
-              - listitem [ref=e188]: Synced upstream opencode parity across core, server, TUI, app, and packaging.
-              - listitem [ref=e189]: Restored SlopCode release packaging and bundled Neovim.
-              - listitem [ref=e190]: Fixed model switching, share sync, workspace routing, and location event compatibility.
-            - paragraph [ref=e191]:
-              - text: See all tagged releases on
-              - link "GitHub Releases" [ref=e192] [cursor=pointer]:
-                - /url: https://github.com/teamslop/slopcode/releases
-              - text: .
-          - generic [ref=e194]:
-            - generic [ref=e195]:
-              - link "Edit page" [ref=e196] [cursor=pointer]:
-                - /url: https://github.com/teamslop/slopcode/edit/dev/packages/web/src/content/docs/changelog.mdx
-                - img [ref=e197]
-                - text: Edit page
-              - link "Found a bug? Open an issue" [ref=e199] [cursor=pointer]:
-                - /url: https://github.com/teamslop/slopcode/issues/new
-                - img [ref=e200]
-                - text: Found a bug? Open an issue
-              - link "Join our Discord community" [ref=e202] [cursor=pointer]:
-                - /url: https://slopcode.ai/discord
-                - img [ref=e203]
-                - text: Join our Discord community
-              - generic [ref=e206]:
-                - generic [ref=e207]: Select language
-                - img
-                - combobox "Select language" [ref=e208] [cursor=pointer]:
-                  - option "English" [selected]
-                  - option "العربية"
-                  - option "Bosanski"
-                  - option "Dansk"
-                  - option "Deutsch"
-                  - option "Español"
-                  - option "Français"
-                  - option "Italiano"
-                  - option "日本語"
-                  - option "한국어"
-                  - option "Norsk Bokmål"
-                  - option "Polski"
-                  - option "Português (Brasil)"
-                  - option "Русский"
-                  - option "ไทย"
-                  - option "Türkçe"
-                  - option "简体中文"
-                  - option "繁體中文"
-                - img
-            - generic [ref=e209]:
-              - paragraph [ref=e210]:
-                - text: ©
-                - link "Anomaly" [ref=e211] [cursor=pointer]:
-                  - /url: https://anoma.ly
-              - paragraph [ref=e212]:
-                - text: "Last updated:"
-                - time [ref=e213]: Jul 14, 2026
+    - link "Skip to content" [ref=e2] [cursor=pointer]:
+        - /url: "#_top"
+    - generic [ref=e3]:
+        - banner [ref=e4]:
+            - link "SlopCode" [ref=e7] [cursor=pointer]:
+                - /url: /docs/
+                - generic [ref=e8]: SlopCode
+        - navigation "Main":
+            - button "Menu" [ref=e9] [cursor=pointer]:
+                - img [ref=e10]
+            - option "English" [selected]
+            - option "العربية"
+            - option "Bosanski"
+            - option "Dansk"
+            - option "Deutsch"
+            - option "Español"
+            - option "Français"
+            - option "Italiano"
+            - option "日本語"
+            - option "한국어"
+            - option "Norsk Bokmål"
+            - option "Polski"
+            - option "Português (Brasil)"
+            - option "Русский"
+            - option "ไทย"
+            - option "Türkçe"
+            - option "简体中文"
+            - option "繁體中文"
+        - generic [ref=e13]:
+            - complementary:
+                - navigation "On this page Overview" [ref=e214]:
+                    - group [ref=e15]:
+                        - generic "On this page Overview" [ref=e215]:
+                            - generic [ref=e17] [cursor=pointer]:
+                                - text: On this page
+                                - img [ref=e18]
+                            - generic [ref=e216]: Overview
+            - main [ref=e21]:
+                - generic [ref=e23]:
+                    - heading "Changelog" [level=1] [ref=e24]
+                    - paragraph [ref=e25]: Release notes for SlopCode.
+                - generic [ref=e27]:
+                    - generic [ref=e28]:
+                        - heading "v0.2.198" [level=2] [ref=e29]:
+                            - link "v0.2.198" [ref=e30]:
+                                - /url: "#v02198"
+                        - paragraph [ref=e31]: Released July 13, 2026.
+                        - list [ref=e32]:
+                            - listitem [ref=e33]:
+                                - text: Added ephemeral multi-turn
+                                - code [ref=e34]: "`/btw`"
+                                - text: follow-ups.
+                            - listitem [ref=e35]: Allowed up to five already-permitted text-file reads per question.
+                            - listitem [ref=e36]: Hardened tool, permission, path, and context isolation.
+                        - heading "v0.2.197" [level=2] [ref=e37]:
+                            - link "v0.2.197" [ref=e38]:
+                                - /url: "#v02197"
+                        - paragraph [ref=e39]: Released July 13, 2026.
+                        - list [ref=e40]:
+                            - listitem [ref=e41]:
+                                - text: Added ChatGPT Codex usage to
+                                - code [ref=e42]: "`/status`"
+                                - text: for legacy and V2 OpenAI providers.
+                            - listitem [ref=e43]: Added durable GPT-5.6 V2 execution, retries, and restart recovery.
+                            - listitem [ref=e44]: Hardened OAuth, MCP, shell, formatter, and file-mutation boundaries.
+                        - heading "v0.2.196" [level=2] [ref=e45]:
+                            - link "v0.2.196" [ref=e46]:
+                                - /url: "#v02196"
+                        - paragraph [ref=e47]: Released July 12, 2026.
+                        - list [ref=e48]:
+                            - listitem [ref=e49]:
+                                - text: Fixed
+                                - code [ref=e50]: "`/btw`"
+                                - text: side questions leaking structured model-stream logs into the TUI.
+                            - listitem [ref=e51]: Preserved configured logging across lazy side-question SSE responses.
+                            - listitem [ref=e52]: Added deferred stream logger-context regression coverage.
+                        - heading "v0.2.195" [level=2] [ref=e53]:
+                            - link "v0.2.195" [ref=e54]:
+                                - /url: "#v02195"
+                        - paragraph [ref=e55]: Released July 12, 2026.
+                        - list [ref=e56]:
+                            - listitem [ref=e57]:
+                                - text: Fixed
+                                - code [ref=e58]: "`/btw`"
+                                - text: freezes with a non-blocking inline side-question panel.
+                            - listitem [ref=e59]: Kept live agent output visible while preserving prompt drafts and history isolation.
+                            - listitem [ref=e60]: Added cancellation, retry, timeout, focus, and streaming regression coverage.
+                        - heading "v0.2.192" [level=2] [ref=e61]:
+                            - link "v0.2.192" [ref=e62]:
+                                - /url: "#v02192"
+                        - paragraph [ref=e63]: Released July 10, 2026.
+                        - list [ref=e64]:
+                            - listitem [ref=e65]: Native V2 sessions claim explicit runtime ownership.
+                            - listitem [ref=e66]: Restart recovery resumes pending durable inputs with epoch fencing.
+                            - listitem [ref=e67]: Runtime owner, state, and epoch are visible through API and TUI status.
+                        - heading "v0.2.191" [level=2] [ref=e68]:
+                            - link "v0.2.191" [ref=e69]:
+                                - /url: "#v02191"
+                        - paragraph [ref=e70]: Released July 10, 2026.
+                        - list [ref=e71]:
+                            - listitem [ref=e72]: Hardened shell and tool authorization and symlink boundaries.
+                            - listitem [ref=e73]: Isolated MCP OAuth credentials by server.
+                            - listitem [ref=e74]: Hid empty reasoning placeholders.
+                        - heading "v0.2.190" [level=2] [ref=e75]:
+                            - link "v0.2.190" [ref=e76]:
+                                - /url: "#v02190"
+                        - paragraph [ref=e77]: Released July 10, 2026.
+                        - list [ref=e78]:
+                            - listitem [ref=e79]: Added owner-aware SessionControl gateway.
+                            - listitem [ref=e80]: Fenced V1 and V2 runtime execution.
+                            - listitem [ref=e81]: Added focused routing and fencing tests.
+                        - heading "v0.2.189" [level=2] [ref=e82]:
+                            - link "v0.2.189" [ref=e83]:
+                                - /url: "#v02189"
+                        - paragraph [ref=e84]: Released July 10, 2026.
+                        - list [ref=e85]:
+                            - listitem [ref=e86]: Added V2 session runtime ownership and migration fencing groundwork.
+                            - listitem [ref=e87]: Hardened desktop navigation, IPC, and CORS handling.
+                            - listitem [ref=e88]: Strengthened Zen usage settlement and legacy cutoff safeguards.
+                        - heading "v0.2.188" [level=2] [ref=e89]:
+                            - link "v0.2.188" [ref=e90]:
+                                - /url: "#v02188"
+                        - paragraph [ref=e91]: Released July 9, 2026.
+                        - list [ref=e92]:
+                            - listitem [ref=e93]: Added GPT-5.6, Sol, Terra, and Luna with all six reasoning budgets and Fast variants.
+                            - listitem [ref=e94]: Added scoped memory with secret redaction and explicit global consent.
+                            - listitem [ref=e95]: Hardened provider discovery, offline catalogs, and release packaging.
+                        - heading "v0.2.187" [level=2] [ref=e96]:
+                            - link "v0.2.187" [ref=e97]:
+                                - /url: "#v02187"
+                        - paragraph [ref=e98]: Released July 5, 2026.
+                        - list [ref=e99]:
+                            - listitem [ref=e100]: Restored bundled SlopCode model providers when upstream catalogs omit them.
+                            - listitem [ref=e101]:
+                                - text: Preserved custom
+                                - code [ref=e102]: "`SLOPCODE_MODELS_PATH`"
+                                - text: catalogs as exact overrides.
+                            - listitem [ref=e103]: Published rebuilt 0.2.187 CLI binaries.
+                        - heading "v0.2.186" [level=2] [ref=e104]:
+                            - link "v0.2.186" [ref=e105]:
+                                - /url: "#v02186"
+                        - paragraph [ref=e106]: Released July 5, 2026.
+                        - list [ref=e107]:
+                            - listitem [ref=e108]: Safe referenced file reads and searches.
+                            - listitem [ref=e109]: CI, app, and desktop parity fixes.
+                            - listitem [ref=e110]: Prebuilt 0.2.186 release assets.
+                        - heading "v0.2.185" [level=2] [ref=e111]:
+                            - link "v0.2.185" [ref=e112]:
+                                - /url: "#v02185"
+                        - paragraph [ref=e113]: Released July 4, 2026.
+                        - list [ref=e114]:
+                            - listitem [ref=e115]: Tightened compact TUI transcript spacing.
+                            - listitem [ref=e116]: Reduced prompt, dialog, and permission gutters.
+                            - listitem [ref=e117]: Slimmed diff, which-key, and toast chrome.
+                        - heading "v0.2.184" [level=2] [ref=e118]:
+                            - link "v0.2.184" [ref=e119]:
+                                - /url: "#v02184"
+                        - paragraph [ref=e120]: Released July 3, 2026.
+                        - list [ref=e121]:
+                            - listitem [ref=e122]: Added Goal mode regression coverage.
+                            - listitem [ref=e123]: Hardened Windows compaction retry-backoff coverage.
+                        - heading "v0.2.183" [level=2] [ref=e124]:
+                            - link "v0.2.183" [ref=e125]:
+                                - /url: "#v02183"
+                        - paragraph [ref=e126]: Released July 3, 2026.
+                        - list [ref=e127]:
+                            - listitem [ref=e128]: Added Goal mode for persistent session goals.
+                            - listitem [ref=e129]: Remind active sessions of their current goal.
+                            - listitem [ref=e130]: Moved Docs out of primary agent tab rotation.
+                        - heading "v0.2.182" [level=2] [ref=e131]:
+                            - link "v0.2.182" [ref=e132]:
+                                - /url: "#v02182"
+                        - paragraph [ref=e133]: Released July 2, 2026.
+                        - list [ref=e134]:
+                            - listitem [ref=e135]:
+                                - text: Added Claude-compatible
+                                - code [ref=e136]: "`/model`"
+                                - text: and
+                                - code [ref=e137]: "`/mcp`"
+                                - text: TUI aliases.
+                            - listitem [ref=e138]:
+                                - text: Made
+                                - code [ref=e139]: "`/copy`"
+                                - text: copy the last assistant response, with transcript copy at
+                                - code [ref=e140]: "`/copy-session`"
+                                - text: and
+                                - code [ref=e141]: "`/transcript`"
+                                - text: .
+                            - listitem [ref=e142]:
+                                - text: Added
+                                - code [ref=e143]: "`/usage`"
+                                - text: with
+                                - code [ref=e144]: "`/cost`"
+                                - text: and
+                                - code [ref=e145]: "`/stats`"
+                                - text: aliases for session tokens and cost.
+                        - heading "v0.2.181" [level=2] [ref=e146]:
+                            - link "v0.2.181" [ref=e147]:
+                                - /url: "#v02181"
+                        - paragraph [ref=e148]: Released July 2, 2026.
+                        - list [ref=e149]:
+                            - listitem [ref=e150]:
+                                - text: Ask quick
+                                - code [ref=e151]: "`/btw`"
+                                - text: side questions without interrupting the main session.
+                            - listitem [ref=e152]: Stream side-question answers in a dismissible TUI overlay.
+                            - listitem [ref=e153]: Keep side-question answers out of chat history and tool execution.
+                        - heading "v0.2.180" [level=2] [ref=e154]:
+                            - link "v0.2.180" [ref=e155]:
+                                - /url: "#v02180"
+                        - paragraph [ref=e156]: Released July 2, 2026.
+                        - list [ref=e157]:
+                            - listitem [ref=e158]: Compact TUI spacing for small terminals.
+                            - listitem [ref=e159]: Reduced prompt, transcript, sidebar, dialog, and diff viewer gutters.
+                            - listitem [ref=e160]: Preserved home zero-state layout while improving session density.
+                        - heading "v0.2.179" [level=2] [ref=e161]:
+                            - link "v0.2.179" [ref=e162]:
+                                - /url: "#v02179"
+                        - paragraph [ref=e163]: Released July 2, 2026.
+                        - list [ref=e164]:
+                            - listitem [ref=e165]: Fixed the TUI exit epilogue SlopCode wordmark.
+                        - heading "v0.2.178" [level=2] [ref=e166]:
+                            - link "v0.2.178" [ref=e167]:
+                                - /url: "#v02178"
+                        - paragraph [ref=e168]: Released July 2, 2026.
+                        - list [ref=e169]:
+                            - listitem [ref=e170]: Fixed Ripgrep fallback search startup on Windows.
+                            - listitem [ref=e171]: Stabilized Windows path, prompt, and compaction tests.
+                            - listitem [ref=e172]: Updated post-release docs and CI metadata.
+                        - heading "v0.2.177" [level=2] [ref=e173]:
+                            - link "v0.2.177" [ref=e174]:
+                                - /url: "#v02177"
+                        - paragraph [ref=e175]: Released July 2, 2026.
+                        - list [ref=e176]:
+                            - listitem [ref=e177]:
+                                - text: Added upstream-compatible
+                                - code [ref=e178]: "`--mini`"
+                                - text: ","
+                                - code [ref=e179]: "`--auto`"
+                                - text: ", and"
+                                - code [ref=e180]: "`--yolo`"
+                                - text: run modes.
+                            - listitem [ref=e181]:
+                                - text: Added
+                                - code [ref=e182]: "`slopcode attach --mini`"
+                                - text: with replay controls.
+                            - listitem [ref=e183]: Added TUI auto-permission handling and location-aware file autocomplete.
+                        - heading "v0.2.148" [level=2] [ref=e184]:
+                            - link "v0.2.148" [ref=e185]:
+                                - /url: "#v02148"
+                        - paragraph [ref=e186]: Released June 13, 2026.
+                        - list [ref=e187]:
+                            - listitem [ref=e188]: Synced upstream opencode parity across core, server, TUI, app, and packaging.
+                            - listitem [ref=e189]: Restored SlopCode release packaging and bundled Neovim.
+                            - listitem [ref=e190]: Fixed model switching, share sync, workspace routing, and location event compatibility.
+                        - paragraph [ref=e191]:
+                            - text: See all tagged releases on
+                            - link "GitHub Releases" [ref=e192] [cursor=pointer]:
+                                - /url: https://github.com/teamslop/slopcode/releases
+                            - text: .
+                    - generic [ref=e194]:
+                        - generic [ref=e195]:
+                            - link "Edit page" [ref=e196] [cursor=pointer]:
+                                - /url: https://github.com/teamslop/slopcode/edit/dev/packages/web/src/content/docs/changelog.mdx
+                                - img [ref=e197]
+                                - text: Edit page
+                            - link "Found a bug? Open an issue" [ref=e199] [cursor=pointer]:
+                                - /url: https://github.com/teamslop/slopcode/issues/new
+                                - img [ref=e200]
+                                - text: Found a bug? Open an issue
+                            - link "Join our Discord community" [ref=e202] [cursor=pointer]:
+                                - /url: https://slopcode.ai/discord
+                                - img [ref=e203]
+                                - text: Join our Discord community
+                            - generic [ref=e206]:
+                                - generic [ref=e207]: Select language
+                                - img
+                                - combobox "Select language" [ref=e208] [cursor=pointer]:
+                                    - option "English" [selected]
+                                    - option "العربية"
+                                    - option "Bosanski"
+                                    - option "Dansk"
+                                    - option "Deutsch"
+                                    - option "Español"
+                                    - option "Français"
+                                    - option "Italiano"
+                                    - option "日本語"
+                                    - option "한국어"
+                                    - option "Norsk Bokmål"
+                                    - option "Polski"
+                                    - option "Português (Brasil)"
+                                    - option "Русский"
+                                    - option "ไทย"
+                                    - option "Türkçe"
+                                    - option "简体中文"
+                                    - option "繁體中文"
+                                - img
+                        - generic [ref=e209]:
+                            - paragraph [ref=e210]:
+                                - text: ©
+                                - link "Anomaly" [ref=e211] [cursor=pointer]:
+                                    - /url: https://anoma.ly
+                            - paragraph [ref=e212]:
+                                - text: "Last updated:"
+                                - time [ref=e213]: Jul 14, 2026

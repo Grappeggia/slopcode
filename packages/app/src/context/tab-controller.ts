@@ -16,7 +16,9 @@ export function createTabController(input: {
       return location.pathname === "/new-session" && new URLSearchParams(location.search).get("draftId") === tab.draftID
     }
     if (location.pathname === sessionHref(tab.server, tab.dirBase64, tab.sessionId)) return true
-    return input.activeServer() === tab.server && location.pathname === legacySessionHref(atob(tab.dirBase64), tab.sessionId)
+    return (
+      input.activeServer() === tab.server && location.pathname === legacySessionHref(atob(tab.dirBase64), tab.sessionId)
+    )
   }
 
   const remove = (tabs: Tab[], index: number, selected?: boolean) => ({

@@ -78,7 +78,9 @@ function parseJson<T>(value: unknown, fallback: T) {
 
 const enabled = (value: unknown) => value === true
 
-export function getAndroidBridge(target: Pick<Window, "SlopcodeAndroid"> = typeof window === "object" ? window : { SlopcodeAndroid: undefined }) {
+export function getAndroidBridge(
+  target: Pick<Window, "SlopcodeAndroid"> = typeof window === "object" ? window : { SlopcodeAndroid: undefined },
+) {
   const port = target.SlopcodeAndroid
   if (!port) return
   const existing = ports.get(port)
@@ -182,7 +184,10 @@ export function encodeRemoteJobAction(payload: RemoteJobActionPayload | undefine
   return payload === undefined ? undefined : JSON.stringify(payload)
 }
 
-export function remoteJobsBridge(bridge: AndroidNativeBridge | undefined, enabled = true): AndroidRemoteJobs | undefined {
+export function remoteJobsBridge(
+  bridge: AndroidNativeBridge | undefined,
+  enabled = true,
+): AndroidRemoteJobs | undefined {
   if (!bridge || !enabled) return
   let nonce = ""
   let ready: Promise<boolean> | undefined
@@ -199,7 +204,9 @@ export function remoteJobsBridge(bridge: AndroidNativeBridge | undefined, enable
       return value
     },
     action: async (jobID, action, payload) =>
-      parseRemoteJobAction(await bridge.remoteJobAction(jobID, action, encodeRemoteJobAction(payload)).catch(() => undefined)),
+      parseRemoteJobAction(
+        await bridge.remoteJobAction(jobID, action, encodeRemoteJobAction(payload)).catch(() => undefined),
+      ),
     subscribe(listener) {
       nonce = crypto.randomUUID().replaceAll("-", "")
       ready = undefined
@@ -264,7 +271,8 @@ export function parseDeepLinkMessage(value: unknown, nonce: string) {
     parsed.channel !== ANDROID_DEEP_LINK_CHANNEL ||
     parsed.nonce !== nonce ||
     parsed.ready !== true
-  ) return []
+  )
+    return []
   return parseSupportedDeepLinks(parsed.urls)
 }
 

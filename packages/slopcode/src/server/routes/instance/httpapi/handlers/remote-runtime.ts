@@ -765,7 +765,12 @@ function parseOpenCodeCommand(name: string, value: unknown) {
         ? undefined
         : null
       : metadataText(value.model, MAX_REMOTE_AGENT_COMMAND_VALUE_LENGTH)
-  if (description === null || agent === null || model === null || (value.subtask !== undefined && typeof value.subtask !== "boolean"))
+  if (
+    description === null ||
+    agent === null ||
+    model === null ||
+    (value.subtask !== undefined && typeof value.subtask !== "boolean")
+  )
     return
   return {
     name: next,
@@ -903,7 +908,9 @@ export const runAgentPrompt = Effect.fn("RemoteRuntime.agentPrompt")(function* (
   const review = yield* collectRemoteAgentReview(input.directory, process).pipe(
     Effect.catch(() => Effect.succeed(undefined)),
   )
-  const hasReview = review && (review.files.length > 0 || review.tests.length > 0 || review.screenshots.length > 0 || review.comments.length > 0)
+  const hasReview =
+    review &&
+    (review.files.length > 0 || review.tests.length > 0 || review.screenshots.length > 0 || review.comments.length > 0)
   return {
     ...result,
     commandPreview: agentCommandPreview(input.agent, input.directory, input.prompt, input.config),
@@ -1033,7 +1040,13 @@ export const resolveRemoteFolder = Effect.fn("RemoteRuntime.resolveFolder")(func
   return { root, current }
 })
 
-function remoteJobEventData(event: { id: string; cursor: string; jobID: string; type: string; data: unknown }): Sse.Event {
+function remoteJobEventData(event: {
+  id: string
+  cursor: string
+  jobID: string
+  type: string
+  data: unknown
+}): Sse.Event {
   return {
     _tag: "Event",
     event: event.type,
@@ -1049,7 +1062,8 @@ function isTerminalJobEvent(type: string) {
 function remoteJobError(error: unknown) {
   if (error instanceof RemoteAgentJobNotFoundError)
     return new ApiNotFoundError({ name: "NotFoundError", data: { message: error.message } })
-  if (error instanceof Error && error.message.includes("required")) return new InvalidRequestError({ message: error.message })
+  if (error instanceof Error && error.message.includes("required"))
+    return new InvalidRequestError({ message: error.message })
   return new ServiceUnavailableError({ message: "remote agent job is unavailable" })
 }
 
@@ -1144,9 +1158,9 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
     const jobEvents = Effect.fn("RemoteRuntimeHttpApi.jobEvents")(function* (ctx: {
       query: typeof RemoteAgentJobEventsQuery.Type
     }) {
-      const source = yield* jobs.stream({ jobID: ctx.query.job, cursor: ctx.query.cursor }).pipe(
-        Effect.catch((error) => Effect.fail(remoteJobError(error))),
-      )
+      const source = yield* jobs
+        .stream({ jobID: ctx.query.job, cursor: ctx.query.cursor })
+        .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
       const stream = source.pipe(
         Stream.takeUntil((event) => isTerminalJobEvent(event.type)),
         Stream.map(remoteJobEventData),
@@ -1168,9 +1182,9 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       query: typeof RemoteAgentJobActionQuery.Type
       payload: typeof RemoteAgentJobAction.Type
     }) {
-      return yield* jobs.action({ jobID: ctx.params.jobID, action: ctx.payload }).pipe(
-        Effect.catch((error) => Effect.fail(remoteJobError(error))),
-      )
+      return yield* jobs
+        .action({ jobID: ctx.params.jobID, action: ctx.payload })
+        .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
     })
 
     return handlers

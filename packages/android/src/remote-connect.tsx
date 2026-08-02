@@ -994,124 +994,124 @@ export function RemoteConnect(props: Props) {
           </div>
 
           <div class="flex flex-col gap-2">
-          <span class="text-14-medium">Remote folder</span>
-          <div class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 text-14-regular">
-            {directory() || "Choose a folder from the remote machine"}
-          </div>
-          <button
-            type="button"
-            disabled={browseBusy()}
-            onClick={() => void browse()}
-            class="rounded-md border border-border-weak-base px-4 py-2 disabled:opacity-50"
-          >
-            {browseBusy() ? "Loading folders…" : "Browse remote folders"}
-          </button>
+            <span class="text-14-medium">Remote folder</span>
+            <div class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 text-14-regular">
+              {directory() || "Choose a folder from the remote machine"}
+            </div>
+            <button
+              type="button"
+              disabled={browseBusy()}
+              onClick={() => void browse()}
+              class="rounded-md border border-border-weak-base px-4 py-2 disabled:opacity-50"
+            >
+              {browseBusy() ? "Loading folders…" : "Browse remote folders"}
+            </button>
           </div>
 
           <label class="flex flex-col gap-1 text-14-medium">
-          Agent
-          <select
-            value={agent()}
-            onChange={(event) => {
-              const value = event.currentTarget.value
-              if (REMOTE_AGENTS.includes(value as RemoteAgent)) setAgent(value as RemoteAgent)
-            }}
-            class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-          >
-            <option value="local-slopcode">Local Slopcode — commands run on the SSH host</option>
-            <option value="codex-cli">Codex CLI — prompts/config are sent to Codex CLI</option>
-            <option value="opencode-cli">OpenCode CLI — prompts/config are sent to OpenCode CLI</option>
-            <option value="claude-code">Claude Code — prompts/config are sent to Claude Code</option>
-          </select>
+            Agent
+            <select
+              value={agent()}
+              onChange={(event) => {
+                const value = event.currentTarget.value
+                if (REMOTE_AGENTS.includes(value as RemoteAgent)) setAgent(value as RemoteAgent)
+              }}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            >
+              <option value="local-slopcode">Local Slopcode — commands run on the SSH host</option>
+              <option value="codex-cli">Codex CLI — prompts/config are sent to Codex CLI</option>
+              <option value="opencode-cli">OpenCode CLI — prompts/config are sent to OpenCode CLI</option>
+              <option value="claude-code">Claude Code — prompts/config are sent to Claude Code</option>
+            </select>
           </label>
 
           <Show when={listingState()}>
-          <section
-            class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3"
-            aria-label="Remote folder browser"
-          >
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex flex-col gap-1">
-                <h2 class="text-16-medium">Remote folders</h2>
-                <p class="text-12-regular text-text-weak">{browsePath() ?? "Remote instance root"}</p>
+            <section
+              class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3"
+              aria-label="Remote folder browser"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex flex-col gap-1">
+                  <h2 class="text-16-medium">Remote folders</h2>
+                  <p class="text-12-regular text-text-weak">{browsePath() ?? "Remote instance root"}</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={!listingState()?.parent || browseBusy()}
+                  onClick={() => {
+                    const next = listingState()?.parent
+                    if (next) void browse(next)
+                  }}
+                  class="rounded-md border border-border-weak-base px-3 py-1 disabled:opacity-50"
+                >
+                  Parent
+                </button>
               </div>
+
+              <Show when={(listingState()?.recentFolders.length ?? 0) > 0}>
+                <div class="flex flex-col gap-2">
+                  <h3 class="text-14-medium">Recently used</h3>
+                  <For each={listingState()?.recentFolders ?? []}>
+                    {(folder) => (
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void browse(folder)}
+                          class="min-w-0 flex-1 text-left rounded-md border border-border-weak-base px-3 py-2 truncate"
+                        >
+                          {folder}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectory(folder)
+                            setBrowsePath(folder)
+                          }}
+                          class="rounded-md border border-border-weak-base px-3 py-2"
+                        >
+                          Use
+                        </button>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+
+              <div class="flex flex-col gap-2">
+                <h3 class="text-14-medium">Directories</h3>
+                <Show
+                  when={(listingState()?.entries.length ?? 0) > 0}
+                  fallback={<p class="text-12-regular text-text-weak">No subfolders</p>}
+                >
+                  <For each={listingState()?.entries ?? []}>
+                    {(entry) => (
+                      <button
+                        type="button"
+                        onClick={() => void browse(entry.path)}
+                        class="rounded-md border border-border-weak-base px-3 py-2 text-left"
+                      >
+                        {entry.name}
+                      </button>
+                    )}
+                  </For>
+                </Show>
+              </div>
+
               <button
                 type="button"
-                disabled={!listingState()?.parent || browseBusy()}
                 onClick={() => {
-                  const next = listingState()?.parent
-                  if (next) void browse(next)
+                  const current = listingState()?.path
+                  if (current) {
+                    setDirectory(current)
+                    setBrowsePath(current)
+                    setListingState()
+                  }
                 }}
-                class="rounded-md border border-border-weak-base px-3 py-1 disabled:opacity-50"
+                class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2"
               >
-                Parent
+                Use current folder
               </button>
-            </div>
-
-            <Show when={(listingState()?.recentFolders.length ?? 0) > 0}>
-              <div class="flex flex-col gap-2">
-                <h3 class="text-14-medium">Recently used</h3>
-                <For each={listingState()?.recentFolders ?? []}>
-                  {(folder) => (
-                    <div class="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void browse(folder)}
-                        class="min-w-0 flex-1 text-left rounded-md border border-border-weak-base px-3 py-2 truncate"
-                      >
-                        {folder}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDirectory(folder)
-                          setBrowsePath(folder)
-                        }}
-                        class="rounded-md border border-border-weak-base px-3 py-2"
-                      >
-                        Use
-                      </button>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
-
-            <div class="flex flex-col gap-2">
-              <h3 class="text-14-medium">Directories</h3>
-              <Show
-                when={(listingState()?.entries.length ?? 0) > 0}
-                fallback={<p class="text-12-regular text-text-weak">No subfolders</p>}
-              >
-                <For each={listingState()?.entries ?? []}>
-                  {(entry) => (
-                    <button
-                      type="button"
-                      onClick={() => void browse(entry.path)}
-                      class="rounded-md border border-border-weak-base px-3 py-2 text-left"
-                    >
-                      {entry.name}
-                    </button>
-                  )}
-                </For>
-              </Show>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                const current = listingState()?.path
-                if (current) {
-                  setDirectory(current)
-                  setBrowsePath(current)
-                  setListingState()
-                }
-              }}
-              class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2"
-            >
-              Use current folder
-            </button>
-          </section>
+            </section>
           </Show>
         </Show>
 

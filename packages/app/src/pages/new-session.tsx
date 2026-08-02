@@ -6,10 +6,7 @@ import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
-import {
-  normalizeNewSessionWorktree,
-  resolveNewSessionWorktree,
-} from "./new-session/new-session-workspace-controller"
+import { normalizeNewSessionWorktree, resolveNewSessionWorktree } from "./new-session/new-session-workspace-controller"
 
 /**
  * The `/new-session` draft page. Unlike `session.tsx`, this only renders the prompt

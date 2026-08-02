@@ -196,7 +196,8 @@ export function parseRemoteCommandPreview(value: unknown): RemoteCommandPreview 
 }
 
 export function parseRemoteApproval(value: unknown): RemoteApproval | undefined {
-  if (typeof value === "string") return value.length > 0 && value.length <= MAX_MESSAGE_LENGTH ? { title: value } : undefined
+  if (typeof value === "string")
+    return value.length > 0 && value.length <= MAX_MESSAGE_LENGTH ? { title: value } : undefined
   if (!record(value)) return
   const title = text(value.title, MAX_MESSAGE_LENGTH)
   if (!title) return
@@ -247,56 +248,94 @@ export function parseRemoteQuestion(value: unknown): RemoteQuestion | undefined 
 
 export function parseRemoteReview(value: unknown): RemoteReview | undefined {
   if (!record(value)) return
-  const files = Array.isArray(value.files) ? value.files.flatMap((item) => {
-    if (!record(item)) return []
-    const path = reviewPath(item.path)
-    const diff = reviewText(item.diff, MAX_REVIEW_DIFF_LENGTH)
-    const status = item.status
-    if (!path || diff === undefined || !["added", "modified", "deleted", "renamed", "untracked"].includes(status as string)) return []
-    return [{
-      path,
-      status: status as RemoteReviewFile["status"],
-      additions: typeof item.additions === "number" && Number.isSafeInteger(item.additions) ? Math.max(0, item.additions) : 0,
-      deletions: typeof item.deletions === "number" && Number.isSafeInteger(item.deletions) ? Math.max(0, item.deletions) : 0,
-      diff,
-    }]
-  }).slice(0, MAX_REVIEW_FILES) : []
-  const tests = Array.isArray(value.tests) ? value.tests.flatMap((item) => {
-    if (!record(item)) return []
-    const name = text(item.name, MAX_MESSAGE_LENGTH)
-    const status = item.status
-    if (!name || !["passed", "failed", "skipped"].includes(status as string)) return []
-    const output = item.output === undefined ? undefined : body(item.output, MAX_REVIEW_DIFF_LENGTH)
-    if (item.output !== undefined && output === undefined) return []
-    return [{
-      name,
-      status: status as RemoteReviewTest["status"],
-      ...(typeof item.durationMs === "number" && Number.isSafeInteger(item.durationMs) ? { durationMs: Math.max(0, item.durationMs) } : {}),
-      ...(output ? { output } : {}),
-    }]
-  }).slice(0, MAX_REVIEW_TESTS) : []
-  const screenshots = Array.isArray(value.screenshots) ? value.screenshots.flatMap((item) => {
-    if (!record(item)) return []
-    const name = text(item.name, MAX_MESSAGE_LENGTH)
-    const mime = text(item.mime, 128)
-    const data = text(item.data, 512 * 1024)
-    if (!name || !mime?.startsWith("image/") || !data?.startsWith("data:image/")) return []
-    return [{ name, mime, data }]
-  }).slice(0, MAX_REVIEW_SCREENSHOTS) : []
-  const comments = Array.isArray(value.comments) ? value.comments.flatMap((item) => {
-    if (!record(item)) return []
-    const id = text(item.id, MAX_ID_LENGTH)
-    const path = reviewPath(item.path)
-    const bodyValue = body(item.body, MAX_MESSAGE_LENGTH)
-    if (!id || !path || !bodyValue || typeof item.createdAt !== "number" || !Number.isSafeInteger(item.createdAt)) return []
-    return [{
-      id,
-      path,
-      ...(typeof item.line === "number" && Number.isSafeInteger(item.line) ? { line: Math.max(1, item.line) } : {}),
-      body: bodyValue,
-      createdAt: item.createdAt,
-    }]
-  }).slice(0, MAX_REVIEW_COMMENTS) : []
+  const files = Array.isArray(value.files)
+    ? value.files
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const path = reviewPath(item.path)
+          const diff = reviewText(item.diff, MAX_REVIEW_DIFF_LENGTH)
+          const status = item.status
+          if (
+            !path ||
+            diff === undefined ||
+            !["added", "modified", "deleted", "renamed", "untracked"].includes(status as string)
+          )
+            return []
+          return [
+            {
+              path,
+              status: status as RemoteReviewFile["status"],
+              additions:
+                typeof item.additions === "number" && Number.isSafeInteger(item.additions)
+                  ? Math.max(0, item.additions)
+                  : 0,
+              deletions:
+                typeof item.deletions === "number" && Number.isSafeInteger(item.deletions)
+                  ? Math.max(0, item.deletions)
+                  : 0,
+              diff,
+            },
+          ]
+        })
+        .slice(0, MAX_REVIEW_FILES)
+    : []
+  const tests = Array.isArray(value.tests)
+    ? value.tests
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const name = text(item.name, MAX_MESSAGE_LENGTH)
+          const status = item.status
+          if (!name || !["passed", "failed", "skipped"].includes(status as string)) return []
+          const output = item.output === undefined ? undefined : body(item.output, MAX_REVIEW_DIFF_LENGTH)
+          if (item.output !== undefined && output === undefined) return []
+          return [
+            {
+              name,
+              status: status as RemoteReviewTest["status"],
+              ...(typeof item.durationMs === "number" && Number.isSafeInteger(item.durationMs)
+                ? { durationMs: Math.max(0, item.durationMs) }
+                : {}),
+              ...(output ? { output } : {}),
+            },
+          ]
+        })
+        .slice(0, MAX_REVIEW_TESTS)
+    : []
+  const screenshots = Array.isArray(value.screenshots)
+    ? value.screenshots
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const name = text(item.name, MAX_MESSAGE_LENGTH)
+          const mime = text(item.mime, 128)
+          const data = text(item.data, 512 * 1024)
+          if (!name || !mime?.startsWith("image/") || !data?.startsWith("data:image/")) return []
+          return [{ name, mime, data }]
+        })
+        .slice(0, MAX_REVIEW_SCREENSHOTS)
+    : []
+  const comments = Array.isArray(value.comments)
+    ? value.comments
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const id = text(item.id, MAX_ID_LENGTH)
+          const path = reviewPath(item.path)
+          const bodyValue = body(item.body, MAX_MESSAGE_LENGTH)
+          if (!id || !path || !bodyValue || typeof item.createdAt !== "number" || !Number.isSafeInteger(item.createdAt))
+            return []
+          return [
+            {
+              id,
+              path,
+              ...(typeof item.line === "number" && Number.isSafeInteger(item.line)
+                ? { line: Math.max(1, item.line) }
+                : {}),
+              body: bodyValue,
+              createdAt: item.createdAt,
+            },
+          ]
+        })
+        .slice(0, MAX_REVIEW_COMMENTS)
+    : []
   return { files, tests, screenshots, comments }
 }
 
@@ -362,7 +401,8 @@ export function parseRemoteJob(value: unknown): RemoteJob | undefined {
   const output = value.output === undefined ? undefined : body(value.output, MAX_OUTPUT_LENGTH)
   const error = value.error === undefined ? undefined : text(value.error, MAX_ERROR_LENGTH)
   const approvalValue = value.approval === undefined ? undefined : parseRemoteApproval(value.approval)
-  const commandPreview = value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
+  const commandPreview =
+    value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
   const questionValue = value.question === undefined ? undefined : parseRemoteQuestion(value.question)
   const reviewValue = value.review === undefined ? undefined : parseRemoteReview(value.review)
   const progress = value.progress
@@ -415,10 +455,16 @@ function eventData(value: unknown): RemoteJobEvent["data"] | undefined {
     (progress !== undefined && (typeof progress !== "number" || progress < 0 || progress > 1))
   )
     return
-  const commandPreview = value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
+  const commandPreview =
+    value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
   const questionValue = value.question === undefined ? undefined : parseRemoteQuestion(value.question)
   const reviewValue = value.review === undefined ? undefined : parseRemoteReview(value.review)
-  if ((value.commandPreview !== undefined && !commandPreview) || (value.question !== undefined && !questionValue) || (value.review !== undefined && !reviewValue)) return
+  if (
+    (value.commandPreview !== undefined && !commandPreview) ||
+    (value.question !== undefined && !questionValue) ||
+    (value.review !== undefined && !reviewValue)
+  )
+    return
   return {
     output,
     error,
@@ -467,16 +513,28 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
   if (event.id && current.cursor === event.id) return current
   if (event.cursor && current.cursor === event.cursor) return current
   const reviewEvent = event.type.endsWith("review.updated") || event.type.endsWith("comment")
-  if ((current.status === "completed" || current.status === "failed" || current.status === "stopped") && !reviewEvent) return current
+  if ((current.status === "completed" || current.status === "failed" || current.status === "stopped") && !reviewEvent)
+    return current
   const done = terminal(event.type)
   const approval =
-    event.type.endsWith("approval") || event.type.endsWith("approval_required") || event.type.endsWith("waiting_approval")
-  const nextStatus = done ??
-    (approval ? "waiting_approval" :
-      event.type.endsWith("question") ? "waiting_question" :
-        reviewEvent ? current.status : "running")
-  const output = event.data.output === undefined ? current.output : `${current.output ?? ""}${event.data.output}`.slice(-MAX_OUTPUT_LENGTH)
-  const error = event.data.error ?? (done === "failed" || done === "stopped" ? event.data.message : undefined) ?? current.error
+    event.type.endsWith("approval") ||
+    event.type.endsWith("approval_required") ||
+    event.type.endsWith("waiting_approval")
+  const nextStatus =
+    done ??
+    (approval
+      ? "waiting_approval"
+      : event.type.endsWith("question")
+        ? "waiting_question"
+        : reviewEvent
+          ? current.status
+          : "running")
+  const output =
+    event.data.output === undefined
+      ? current.output
+      : `${current.output ?? ""}${event.data.output}`.slice(-MAX_OUTPUT_LENGTH)
+  const error =
+    event.data.error ?? (done === "failed" || done === "stopped" ? event.data.message : undefined) ?? current.error
   return {
     ...current,
     status: nextStatus,
@@ -536,7 +594,16 @@ export function remoteJobResultStatus(value: RemoteJobStatus) {
 }
 
 export function remoteJobAction(value: unknown): RemoteJobAction | undefined {
-  if (value === "approve" || value === "reject" || value === "answer" || value === "steer" || value === "comment" || value === "stop" || value === "retry") return value
+  if (
+    value === "approve" ||
+    value === "reject" ||
+    value === "answer" ||
+    value === "steer" ||
+    value === "comment" ||
+    value === "stop" ||
+    value === "retry"
+  )
+    return value
 }
 
 export function parseRemoteJobList(value: unknown) {

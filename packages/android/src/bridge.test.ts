@@ -94,7 +94,9 @@ describe("android bridge parsing helpers", () => {
         nonce,
       ),
     ).toEqual(["slopcode://new-session?directory=/a&prompt=hi"])
-    expect(parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }), nonce)).toEqual([])
+    expect(
+      parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }), nonce),
+    ).toEqual([])
     expect(
       parseDeepLinkMessage(
         JSON.stringify({

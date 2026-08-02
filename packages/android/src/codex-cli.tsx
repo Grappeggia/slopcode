@@ -223,7 +223,10 @@ function connection(input: Omit<RemoteAgentPromptInput, "prompt">) {
 }
 
 function terminalSession(value: unknown): RemoteAgentTerminalSession | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key)))
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !["ptyID", "directory", "ticket", "expires_in"].includes(key))
+  )
     return
   const ptyID = text(value.ptyID, 256)
   const remoteDirectory = directory(value.directory)
@@ -257,7 +260,8 @@ export function remoteAgentTerminalUrl(
   endpoint.searchParams.set("directory", session.directory)
   endpoint.searchParams.set("cursor", "-1")
   endpoint.searchParams.set("ticket", session.ticket)
-  if (credentials?.password) endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
+  if (credentials?.password)
+    endpoint.searchParams.set("auth_token", authorization(credentials.username, credentials.password).slice(6))
   return endpoint.toString()
 }
 
@@ -268,13 +272,18 @@ export function parseRemoteAgentCommand(value: string) {
 }
 
 export function parseRemoteAgentResult(value: unknown): RemoteAgentResult | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => !["output", "status", "exitCode", "commandPreview", "review"].includes(key))) return
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !["output", "status", "exitCode", "commandPreview", "review"].includes(key))
+  )
+    return
   const output = text(value.output, MAX_OUTPUT_LENGTH)
   const status = statuses.find((item) => item === value.status)
   if (output === undefined || !status) return
   if (value.exitCode !== undefined && (typeof value.exitCode !== "number" || !Number.isSafeInteger(value.exitCode)))
     return
-  const commandPreview = value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
+  const commandPreview =
+    value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
   const review = value.review === undefined ? undefined : parseRemoteReview(value.review)
   if ((value.commandPreview !== undefined && !commandPreview) || (value.review !== undefined && !review)) return
   return {
@@ -426,7 +435,10 @@ function ReviewPanel(props: { review?: RemoteReview }) {
   return (
     <Show when={props.review}>
       {(review) => (
-        <article class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3" aria-label="Review artifacts">
+        <article
+          class="rounded-md border border-border-weak-base p-3 flex flex-col gap-3"
+          aria-label="Review artifacts"
+        >
           <div class="text-14-medium">Review</div>
           <Show when={review().files.length > 0}>
             <section class="flex flex-col gap-2">
@@ -474,7 +486,12 @@ function ReviewPanel(props: { review?: RemoteReview }) {
             <section class="flex flex-col gap-1">
               <div class="text-12-regular text-text-weak">Comments</div>
               <For each={review().comments}>
-                {(comment) => <p class="text-12-regular">{comment.path}{comment.line ? `:${comment.line}` : ""}: {comment.body}</p>}
+                {(comment) => (
+                  <p class="text-12-regular">
+                    {comment.path}
+                    {comment.line ? `:${comment.line}` : ""}: {comment.body}
+                  </p>
+                )}
               </For>
             </section>
           </Show>
@@ -879,7 +896,10 @@ export function RemoteAgentSession(props: Props) {
 
         <Show when={backgroundJob()}>
           {(job) => (
-            <article class="rounded-md border border-border-weak-base p-3 flex flex-col gap-2" aria-label="Background job">
+            <article
+              class="rounded-md border border-border-weak-base p-3 flex flex-col gap-2"
+              aria-label="Background job"
+            >
               <div class="flex items-center justify-between gap-2">
                 <span class="text-14-medium">Background job</span>
                 <span class="text-12-regular text-text-weak">{remoteJobStatusLabel(job().status)}</span>
@@ -912,7 +932,11 @@ export function RemoteAgentSession(props: Props) {
                         <div class="flex flex-wrap gap-2">
                           <For each={options()}>
                             {(option) => (
-                              <button type="button" class="rounded-md border border-border-weak-base px-2 py-1" onClick={() => void action("answer", { answer: option })}>
+                              <button
+                                type="button"
+                                class="rounded-md border border-border-weak-base px-2 py-1"
+                                onClick={() => void action("answer", { answer: option })}
+                              >
                                 {option}
                               </button>
                             )}
@@ -927,7 +951,11 @@ export function RemoteAgentSession(props: Props) {
                         placeholder="Answer"
                         class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-base px-2 py-1"
                       />
-                      <button type="button" class="rounded-md border border-border-weak-base px-3 py-1" onClick={() => void action("answer", { answer: answer() })}>
+                      <button
+                        type="button"
+                        class="rounded-md border border-border-weak-base px-3 py-1"
+                        onClick={() => void action("answer", { answer: answer() })}
+                      >
                         Answer
                       </button>
                     </div>
@@ -941,7 +969,11 @@ export function RemoteAgentSession(props: Props) {
                   placeholder="Steer the agent"
                   class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-12-regular"
                 />
-                <button type="button" class="rounded-md border border-border-weak-base px-3 py-1 text-12-regular" onClick={() => void action("steer", { prompt: steering() })}>
+                <button
+                  type="button"
+                  class="rounded-md border border-border-weak-base px-3 py-1 text-12-regular"
+                  onClick={() => void action("steer", { prompt: steering() })}
+                >
                   Steer
                 </button>
               </div>
@@ -964,7 +996,11 @@ export function RemoteAgentSession(props: Props) {
                     <button
                       type="button"
                       class="rounded-md border border-border-weak-base px-3 py-1 text-12-regular"
-                      onClick={() => void action("comment", { comment: { path: commentPath() || job().review?.files[0]?.path || "", body: commentBody() } })}
+                      onClick={() =>
+                        void action("comment", {
+                          comment: { path: commentPath() || job().review?.files[0]?.path || "", body: commentBody() },
+                        })
+                      }
                     >
                       Comment
                     </button>
@@ -988,7 +1024,11 @@ export function RemoteAgentSession(props: Props) {
                     Reject
                   </button>
                 </Show>
-                <Show when={["queued", "running", "waiting_approval", "waiting_question", "retrying"].includes(job().status)}>
+                <Show
+                  when={["queued", "running", "waiting_approval", "waiting_question", "retrying"].includes(
+                    job().status,
+                  )}
+                >
                   <button
                     type="button"
                     class="rounded-md border border-border-weak-base px-3 py-1"

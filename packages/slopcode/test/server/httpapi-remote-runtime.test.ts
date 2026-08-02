@@ -544,10 +544,15 @@ describe("remote agent runtime", () => {
 
   test("keeps resumable job input bounded before starting a remote process", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
-    const response = await request(RemoteRuntimePaths.job, tmp.path, { path: tmp.path }, {
-      method: "POST",
-      body: JSON.stringify({ agent: "codex-cli", prompt: "x".repeat(MAX_CODEX_PROMPT_LENGTH + 1) }),
-    })
+    const response = await request(
+      RemoteRuntimePaths.job,
+      tmp.path,
+      { path: tmp.path },
+      {
+        method: "POST",
+        body: JSON.stringify({ agent: "codex-cli", prompt: "x".repeat(MAX_CODEX_PROMPT_LENGTH + 1) }),
+      },
+    )
     expect(response.status).toBe(400)
   })
 
@@ -557,7 +562,7 @@ describe("remote agent runtime", () => {
     await using bin = await tmpdir({ config: { formatter: false, lsp: false } })
     await writeFile(
       path.join(bin.path, "codex"),
-      "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"approval\",\"approval\":{\"title\":\"Write files\",\"command\":\"touch result\"}}'\nprintf '%s\\n' '{\"type\":\"question\",\"question\":{\"prompt\":\"Which suite?\",\"options\":[\"unit\"]}}'\nprintf '%s\\n' '{\"type\":\"message\",\"text\":\"done\"}'\nsleep 2\n",
+      '#!/bin/sh\nprintf \'%s\\n\' \'{"type":"approval","approval":{"title":"Write files","command":"touch result"}}\'\nprintf \'%s\\n\' \'{"type":"question","question":{"prompt":"Which suite?","options":["unit"]}}\'\nprintf \'%s\\n\' \'{"type":"message","text":"done"}\'\nsleep 2\n',
       { mode: 0o755 },
     )
     const previous = process.env.PATH
@@ -572,10 +577,15 @@ describe("remote agent runtime", () => {
       expect(started.status).toBe(200)
       expect((await started.json()).commandPreview).toMatchObject({ executable: "codex", cwd: tmp.path })
       await new Promise((resolve) => setTimeout(resolve, 500))
-      const status = await request(RemoteRuntimePaths.job, tmp.path, { path: tmp.path }, {
-        method: "POST",
-        body: JSON.stringify({ jobID: "job_structured", agent: "codex-cli", prompt: "run" }),
-      })
+      const status = await request(
+        RemoteRuntimePaths.job,
+        tmp.path,
+        { path: tmp.path },
+        {
+          method: "POST",
+          body: JSON.stringify({ jobID: "job_structured", agent: "codex-cli", prompt: "run" }),
+        },
+      )
       expect(status.status).toBe(200)
       expect((await status.json()).id).toBe("job_structured")
       const events = await request(RemoteRuntimePaths.jobEvents, tmp.path, { job: "job_structured", path: tmp.path })
@@ -612,7 +622,11 @@ describe("remote agent runtime", () => {
       output: "done",
       status: "completed",
       exitCode: 0,
-      commandPreview: { executable: "codex", args: ["exec", "--model", "gpt-5", "--", "<prompt>"], cwd: "/authorized/project" },
+      commandPreview: {
+        executable: "codex",
+        args: ["exec", "--model", "gpt-5", "--", "<prompt>"],
+        cwd: "/authorized/project",
+      },
     })
     expect(commands[0]).toMatchObject({
       command: "codex",

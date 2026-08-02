@@ -75,7 +75,9 @@ describe("Android durable remote jobs", () => {
     })!
     const next = applyRemoteJobEvent(job, event)
     expect(applyRemoteJobEvent(next, event)).toEqual(next)
-    expect(parseRemoteJobMessage({ type: "slopcode.remote-job", channel: "bad", nonce: "n", event }, "n")).toBeUndefined()
+    expect(
+      parseRemoteJobMessage({ type: "slopcode.remote-job", channel: "bad", nonce: "n", event }, "n"),
+    ).toBeUndefined()
     expect(
       parseRemoteJobMessage(
         { type: "slopcode.remote-job", channel: "slopcode.android.remote-jobs", nonce: "n", event },

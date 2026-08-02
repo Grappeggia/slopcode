@@ -90,9 +90,9 @@ scoop bucket add extras; scoop install extras/slopcode-desktop
 
 Install the Android APK directly:
 
-| Platform | Download |
-| -------- | -------- |
-| Android | [Latest APK](https://github.com/teamslop/slopcode/releases/latest/download/slopcode-android-debug.apk) |
+| Platform | Download                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------ |
+| Android  | [Latest APK](https://github.com/teamslop/slopcode/releases/latest/download/slopcode-android-debug.apk) |
 
 #### Installation Directory
 

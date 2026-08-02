@@ -18,9 +18,7 @@ type StoreCandidate = {
 export async function cleanupStoreFiles(userDataPath: string, now = Date.now()) {
   const entries = await readdir(userDataPath, { withFileTypes: true }).catch(() => [])
   const candidates = (
-    await Promise.all(
-      entries.filter((entry) => entry.isFile()).map((entry) => candidate(userDataPath, entry.name)),
-    )
+    await Promise.all(entries.filter((entry) => entry.isFile()).map((entry) => candidate(userDataPath, entry.name)))
   ).filter((entry): entry is StoreCandidate => entry !== undefined)
   const stale = new Set<StoreCandidate>()
 

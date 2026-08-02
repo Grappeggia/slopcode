@@ -332,8 +332,8 @@ render(() => {
   function App() {
     const wslServers = useWslServers()
     const wslStartup = createMemo(() => wslStartupReady(wslServers.data, wslServers.isPending))
-    const wslCatalogUnavailable = createMemo(
-      () => Boolean(platform.wslServers && !wslServers.isPending && !wslServers.data),
+    const wslCatalogUnavailable = createMemo(() =>
+      Boolean(platform.wslServers && !wslServers.isPending && !wslServers.data),
     )
     const wslCatalogReady = createMemo(() => wslStartup() || wslCatalogUnavailable())
     const splash = (

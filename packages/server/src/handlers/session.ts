@@ -113,13 +113,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               id: ctx.payload.id,
               agent: ctx.payload.agent,
               model: ctx.payload.model,
-              location:
-                route
-                  ? {
-                      directory: AbsolutePath.make(route.directory),
-                      workspaceID: route.workspaceID,
-                    }
-                  : ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+              location: route
+                ? {
+                    directory: AbsolutePath.make(route.directory),
+                    workspaceID: route.workspaceID,
+                  }
+                : (ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }),
               runtime: "v2",
             }),
           }

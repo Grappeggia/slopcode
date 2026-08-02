@@ -67,7 +67,10 @@ export class RemoteAgentJobNotFoundError extends Error {
 
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<State>
-  readonly stream: (input: { readonly jobID: string; readonly cursor?: string }) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
+  readonly stream: (input: {
+    readonly jobID: string
+    readonly cursor?: string
+  }) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
   readonly action: (input: { readonly jobID: string; readonly action: Action }) => Effect.Effect<State, Error>
 }
 
@@ -123,7 +126,9 @@ function command(agent: Agent, prompt: string, config?: Config) {
 
 function environment() {
   return {
-    ...Object.fromEntries(Object.entries(process.env).flatMap(([key, value]) => typeof value === "string" ? [[key, value]] : [])),
+    ...Object.fromEntries(
+      Object.entries(process.env).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])),
+    ),
     SLOPCODE_REMOTE_SUPERVISOR_TOKEN: "",
     SLOPCODE_SERVER_PASSWORD: "",
     TERM: "xterm-256color",
@@ -156,7 +161,8 @@ function approval(value: unknown) {
   const command = text(value.command)
   const cwd = text(value.cwd ?? value.directory, 4096)
   const reason = text(value.reason)
-  const risk: "low" | "medium" | "high" | undefined = value.risk === "low" || value.risk === "medium" || value.risk === "high" ? value.risk : undefined
+  const risk: "low" | "medium" | "high" | undefined =
+    value.risk === "low" || value.risk === "medium" || value.risk === "high" ? value.risk : undefined
   return {
     ...(text(value.id) ? { id: text(value.id) } : {}),
     title,
@@ -173,10 +179,12 @@ function question(value: unknown) {
   const prompt = text(value.prompt ?? value.question ?? value.message)
   if (!prompt) return
   const options = Array.isArray(value.options)
-    ? value.options.flatMap((item) => {
-        const next = text(item, 512)
-        return next ? [next] : []
-      }).slice(0, 32)
+    ? value.options
+        .flatMap((item) => {
+          const next = text(item, 512)
+          return next ? [next] : []
+        })
+        .slice(0, 32)
     : undefined
   return {
     ...(text(value.id) ? { id: text(value.id) } : {}),
@@ -198,10 +206,12 @@ function commandPreview(value: unknown) {
   const cwd = text(value.cwd ?? value.directory, 4096)
   if (!executable || !cwd) return
   const args = Array.isArray(value.args)
-    ? value.args.flatMap((item) => {
-        const next = text(item, 512)
-        return next ? [next] : []
-      }).slice(0, 64)
+    ? value.args
+        .flatMap((item) => {
+          const next = text(item, 512)
+          return next ? [next] : []
+        })
+        .slice(0, 64)
     : []
   return { executable, args, cwd } satisfies RemoteCommandPreview
 }
@@ -209,60 +219,79 @@ function commandPreview(value: unknown) {
 function review(value: unknown): RemoteReview | undefined {
   if (!record(value)) return
   const files = Array.isArray(value.files)
-    ? value.files.flatMap((item) => {
-        if (!record(item)) return []
-        const file = text(item.path, 4096)
-        const diff = reviewText(item.diff, MAX_REMOTE_REVIEW_DIFF_BYTES)
-        const status = item.status
-        if (!file || diff === undefined || !["added", "modified", "deleted", "renamed", "untracked"].includes(status as string)) return []
-        return [{
-          path: file,
-          status: status as "added" | "modified" | "deleted" | "renamed" | "untracked",
-          additions: typeof item.additions === "number" ? Math.max(0, Math.trunc(item.additions)) : 0,
-          deletions: typeof item.deletions === "number" ? Math.max(0, Math.trunc(item.deletions)) : 0,
-          diff,
-        }]
-      }).slice(0, MAX_REMOTE_REVIEW_FILES)
+    ? value.files
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const file = text(item.path, 4096)
+          const diff = reviewText(item.diff, MAX_REMOTE_REVIEW_DIFF_BYTES)
+          const status = item.status
+          if (
+            !file ||
+            diff === undefined ||
+            !["added", "modified", "deleted", "renamed", "untracked"].includes(status as string)
+          )
+            return []
+          return [
+            {
+              path: file,
+              status: status as "added" | "modified" | "deleted" | "renamed" | "untracked",
+              additions: typeof item.additions === "number" ? Math.max(0, Math.trunc(item.additions)) : 0,
+              deletions: typeof item.deletions === "number" ? Math.max(0, Math.trunc(item.deletions)) : 0,
+              diff,
+            },
+          ]
+        })
+        .slice(0, MAX_REMOTE_REVIEW_FILES)
     : []
   const tests = Array.isArray(value.tests)
-    ? value.tests.flatMap((item) => {
-        if (!record(item)) return []
-        const name = text(item.name, 256)
-        const status = item.status
-        if (!name || !["passed", "failed", "skipped"].includes(status as string)) return []
-        const output = text(item.output, MAX_REMOTE_REVIEW_DIFF_BYTES)
-        return [{
-          name,
-          status: status as "passed" | "failed" | "skipped",
-          ...(typeof item.durationMs === "number" ? { durationMs: Math.max(0, Math.trunc(item.durationMs)) } : {}),
-          ...(output ? { output } : {}),
-        }]
-      }).slice(0, MAX_REMOTE_REVIEW_TESTS)
+    ? value.tests
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const name = text(item.name, 256)
+          const status = item.status
+          if (!name || !["passed", "failed", "skipped"].includes(status as string)) return []
+          const output = text(item.output, MAX_REMOTE_REVIEW_DIFF_BYTES)
+          return [
+            {
+              name,
+              status: status as "passed" | "failed" | "skipped",
+              ...(typeof item.durationMs === "number" ? { durationMs: Math.max(0, Math.trunc(item.durationMs)) } : {}),
+              ...(output ? { output } : {}),
+            },
+          ]
+        })
+        .slice(0, MAX_REMOTE_REVIEW_TESTS)
     : []
   const screenshots = Array.isArray(value.screenshots)
-    ? value.screenshots.flatMap((item) => {
-        if (!record(item)) return []
-        const name = text(item.name, 256)
-        const mime = text(item.mime, 128)
-        const data = text(item.data, 512 * 1024)
-        if (!name || !mime?.startsWith("image/") || !data?.startsWith("data:image/")) return []
-        return [{ name, mime, data }]
-      }).slice(0, MAX_REMOTE_REVIEW_SCREENSHOTS)
+    ? value.screenshots
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const name = text(item.name, 256)
+          const mime = text(item.mime, 128)
+          const data = text(item.data, 512 * 1024)
+          if (!name || !mime?.startsWith("image/") || !data?.startsWith("data:image/")) return []
+          return [{ name, mime, data }]
+        })
+        .slice(0, MAX_REMOTE_REVIEW_SCREENSHOTS)
     : []
   const comments = Array.isArray(value.comments)
-    ? value.comments.flatMap((item) => {
-        if (!record(item)) return []
-        const path = text(item.path, 4096)
-        const body = text(item.body, 4096)
-        if (!path || !body) return []
-        return [{
-          id: text(item.id) ?? id("comment"),
-          path,
-          ...(typeof item.line === "number" ? { line: Math.max(1, Math.trunc(item.line)) } : {}),
-          body,
-          createdAt: typeof item.createdAt === "number" ? Math.trunc(item.createdAt) : Date.now(),
-        }]
-      }).slice(0, MAX_REMOTE_REVIEW_COMMENTS)
+    ? value.comments
+        .flatMap((item) => {
+          if (!record(item)) return []
+          const path = text(item.path, 4096)
+          const body = text(item.body, 4096)
+          if (!path || !body) return []
+          return [
+            {
+              id: text(item.id) ?? id("comment"),
+              path,
+              ...(typeof item.line === "number" ? { line: Math.max(1, Math.trunc(item.line)) } : {}),
+              body,
+              createdAt: typeof item.createdAt === "number" ? Math.trunc(item.createdAt) : Date.now(),
+            },
+          ]
+        })
+        .slice(0, MAX_REMOTE_REVIEW_COMMENTS)
     : []
   return { files, tests, screenshots, comments }
 }
@@ -290,18 +319,33 @@ function structured(line: string): { type: string; data: Data } | undefined {
   if (!type) return
   const raw = record(value.data) ? value.data : value
   const source = record(raw.item) ? raw.item : raw
-  const output = text(source.output ?? source.text ?? source.message ?? value.output ?? value.text, MAX_REMOTE_JOB_OUTPUT_BYTES)
+  const output = text(
+    source.output ?? source.text ?? source.message ?? value.output ?? value.text,
+    MAX_REMOTE_JOB_OUTPUT_BYTES,
+  )
   const parsedApproval = approval(
-    source.approval ?? source.permission ??
-      ((type.includes("approval") || source.status === "requires_approval" || source.status === "waiting_approval") ? source : undefined),
+    source.approval ??
+      source.permission ??
+      (type.includes("approval") || source.status === "requires_approval" || source.status === "waiting_approval"
+        ? source
+        : undefined),
   )
   const parsedQuestion = question(firstQuestion(source) ?? (type.includes("question") ? source : undefined))
   const parsedCommand = commandPreview(source.commandPreview ?? (type.includes("command") ? source : undefined))
   const parsedReview = review(source.review)
-  if (parsedApproval) return { type: "job.approval", data: { ...(output ? { output } : {}), approval: parsedApproval, ...(parsedCommand ? { commandPreview: parsedCommand } : {}) } }
+  if (parsedApproval)
+    return {
+      type: "job.approval",
+      data: {
+        ...(output ? { output } : {}),
+        approval: parsedApproval,
+        ...(parsedCommand ? { commandPreview: parsedCommand } : {}),
+      },
+    }
   if (parsedQuestion) return { type: "job.question", data: { ...(output ? { output } : {}), question: parsedQuestion } }
   if (parsedReview) return { type: "job.review.updated", data: { ...(output ? { output } : {}), review: parsedReview } }
-  if (parsedCommand) return { type: "job.command.preview", data: { ...(output ? { output } : {}), commandPreview: parsedCommand } }
+  if (parsedCommand)
+    return { type: "job.command.preview", data: { ...(output ? { output } : {}), commandPreview: parsedCommand } }
   if (output) return { type: "job.output", data: { output } }
   return { type: "job.progress", data: { message: type } }
 }
@@ -315,12 +359,19 @@ function terminal(type: string) {
 function nextState(state: State, event: Event): State {
   const done = terminal(event.type)
   const data = event.data
-  const status = done ??
-    (event.type.endsWith("queued") ? "queued" :
-      event.type.endsWith("approval") ? "waiting_approval" :
-        event.type.endsWith("question") ? "waiting_question" :
-          event.type.endsWith("retry") ? "retrying" :
-            event.type.endsWith("review.updated") || event.type.endsWith("command.preview") ? state.status : "running")
+  const status =
+    done ??
+    (event.type.endsWith("queued")
+      ? "queued"
+      : event.type.endsWith("approval")
+        ? "waiting_approval"
+        : event.type.endsWith("question")
+          ? "waiting_question"
+          : event.type.endsWith("retry")
+            ? "retrying"
+            : event.type.endsWith("review.updated") || event.type.endsWith("command.preview")
+              ? state.status
+              : "running")
   const output = data.output ? boundedOutput(`${state.output ?? ""}${data.output}`) : state.output
   return {
     ...state,
@@ -363,8 +414,18 @@ function changedFiles(value: string, root: string) {
     const relative = line.slice(3).trim().split(" -> ").at(-1)
     if (!relative || relative.startsWith("/")) return []
     const status = line.slice(0, 2).trim()
-    const kind = status.includes("?") ? "untracked" : status.includes("D") ? "deleted" : status.includes("R") ? "renamed" : status.includes("A") ? "added" : "modified"
-    return [{ path: path.join(root, relative), status: kind as "added" | "modified" | "deleted" | "renamed" | "untracked" }]
+    const kind = status.includes("?")
+      ? "untracked"
+      : status.includes("D")
+        ? "deleted"
+        : status.includes("R")
+          ? "renamed"
+          : status.includes("A")
+            ? "added"
+            : "modified"
+    return [
+      { path: path.join(root, relative), status: kind as "added" | "modified" | "deleted" | "renamed" | "untracked" },
+    ]
   })
 }
 
@@ -374,8 +435,8 @@ function diffFiles(value: string, files: ReturnType<typeof changedFiles>, root: 
     const relative = path.relative(root, file.path).replaceAll(path.sep, "/")
     const block = blocks.find((item) => item.includes(` b/${relative}`)) ?? ""
     const diff = (block ? `diff --git ${block}` : "").slice(0, MAX_REMOTE_REVIEW_DIFF_BYTES)
-    const additions = diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++" )).length
-    const deletions = diff.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---" )).length
+    const additions = diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length
+    const deletions = diff.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length
     return { ...file, additions, deletions, diff }
   })
 }
@@ -386,14 +447,16 @@ function emptyReview(): RemoteReview {
 
 export function collectRemoteAgentReview(directory: string, process: AppProcess.Interface) {
   const run = (args: string[]) =>
-    process.run(
-      ChildProcess.make("git", ["-C", directory, ...args], {
-        cwd: directory,
-        extendEnv: true,
-        stdin: "ignore",
-      }),
-      { timeout: "10 seconds", maxOutputBytes: MAX_REMOTE_REVIEW_DIFF_BYTES, maxErrorBytes: 4096 },
-    ).pipe(Effect.option)
+    process
+      .run(
+        ChildProcess.make("git", ["-C", directory, ...args], {
+          cwd: directory,
+          extendEnv: true,
+          stdin: "ignore",
+        }),
+        { timeout: "10 seconds", maxOutputBytes: MAX_REMOTE_REVIEW_DIFF_BYTES, maxErrorBytes: 4096 },
+      )
+      .pipe(Effect.option)
   return Effect.gen(function* () {
     const root = yield* run(["rev-parse", "--is-inside-work-tree"])
     if (root._tag !== "Some" || root.value.exitCode !== 0 || root.value.stdout.toString("utf8").trim() !== "true") {
@@ -402,17 +465,21 @@ export function collectRemoteAgentReview(directory: string, process: AppProcess.
     const status = yield* run(["status", "--short"])
     const diff = yield* run(["diff", "--no-ext-diff", "--unified=40"])
     const check = yield* run(["diff", "--check"])
-    const files = status.pipe((value) => value._tag === "Some" ? changedFiles(value.value.stdout.toString("utf8"), directory) : [])
-    const diffText = diff.pipe((value) => value._tag === "Some" ? value.value.stdout.toString("utf8") : "")
+    const files = status.pipe((value) =>
+      value._tag === "Some" ? changedFiles(value.value.stdout.toString("utf8"), directory) : [],
+    )
+    const diffText = diff.pipe((value) => (value._tag === "Some" ? value.value.stdout.toString("utf8") : ""))
     const checked = check._tag === "Some"
     return {
       files: diffFiles(diffText, files, directory).slice(0, MAX_REMOTE_REVIEW_FILES),
       tests: checked
-        ? [{
-            name: "git diff --check",
-            status: check.value.exitCode === 0 ? ("passed" as const) : ("failed" as const),
-            output: boundedOutput(`${check.value.stdout.toString("utf8")}${check.value.stderr.toString("utf8")}`),
-          }]
+        ? [
+            {
+              name: "git diff --check",
+              status: check.value.exitCode === 0 ? ("passed" as const) : ("failed" as const),
+              output: boundedOutput(`${check.value.stdout.toString("utf8")}${check.value.stderr.toString("utf8")}`),
+            },
+          ]
         : [],
       screenshots: [],
       comments: [],
@@ -433,8 +500,7 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
     const jobs = new Map<string, Job>()
     const context = yield* Effect.context<unknown>()
-    const runFork = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      Effect.runFork(effect.pipe(Effect.provide(context)))
+    const runFork = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.runFork(effect.pipe(Effect.provide(context)))
 
     const create = (input: {
       readonly root: string
@@ -445,13 +511,15 @@ export const layer = Layer.effect(
     }) => {
       const selected = command(input.agent, input.prompt, input.config)
       return Effect.provide(
-        Pty.Service.use((service) => service.create({
-          command: selected.executable,
-          args: selected.args,
-          cwd: input.directory,
-          title: `${input.agent} remote job`,
-          env: environment(),
-        })),
+        Pty.Service.use((service) =>
+          service.create({
+            command: selected.executable,
+            args: selected.args,
+            cwd: input.directory,
+            title: `${input.agent} remote job`,
+            env: environment(),
+          }),
+        ),
         locationLayer(locations, input.root),
       )
     }
@@ -485,9 +553,10 @@ export const layer = Layer.effect(
           const socket = {
             readyState: 1,
             send: (value: string | Uint8Array | ArrayBuffer) => {
-              const chunk = typeof value === "string"
-                ? value
-                : new TextDecoder().decode(value instanceof ArrayBuffer ? new Uint8Array(value) : value)
+              const chunk =
+                typeof value === "string"
+                  ? value
+                  : new TextDecoder().decode(value instanceof ArrayBuffer ? new Uint8Array(value) : value)
               if (!chunk || chunk.charCodeAt(0) === 0) return
               let next = `${job.pending}${strip(chunk)}`
               const lines = next.split(/\r?\n/)
@@ -510,7 +579,10 @@ export const layer = Layer.effect(
           if (!connection) return yield* Effect.fail(new Error("remote job PTY connection failed"))
           job.write = connection.onMessage as (value: string) => void
           job.input.splice(0).forEach((value) => job.write?.(value))
-          statusData(job, "job.progress", { sessionID: info.id, commandPreview: preview(job.state.agent, job.state.directory, job.prompt, job.config) })
+          statusData(job, "job.progress", {
+            sessionID: info.id,
+            commandPreview: preview(job.state.agent, job.state.directory, job.prompt, job.config),
+          })
           const poll = Effect.gen(function* () {
             while (true) {
               const current = yield* pty.get(info.id).pipe(Effect.option)
@@ -597,13 +669,16 @@ export const layer = Layer.effect(
           const item = value.comment
           if (!item) return yield* Effect.fail(new Error("review comment is required"))
           const current = job.state.review ?? emptyReview()
-          const comments = [...current.comments, {
-            id: id("comment"),
-            path: item.path,
-            ...(item.line === undefined ? {} : { line: item.line }),
-            body: item.body,
-            createdAt: Date.now(),
-          }].slice(-MAX_REMOTE_REVIEW_COMMENTS)
+          const comments = [
+            ...current.comments,
+            {
+              id: id("comment"),
+              path: item.path,
+              ...(item.line === undefined ? {} : { line: item.line }),
+              body: item.body,
+              createdAt: Date.now(),
+            },
+          ].slice(-MAX_REMOTE_REVIEW_COMMENTS)
           statusData(job, "job.review.updated", { review: { ...current, comments } })
           return job.state
         }
@@ -620,7 +695,14 @@ export const layer = Layer.effect(
           job.write = undefined
           job.pending = ""
           job.exitCode = undefined
-          job.state = { ...job.state, status: "retrying", error: undefined, approval: undefined, question: undefined, updatedAt: Date.now() }
+          job.state = {
+            ...job.state,
+            status: "retrying",
+            error: undefined,
+            approval: undefined,
+            question: undefined,
+            updatedAt: Date.now(),
+          }
           statusData(job, "job.retry", { message: "Retrying remote agent job", sessionID: info.id })
           runFork(run(job))
           return job.state
@@ -631,12 +713,19 @@ export const layer = Layer.effect(
           yield* job.stop?.() ?? Effect.void
           return job.state
         }
-        const inputValue = value.action === "approve" ? "y\r" : value.action === "reject" ? "n\r" : `${value.answer ?? value.prompt ?? ""}\r`
+        const inputValue =
+          value.action === "approve"
+            ? "y\r"
+            : value.action === "reject"
+              ? "n\r"
+              : `${value.answer ?? value.prompt ?? ""}\r`
         if (!inputValue.trim()) return yield* Effect.fail(new Error("answer or steering prompt is required"))
         if (job.write) job.write(inputValue)
         else job.input.push(inputValue)
         job.state = { ...job.state, approval: undefined, question: undefined, updatedAt: Date.now() }
-        statusData(job, "job.progress", { message: value.action === "steer" ? "Steering prompt sent" : "Agent action accepted" })
+        statusData(job, "job.progress", {
+          message: value.action === "steer" ? "Steering prompt sent" : "Agent action accepted",
+        })
         return job.state
       })
 
