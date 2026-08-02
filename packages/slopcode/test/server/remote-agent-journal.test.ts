@@ -94,6 +94,67 @@ describe("remote agent journal", () => {
     )
   })
 
+  test("expires idempotency keys without deleting durable job history", async () => {
+    await run(
+      ":memory:",
+      Effect.gen(function* () {
+        const journal = yield* Journal
+        expect(
+          (yield* journal.start({
+            state: state("job_first"),
+            root: "/project",
+            fingerprint: "first",
+            idempotencyKey: "request",
+            now: 0,
+          })).type,
+        ).toBe("created")
+        expect(
+          (yield* journal.start({
+            state: state("job_duplicate"),
+            root: "/project",
+            fingerprint: "first",
+            idempotencyKey: "request",
+            now: 1,
+          })).type,
+        ).toBe("duplicate")
+        expect(
+          (yield* journal.start({
+            state: state("job_conflict"),
+            root: "/project",
+            fingerprint: "changed",
+            idempotencyKey: "request",
+            now: 1,
+          })).type,
+        ).toBe("conflict")
+        expect(
+          (yield* journal.start({
+            state: state("job_reused"),
+            root: "/project",
+            fingerprint: "changed",
+            idempotencyKey: "request",
+            now: limits.idempotencyTTL + 1,
+          })).type,
+        ).toBe("created")
+        expect((yield* journal.get("job_first"))?.state.id).toBe("job_first")
+      }),
+    )
+  })
+
+  test("compensates failed process creation with a durable failed outcome", async () => {
+    await run(
+      ":memory:",
+      Effect.gen(function* () {
+        const journal = yield* Journal
+        yield* start()
+        expect(yield* journal.failStart({ jobID: "job_test", message: "PTY unavailable" })).toMatchObject({
+          status: "failed",
+          error: "PTY unavailable",
+        })
+        expect((yield* start()).job.state).toMatchObject({ status: "failed" })
+      }),
+    )
+  })
+
   test("requires a snapshot when a retained event tail no longer covers the cursor", async () => {
     await run(
       ":memory:",
@@ -129,32 +190,75 @@ describe("remote agent journal", () => {
             payload: { title: "Run tests", token: "not persisted" },
           }),
         ).toMatchObject({ revision: 1, payload: { title: "Run tests" } })
-        const first = journal.resolveInteraction({
+        const first = journal.beginInteraction({
           jobID: "job_test",
           id: "int_test",
           revision: 1,
           digest: "approve",
-          resolution: { answer: "yes", secret: "not persisted" },
         })
-        const second = journal.resolveInteraction({
+        const second = journal.beginInteraction({
           jobID: "job_test",
           id: "int_test",
           revision: 1,
           digest: "approve",
-          resolution: { answer: "yes" },
         })
         expect(
           (yield* Effect.all([first, second], { concurrency: "unbounded" })).map((item) => item.type).sort(),
-        ).toEqual(["duplicate", "resolved"])
+        ).toEqual(["deliver", "deliver"])
+        yield* journal.append({
+          jobID: "job_test",
+          id: "evt_action",
+          type: "job.progress",
+          data: { message: "Agent action accepted" },
+          reduce: (current, event) => ({ ...current, cursor: event.cursor, approval: undefined, updatedAt: 2 }),
+          completion: { id: "int_test", revision: 1, digest: "approve" },
+        })
         expect(
-          yield* journal.resolveInteraction({
+          yield* journal.beginInteraction({
             jobID: "job_test",
             id: "int_test",
             revision: 1,
-            digest: "reject",
-            resolution: { answer: "no" },
+            digest: "approve",
           }),
+        ).toMatchObject({ type: "duplicate" })
+        expect(
+          yield* journal.beginInteraction({ jobID: "job_test", id: "int_test", revision: 1, digest: "reject" }),
         ).toMatchObject({ type: "conflict" })
+      }),
+    )
+  })
+
+  test("removes nested secret-shaped values before persisting events, interactions, and artifacts", async () => {
+    await run(
+      ":memory:",
+      Effect.gen(function* () {
+        const journal = yield* Journal
+        yield* start()
+        yield* journal.append({
+          jobID: "job_test",
+          id: "evt_safe",
+          type: "job.progress",
+          data: {
+            message: "safe",
+            nested: { token: "remove", list: [{ api_key: "remove" }] },
+          } as unknown as Event["data"],
+          reduce: (current, event) => ({ ...current, cursor: event.cursor, updatedAt: 2 }),
+        })
+        expect(JSON.stringify(yield* journal.replay({ jobID: "job_test" }))).not.toContain("remove")
+        expect(
+          yield* journal.createInteraction({
+            jobID: "job_test",
+            id: "int_safe",
+            kind: "question",
+            payload: { details: { token: "remove", value: "keep" } },
+          }),
+        ).toMatchObject({ payload: { details: { value: "keep" } } })
+        yield* journal.saveArtifact({
+          jobID: "job_test",
+          id: "art_safe",
+          metadata: { nested: [{ cookie: "remove", name: "keep" }] },
+        })
+        expect(JSON.stringify(yield* journal.artifacts("job_test"))).not.toContain("remove")
       }),
     )
   })

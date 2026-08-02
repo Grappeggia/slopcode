@@ -35,8 +35,11 @@ import {
   RemoteAgentConfig,
   RemoteAgentJobAction,
   RemoteAgentJobActionQuery,
+  RemoteAgentJobArtifact,
   RemoteAgentJobEventsQuery,
   RemoteAgentJobStart,
+  RemoteAgentPlanCommit,
+  RemoteAgentPlanPrepare,
   RemoteCommandPreview,
   RemoteAgentPrompt,
   RemoteAgentPromptQuery,
@@ -1152,7 +1155,39 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
         agent: ctx.payload.agent,
         prompt: ctx.payload.prompt,
         config: ctx.payload.config,
+        idempotencyKey: ctx.payload.idempotencyKey,
       })
+    })
+
+    const jobState = Effect.fn("RemoteRuntimeHttpApi.jobState")(function* (ctx: { params: { jobID: string } }) {
+      return yield* jobs.state(ctx.params.jobID).pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
+    })
+
+    const jobArtifact = Effect.fn("RemoteRuntimeHttpApi.jobArtifact")(function* (ctx: {
+      params: { jobID: string }
+      payload: typeof RemoteAgentJobArtifact.Type
+    }) {
+      return yield* jobs
+        .artifact({ jobID: ctx.params.jobID, ...ctx.payload })
+        .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
+    })
+
+    const jobPlanPrepare = Effect.fn("RemoteRuntimeHttpApi.jobPlanPrepare")(function* (ctx: {
+      params: { jobID: string }
+      payload: typeof RemoteAgentPlanPrepare.Type
+    }) {
+      return yield* jobs
+        .preparePlan({ jobID: ctx.params.jobID, ...ctx.payload })
+        .pipe(Effect.catch((error) => Effect.fail(remoteJobError(error))))
+    })
+
+    const jobPlanCommit = Effect.fn("RemoteRuntimeHttpApi.jobPlanCommit")(function* (ctx: {
+      params: { jobID: string }
+      payload: typeof RemoteAgentPlanCommit.Type
+    }) {
+      return {
+        status: yield* jobs.commitPlan(ctx.payload).pipe(Effect.catch((error) => Effect.fail(remoteJobError(error)))),
+      }
     })
 
     const jobEvents = Effect.fn("RemoteRuntimeHttpApi.jobEvents")(function* (ctx: {
@@ -1193,7 +1228,11 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       .handle("session", session)
       .handle("catalog", catalog)
       .handle("job", job)
+      .handle("jobState", jobState)
       .handle("jobEvents", jobEvents)
       .handle("jobAction", jobAction)
+      .handle("jobArtifact", jobArtifact)
+      .handle("jobPlanPrepare", jobPlanPrepare)
+      .handle("jobPlanCommit", jobPlanCommit)
   }),
 ).pipe(Layer.provide(remoteAgentJobsLayer), Layer.provide(LocationServiceMap.layer))

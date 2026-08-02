@@ -40,6 +40,7 @@ type StartInput = {
   readonly agent: Agent
   readonly prompt: string
   readonly config?: Config
+  readonly idempotencyKey?: string
 }
 
 type Job = {
@@ -71,6 +72,21 @@ export interface Interface {
     readonly cursor?: string
   }) => Effect.Effect<Stream.Stream<Event>, RemoteAgentJobNotFoundError, Scope.Scope>
   readonly action: (input: { readonly jobID: string; readonly action: Action }) => Effect.Effect<State, Error>
+  readonly state: (jobID: string) => Effect.Effect<State, RemoteAgentJobNotFoundError>
+  readonly artifact: (input: {
+    readonly jobID: string
+    readonly id: string
+    readonly metadata: Record<string, unknown>
+  }) => Effect.Effect<"saved" | "duplicate" | "quota", Error>
+  readonly preparePlan: (input: {
+    readonly jobID: string
+    readonly planID: string
+    readonly digest: string
+  }) => Effect.Effect<{ token: string; expiresAt: number }, Error>
+  readonly commitPlan: (input: {
+    readonly token: string
+    readonly digest: string
+  }) => Effect.Effect<"consumed" | "expired" | "used" | "conflict" | "missing">
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/RemoteAgentJobs") {}
@@ -500,15 +516,20 @@ export const layer = Layer.effect(
     const context = yield* Effect.context<unknown>()
     const runFork = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.runFork(effect.pipe(Effect.provide(context)))
 
-    const statusData = (job: Job, type: string, values: Record<string, unknown> = {}) => {
+    const statusData = (
+      job: Job,
+      type: string,
+      values: Record<string, unknown> = {},
+      completion?: { id: string; revision: number; digest: string },
+    ) => {
       const approval = type.endsWith("approval") && record(values.approval) ? values.approval : undefined
       const question = type.endsWith("question") && record(values.question) ? values.question : undefined
       const interaction = approval ?? question
       const identifier = text(interaction?.id) ?? (interaction ? id("int") : undefined)
       const valuesData = {
         ...values,
-        ...(approval && identifier ? { approval: { ...approval, id: identifier } } : {}),
-        ...(question && identifier ? { question: { ...question, id: identifier } } : {}),
+        ...(approval && identifier ? { approval: { ...approval, id: identifier, revision: 1 } } : {}),
+        ...(question && identifier ? { question: { ...question, id: identifier, revision: 1 } } : {}),
       }
       return journal
         .append({
@@ -517,6 +538,7 @@ export const layer = Layer.effect(
           type,
           data: data(valuesData),
           reduce: nextState,
+          ...(completion ? { completion } : {}),
           ...(identifier && interaction
             ? {
                 interaction: {
@@ -672,6 +694,7 @@ export const layer = Layer.effect(
           state,
           root: input.root,
           config: input.config,
+          idempotencyKey: input.idempotencyKey,
           fingerprint: digest({
             workspaceID: input.workspaceID,
             root: input.root,
@@ -694,17 +717,25 @@ export const layer = Layer.effect(
           recovered.set(restored.state.id, restored)
           return restored.state
         }
-        const info = yield* create(input)
         const job: Job = {
           state,
           root: input.root,
           prompt: input.prompt,
           config: input.config,
-          ptyID: info.id,
           listeners: new Set(),
           input: [],
           pending: "",
         }
+        const info = yield* create(input).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        if (!info) {
+          job.state = yield* journal.failStart({
+            jobID: job.state.id,
+            message: "Remote agent process could not be created",
+          })
+          jobs.set(job.state.id, job)
+          return job.state
+        }
+        job.ptyID = info.id
         jobs.set(job.state.id, job)
         recovered.delete(job.state.id)
         yield* statusData(job, "job.queued", { commandPreview: job.state.commandPreview })
@@ -730,7 +761,7 @@ export const layer = Layer.effect(
             cursor: replay.cursor,
             jobID: input.jobID,
             type: "job.snapshot_required",
-            data: { message: "Requested event cursor is outside the retained tail" },
+            data: { message: "Requested event cursor is outside the retained tail", state: replay.state },
           })
         else replay.events.forEach((event) => Queue.offerUnsafe(queue, event))
         job.listeners.add(queue)
@@ -791,8 +822,6 @@ export const layer = Layer.effect(
               ? "n\r"
               : `${value.answer ?? value.prompt ?? ""}\r`
         if (!inputValue.trim()) return yield* Effect.fail(new Error("answer or steering prompt is required"))
-        if (!job.write && !job.ptyID)
-          return yield* Effect.fail(new Error("remote job process is unavailable after restart"))
         const interaction =
           value.action === "approve" || value.action === "reject"
             ? job.state.approval
@@ -800,26 +829,68 @@ export const layer = Layer.effect(
               ? job.state.question
               : undefined
         if (interaction?.id) {
-          const resolved = yield* journal.resolveInteraction({
+          if (
+            value.interactionID !== interaction.id ||
+            value.expectedRevision !== interaction.revision ||
+            !value.idempotencyKey
+          )
+            return yield* Effect.fail(new Error("interaction id, expected revision, and idempotency key are required"))
+          if (!job.write)
+            return yield* Effect.fail(new Error("remote job process is unavailable for interaction delivery"))
+          const requestDigest = digest({
+            idempotencyKey: value.idempotencyKey,
+            action: value.action,
+            answer: value.answer,
+            prompt: value.prompt,
+          })
+          const delivery = yield* journal.beginInteraction({
             jobID: job.state.id,
             id: interaction.id,
-            revision: 1,
-            digest: digest({ action: value.action, answer: value.answer, prompt: value.prompt }),
-            resolution: { action: value.action, answer: value.answer ?? value.prompt },
+            revision: value.expectedRevision,
+            digest: requestDigest,
           })
-          if (resolved.type === "duplicate" || resolved.type === "stale" || resolved.type === "conflict")
+          if (delivery.type === "duplicate" || delivery.type === "stale" || delivery.type === "conflict")
             return job.state
+          if (delivery.type === "missing") return yield* Effect.fail(new Error("remote job interaction is unavailable"))
+          yield* Effect.sync(() => job.write?.(inputValue))
+          yield* statusData(
+            job,
+            "job.progress",
+            { message: "Agent action accepted" },
+            { id: interaction.id, revision: value.expectedRevision, digest: requestDigest },
+          )
+          return job.state
         }
+        if (!job.write && !job.ptyID)
+          return yield* Effect.fail(new Error("remote job process is unavailable after restart"))
         if (job.write) job.write(inputValue)
         else job.input.push(inputValue)
-        job.state = { ...job.state, approval: undefined, question: undefined, updatedAt: Date.now() }
         yield* statusData(job, "job.progress", {
           message: value.action === "steer" ? "Steering prompt sent" : "Agent action accepted",
         })
         return job.state
       })
 
+    const state: Interface["state"] = (jobID) =>
+      Effect.gen(function* () {
+        const current = yield* journal.get(jobID)
+        if (!current) return yield* Effect.fail(new RemoteAgentJobNotFoundError(jobID))
+        return current.state
+      })
+
+    const artifact: Interface["artifact"] = (input) => journal.saveArtifact(input)
+
+    const preparePlan: Interface["preparePlan"] = (input) =>
+      Effect.gen(function* () {
+        const token = id("plan")
+        const now = Date.now()
+        yield* journal.preparePlan({ token, ...input, now })
+        return { token, expiresAt: now + 5 * 60 * 1000 }
+      })
+
+    const commitPlan: Interface["commitPlan"] = (input) => journal.consumePlan(input)
+
     yield* Effect.addFinalizer(() => Effect.sync(() => jobs.clear()))
-    return Service.of({ start, stream, action })
+    return Service.of({ start, stream, action, state, artifact, preparePlan, commitPlan })
   }),
 ).pipe(Layer.provide(remoteAgentJournalLayer))

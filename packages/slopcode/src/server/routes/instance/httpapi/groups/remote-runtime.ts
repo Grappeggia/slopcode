@@ -196,6 +196,7 @@ export const RemoteCommandPreview = Schema.Struct({
 
 export const RemoteApproval = Schema.Struct({
   id: Schema.optional(BoundedID),
+  revision: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000_000 }))),
   title: ReviewMessage,
   command: Schema.optional(ReviewMessage),
   cwd: Schema.optional(ReviewPath),
@@ -205,6 +206,7 @@ export const RemoteApproval = Schema.Struct({
 
 export const RemoteQuestion = Schema.Struct({
   id: Schema.optional(BoundedID),
+  revision: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000_000 }))),
   prompt: ReviewMessage,
   options: Schema.optional(Schema.Array(ReviewMessage).check(Schema.isMaxLength(32))),
   allowFreeform: Schema.optional(Schema.Boolean),
@@ -275,6 +277,7 @@ export const RemoteAgentJobState = Schema.Struct({
 
 export const RemoteAgentJobStart = Schema.Struct({
   jobID: Schema.optional(BoundedID),
+  idempotencyKey: Schema.optional(BoundedID),
   agent: RemoteAgent,
   prompt: RemoteAgentPrompt.fields.prompt,
   config: Schema.optional(RemoteAgentConfig),
@@ -282,6 +285,9 @@ export const RemoteAgentJobStart = Schema.Struct({
 
 export const RemoteAgentJobAction = Schema.Struct({
   action: Schema.Literals(["approve", "reject", "answer", "steer", "comment", "stop", "retry"]),
+  interactionID: Schema.optional(BoundedID),
+  expectedRevision: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000_000 }))),
+  idempotencyKey: Schema.optional(BoundedID),
   answer: Schema.optional(ReviewMessage),
   prompt: Schema.optional(ReviewMessage),
   comment: Schema.optional(
@@ -320,7 +326,32 @@ export const RemoteAgentJobEvent = Schema.Struct({
     approval: Schema.optional(RemoteApproval),
     question: Schema.optional(RemoteQuestion),
     review: Schema.optional(RemoteReview),
+    state: Schema.optional(RemoteAgentJobState),
   }),
+})
+
+export const RemoteAgentJobArtifact = Schema.Struct({
+  id: BoundedID,
+  metadata: Schema.Record(BoundedCommandName, Schema.String.check(Schema.isMaxLength(2048))),
+})
+
+export const RemoteAgentPlanPrepare = Schema.Struct({
+  planID: BoundedID,
+  digest: BoundedID,
+})
+
+export const RemoteAgentPlanPrepared = Schema.Struct({
+  token: BoundedID,
+  expiresAt: Schema.Int,
+})
+
+export const RemoteAgentPlanCommit = Schema.Struct({
+  token: BoundedID,
+  digest: BoundedID,
+})
+
+export const RemoteAgentPlanCommitResult = Schema.Struct({
+  status: Schema.Literals(["consumed", "expired", "used", "conflict", "missing"]),
 })
 
 export const RemoteRuntimePaths = {
@@ -331,6 +362,10 @@ export const RemoteRuntimePaths = {
   job: "/remote/agent/job",
   jobEvents: "/remote/agent/job/events",
   jobAction: "/remote/agent/job/:jobID/action",
+  jobState: "/remote/agent/job/:jobID",
+  jobArtifact: "/remote/agent/job/:jobID/artifact",
+  jobPlanPrepare: "/remote/agent/job/:jobID/plan/prepare",
+  jobPlanCommit: "/remote/agent/job/:jobID/plan/commit",
 } as const
 
 export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
@@ -425,6 +460,33 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
               "Apply an idempotent user action to a remote job, including approval decisions, question answers, steering prompts, and review comments.",
           }),
         ),
+        HttpApiEndpoint.get("jobState", RemoteRuntimePaths.jobState, {
+          params: { jobID: BoundedID },
+          query: RemoteAgentJobActionQuery,
+          success: described(RemoteAgentJobState, "Durable remote agent job state"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }),
+        HttpApiEndpoint.post("jobArtifact", RemoteRuntimePaths.jobArtifact, {
+          params: { jobID: BoundedID },
+          query: RemoteAgentJobActionQuery,
+          payload: RemoteAgentJobArtifact,
+          success: described(Schema.Literal("saved", "duplicate", "quota"), "Persisted artifact metadata result"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }),
+        HttpApiEndpoint.post("jobPlanPrepare", RemoteRuntimePaths.jobPlanPrepare, {
+          params: { jobID: BoundedID },
+          query: RemoteAgentJobActionQuery,
+          payload: RemoteAgentPlanPrepare,
+          success: described(RemoteAgentPlanPrepared, "Prepared durable plan save"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }),
+        HttpApiEndpoint.post("jobPlanCommit", RemoteRuntimePaths.jobPlanCommit, {
+          params: { jobID: BoundedID },
+          query: RemoteAgentJobActionQuery,
+          payload: RemoteAgentPlanCommit,
+          success: described(RemoteAgentPlanCommitResult, "Committed durable plan save"),
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
+        }),
       )
       .middleware(InstanceContextMiddleware)
       .middleware(WorkspaceRoutingMiddleware)
@@ -459,3 +521,8 @@ export type RemoteAgentJobAction = typeof RemoteAgentJobAction.Type
 export type RemoteAgentJobEventsQuery = typeof RemoteAgentJobEventsQuery.Type
 export type RemoteAgentJobActionQuery = typeof RemoteAgentJobActionQuery.Type
 export type RemoteAgentJobEvent = typeof RemoteAgentJobEvent.Type
+export type RemoteAgentJobArtifact = typeof RemoteAgentJobArtifact.Type
+export type RemoteAgentPlanPrepare = typeof RemoteAgentPlanPrepare.Type
+export type RemoteAgentPlanPrepared = typeof RemoteAgentPlanPrepared.Type
+export type RemoteAgentPlanCommit = typeof RemoteAgentPlanCommit.Type
+export type RemoteAgentPlanCommitResult = typeof RemoteAgentPlanCommitResult.Type

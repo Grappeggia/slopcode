@@ -556,6 +556,31 @@ describe("remote agent runtime", () => {
     expect(response.status).toBe(400)
   })
 
+  test("records a failed PTY start as a retryable durable terminal outcome", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    await using bin = await tmpdir({ config: { formatter: false, lsp: false } })
+    const previous = process.env.PATH
+    process.env.PATH = bin.path
+    try {
+      const first = await request(
+        RemoteRuntimePaths.job,
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ jobID: "job_missing", agent: "codex-cli", prompt: "run" }) },
+      )
+      expect(first.status).toBe(200)
+      expect(await first.json()).toMatchObject({ id: "job_missing", status: "failed" })
+      const state = await request(RemoteRuntimePaths.jobState.replace(":jobID", "job_missing"), tmp.path, {
+        path: tmp.path,
+      })
+      expect(state.status).toBe(200)
+      expect(await state.json()).toMatchObject({ status: "failed" })
+    } finally {
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+    }
+  })
+
   test("streams structured job events with approval context and a terminal review", async () => {
     if (process.platform === "win32") return
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
@@ -588,6 +613,35 @@ describe("remote agent runtime", () => {
       )
       expect(status.status).toBe(200)
       expect((await status.json()).id).toBe("job_structured")
+      const snapshot = await request(RemoteRuntimePaths.jobState.replace(":jobID", "job_structured"), tmp.path, {
+        path: tmp.path,
+      })
+      expect(snapshot.status).toBe(200)
+      expect((await snapshot.json()).id).toBe("job_structured")
+      const artifact = await request(
+        RemoteRuntimePaths.jobArtifact.replace(":jobID", "job_structured"),
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ id: "art_result", metadata: { name: "result" } }) },
+      )
+      expect(artifact.status).toBe(200)
+      expect(await artifact.json()).toBe("saved")
+      const prepared = await request(
+        RemoteRuntimePaths.jobPlanPrepare.replace(":jobID", "job_structured"),
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ planID: "plan_result", digest: "digest_result" }) },
+      )
+      expect(prepared.status).toBe(200)
+      const plan = (await prepared.json()) as { token: string }
+      const committed = await request(
+        RemoteRuntimePaths.jobPlanCommit.replace(":jobID", "job_structured"),
+        tmp.path,
+        { path: tmp.path },
+        { method: "POST", body: JSON.stringify({ token: plan.token, digest: "digest_result" }) },
+      )
+      expect(committed.status).toBe(200)
+      expect(await committed.json()).toEqual({ status: "consumed" })
       const events = await request(RemoteRuntimePaths.jobEvents, tmp.path, { job: "job_structured", path: tmp.path })
       const body = await events.text()
       expect(events.status).toBe(200)

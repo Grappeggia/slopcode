@@ -8,20 +8,22 @@
 
 ## Behavior
 
-- Stores remote job snapshots, backend PTY/session mappings, ordered retained events, request fingerprints/idempotency records, terminal outcomes, pending interactions, artifact metadata, and plan-save tokens in SQLite.
-- Uses immediate SQLite transactions for create/duplicate/conflict decisions, event/state updates, interaction replies, artifact quotas, and plan-token consumption.
+- Stores remote job snapshots, backend PTY/session mappings, ordered retained events, expiring request idempotency records, terminal outcomes, pending interactions, artifact metadata, and plan-save tokens in SQLite.
+- PTY creation failures are compensated to a durable `failed` snapshot instead of leaving a queued claim; the job-state route exposes that recoverable terminal outcome.
+- Uses immediate SQLite transactions for create/duplicate/conflict decisions, event/state updates, interaction in-flight/delivery completion, artifact quotas, and plan-token consumption.
 - Rehydrates durable snapshots when the job service is created; a missing in-memory process handle does not mark a remote job failed.
-- Replays retained events and emits `job.snapshot_required` when an explicit cursor predates the retained tail.
+- Replays retained events and emits `job.snapshot_required` with the authoritative durable state when an explicit cursor predates the retained tail; `GET /remote/agent/job/:jobID` returns the same snapshot for HTTP recovery.
+- Approval/question actions now require the interaction ID, expected revision, and idempotency key. Delivery is marked in-flight first, and only resolves atomically with the durable state-clearing event after the live write succeeds; an in-flight retry is delivered at least once.
+- Artifact metadata and short-lived plan tokens are reachable through typed remote-job HTTP routes.
 - Retains at most 2,048 events per job, bounds persisted event/state/metadata sizes, limits artifacts to 64 per job, expires idempotency records after 24 hours, and uses five-minute single-use plan tokens.
 - Keeps prompts and process environments out of the journal. Recovered jobs reject actions that cannot be delivered to an active in-memory process handle.
 
 ## Validation
 
-- `bun test test/server/remote-agent-journal.test.ts --timeout 30000` — 5 pass.
-- `bun test test/server/httpapi-remote-runtime.test.ts --timeout 30000` — 22 pass.
+- `bun test test/server/remote-agent-journal.test.ts --timeout 30000` — 8 pass.
+- `bun test test/server/httpapi-remote-runtime.test.ts --timeout 30000` — 23 pass.
 - `bun run typecheck` — pass.
 
 ## Limitations
 
-- This task deliberately preserves the existing public HTTP schemas, so expected interaction revisions and idempotency keys are journal capabilities rather than new HTTP request fields.
-- A service restart restores snapshots and replay state but does not recreate a PTY or resume a process; retry needs the original in-memory prompt and remains unavailable for a recovered job.
+- A service restart restores snapshots and replay state but does not recreate a PTY or resume a process. Recovered jobs remain inspectable; a user starts a fresh job to run again.
