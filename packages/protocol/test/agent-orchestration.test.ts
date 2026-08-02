@@ -64,6 +64,15 @@ describe("agent orchestration protocol contracts", () => {
         title: "Protocol task",
       },
       {
+        version: "v1",
+        kind: "response",
+        type: "session.create",
+        requestID: "req_session_1",
+        idempotencyKey: "idem_session_1",
+        sessionID: "ses_orchestration_1",
+        capabilities: ["workspace", "sessions", "turns"],
+      },
+      {
         ...request,
         type: "turn.create",
         requestID: "req_turn_1",
@@ -120,9 +129,30 @@ describe("agent orchestration protocol contracts", () => {
       {
         version: "v1",
         kind: "event",
-        type: "interaction.approval.requested",
+        type: "turn.reasoning",
         cursor: "cur_2",
         sequence: 2,
+        sessionID: "ses_orchestration_1",
+        turnID: "trn_orchestration_1",
+        text: "Checking the contract.",
+        metadata: { nativeID: "native-message" },
+      },
+      {
+        version: "v1",
+        kind: "event",
+        type: "tool.updated",
+        cursor: "cur_3",
+        sequence: 3,
+        sessionID: "ses_orchestration_1",
+        turnID: "trn_orchestration_1",
+        tool: { id: "tol_orchestration_1", title: "Run tests", status: "in_progress", kind: "execute" },
+      },
+      {
+        version: "v1",
+        kind: "event",
+        type: "interaction.approval.requested",
+        cursor: "cur_4",
+        sequence: 4,
         sessionID: "ses_orchestration_1",
         turnID: "trn_orchestration_1",
         interaction: {
@@ -138,8 +168,8 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "interaction.question.requested",
-        cursor: "cur_3",
-        sequence: 3,
+        cursor: "cur_5",
+        sequence: 5,
         sessionID: "ses_orchestration_1",
         turnID: "trn_orchestration_1",
         interaction: {
@@ -154,8 +184,8 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "plan.saved",
-        cursor: "cur_4",
-        sequence: 4,
+        cursor: "cur_6",
+        sequence: 6,
         sessionID: "ses_orchestration_1",
         plan: {
           id: "pln_orchestration_1",
@@ -168,8 +198,8 @@ describe("agent orchestration protocol contracts", () => {
         version: "v1",
         kind: "event",
         type: "artifact.created",
-        cursor: "cur_5",
-        sequence: 5,
+        cursor: "cur_7",
+        sequence: 7,
         sessionID: "ses_orchestration_1",
         turnID: "trn_orchestration_1",
         artifact: {
@@ -209,8 +239,8 @@ describe("agent orchestration protocol contracts", () => {
 
     expect(values).toHaveLength(frames.length)
     expect(values[0]?.type).toBe("workspace.open")
-    expect(values[7]?.kind).toBe("event")
-    expect(values[13]?.kind).toBe("error")
+    expect(values[8]?.kind).toBe("event")
+    expect(values.at(-1)?.kind).toBe("error")
   })
 
   test("rejects excess properties, malformed or oversized frames, unsafe metadata, and invalid agents", async () => {
@@ -234,7 +264,9 @@ describe("agent orchestration protocol contracts", () => {
     ).rejects.toThrow()
 
     await expect(decode(AgentOrchestrationCapabilities, ["workspace", "workspace"])).rejects.toThrow()
-    await expect(decode(AgentOrchestrationCapabilities, Array(AgentOrchestrationLimits.maxCapabilities + 1).fill("turns"))).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationCapabilities, Array(AgentOrchestrationLimits.maxCapabilities + 1).fill("turns")),
+    ).rejects.toThrow()
     await expect(
       decode(AgentOrchestrationError, {
         version: "v1",
@@ -262,7 +294,9 @@ describe("agent orchestration protocol contracts", () => {
     await expect(decode(AgentOrchestrationPath, "/srv//slopcode")).rejects.toThrow()
     await expect(decode(AgentOrchestrationPath, "relative/path")).rejects.toThrow()
     await expect(decode(AgentOrchestrationPath, "/srv\\slopcode")).rejects.toThrow()
-    await expect(decode(AgentOrchestrationPath, `/${"x".repeat(AgentOrchestrationLimits.maxPathBytes)}`)).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationPath, `/${"x".repeat(AgentOrchestrationLimits.maxPathBytes)}`),
+    ).rejects.toThrow()
     expect(String(await decode(AgentOrchestrationPath, "/srv/slopcode"))).toBe("/srv/slopcode")
   })
 
@@ -290,7 +324,12 @@ describe("agent orchestration protocol contracts", () => {
       prompt: "Proceed?",
     })
 
-    expect(agentOrchestrationInteractionRevisionIsCurrent({ id: approval.interactionID, revision: approval.revision }, approval)).toBe(true)
+    expect(
+      agentOrchestrationInteractionRevisionIsCurrent(
+        { id: approval.interactionID, revision: approval.revision },
+        approval,
+      ),
+    ).toBe(true)
     expect(agentOrchestrationInteractionRevisionIsCurrent(interaction, question)).toBe(false)
     await expect(
       decode(AgentOrchestrationApprovalReply, {
@@ -304,7 +343,9 @@ describe("agent orchestration protocol contracts", () => {
     await expect(
       decode(
         AgentOrchestrationMetadata,
-        Object.fromEntries(Array.from({ length: AgentOrchestrationLimits.maxMetadataEntries + 1 }, (_, index) => [`field${index}`, "x"])),
+        Object.fromEntries(
+          Array.from({ length: AgentOrchestrationLimits.maxMetadataEntries + 1 }, (_, index) => [`field${index}`, "x"]),
+        ),
       ),
     ).rejects.toThrow()
     await expect(
@@ -313,7 +354,12 @@ describe("agent orchestration protocol contracts", () => {
     await expect(
       decode(
         AgentOrchestrationMetadata,
-        Object.fromEntries(Array.from({ length: AgentOrchestrationLimits.maxMetadataEntries }, (_, index) => [`field${index}`, "x".repeat(1024)])),
+        Object.fromEntries(
+          Array.from({ length: AgentOrchestrationLimits.maxMetadataEntries }, (_, index) => [
+            `field${index}`,
+            "x".repeat(1024),
+          ]),
+        ),
       ),
     ).rejects.toThrow()
     await expect(
@@ -343,15 +389,14 @@ describe("agent orchestration protocol contracts", () => {
       type: "event.replay",
       requestID: "req_replay_1",
       idempotencyKey: "idem_replay_1",
-      events: [
-        event,
-        { ...event, cursor: "cur_2", sequence: 2, text: "Finished." },
-      ],
+      events: [event, { ...event, cursor: "cur_2", sequence: 2, text: "Finished." }],
       nextCursor: "cur_3",
       hasMore: true,
     }
 
-    expect((await decode(AgentOrchestrationEventReplayResponse, value)).events.map((item) => item.sequence)).toEqual([1, 2])
+    expect((await decode(AgentOrchestrationEventReplayResponse, value)).events.map((item) => item.sequence)).toEqual([
+      1, 2,
+    ])
     await expect(
       decode(AgentOrchestrationEventReplayResponse, {
         ...value,

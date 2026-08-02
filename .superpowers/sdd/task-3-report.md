@@ -1,104 +1,23 @@
-# Task 3 Report: Android application shell
+# Task 3 report: fixed stdio bridge and ACP adapters
 
-## Status
+## Changed files
 
-DONE
-
-## Implemented
-
-- Added a new `packages/android` workspace with a buildable Android shell:
-  - pinned Gradle wrapper (`8.10.2`) and AGP/Kotlin versions chosen against the locally installed Java 21 and Android SDK platforms/build-tools (`android-35`, build-tools `36.0.0`)
-  - native `MainActivity` WebView shell with local asset loading, splash theme, build metadata, single-task deep-link handling, and notification channel setup
-  - secure native storage via encrypted shared preferences
-  - native bridge boundaries for secure storage, notifications, deep links, QR pairing, and remote transport
-- Kept the web payload minimal and within brief:
-  - a tiny shell page that reads persisted remote workspace state from secure storage
-  - redirects to a persisted remote app URL when present
-  - otherwise renders a minimal launch screen with capability status
-- Added focused tests in `packages/android/src` for:
-  - platform capability detection
-  - persisted remote workspace state normalization and round-tripping
-- Added the minimal shared app platform contract needed for Android:
-  - `packages/app/src/context/platform.tsx`
-  - `packages/app/src/index.ts`
+- `packages/protocol/src/agent-orchestration.ts` and its test: added success acknowledgements plus typed reasoning, tool, retry, and plan-available events. Native backend IDs can be retained in bounded non-secret metadata.
+- `packages/slopcode/src/cli/cmd/remote-orchestrator.ts` and `src/index.ts`: registered the fixed `slopcode remote-orchestrator --stdio` entrypoint.
+- `packages/slopcode/src/remote-orchestrator/{bridge,acp,workspace}.ts`: added bounded JSON-line framing with strict frame validation, stdout-only protocol records, stderr diagnostics, realpath workspace containment, cleanup, an allowlisted no-shell ACP launcher, and shared ACP session lifecycle for Slopcode and OpenCode.
+- `packages/slopcode/test/remote-orchestrator.test.ts` and `test/fixture/remote-orchestrator-acp-agent.ts`: added a real spawned ACP fixture covering initialization, session creation, text, reasoning, tool, diff artifact, approval, question, plan, retry, native-ID mapping, cleanup, framing, and stdout isolation.
+- `packages/slopcode/package.json`: declared the protocol workspace dependency.
 
 ## Validation
 
-Run from `packages/android` unless noted:
+- `packages/protocol`: `bun test test/agent-orchestration.test.ts` — 6 passed; `bun run typecheck` — passed.
+- `packages/slopcode`: `bun test test/remote-orchestrator.test.ts --timeout 30000` — 4 passed.
+- `packages/slopcode`: Prettier check for bridge, CLI, tests, and fixture — passed.
+- CLI smoke test: piped a valid `workspace.open` frame to `slopcode remote-orchestrator --stdio`; received a validated response on stdout.
+- `git diff --check` — passed.
 
-```text
-bun test src
-7 pass, 0 fail
+## Limitations
 
-bun run typecheck
-passed
-
-bun run build:web
-passed
-
-./gradlew :app:assembleDebug
-BUILD SUCCESSFUL
-```
-
-Run from `packages/app`:
-
-```text
-bun run typecheck
-passed
-```
-
-Repository diff hygiene:
-
-```text
-git diff --check -- packages/android packages/app/src/context/platform.tsx packages/app/src/index.ts bun.lock
-passed
-```
-
-## Notes
-
-- The shell intentionally stays minimal for this task: it does not add the later mobile UX flows from the plan, and it does not duplicate agent or remote schema logic.
-- QR pairing and remote transport are exposed as native boundaries/capability slots, while the shell page itself only persists and reads remote workspace bootstrap state in this task.
-
-## Task 3 implementation: app-wide command palette
-
-Implementation commit: `f83750f66d` (`feat(app): add server-wide command palette`)
-
-### Changed files
-
-- `packages/app/src/components/dialog-select-file.tsx`
-- `packages/app/src/components/dialog-select-file-controller.ts`
-- `packages/app/src/components/dialog-select-file-controller.test.ts`
-- `packages/app/src/context/command.tsx`
-- `packages/app/src/pages/home.tsx`
-- `packages/app/src/pages/session/use-session-commands.tsx`
-
-### Implemented
-
-- Routed the app-level palette shortcut through a route-specific `command.palette` command on Home and session surfaces, including legacy Home/session layouts.
-- Replaced active-project-only session enumeration with the server session search API (`roots`, `search`, and `limit`) and project labels from opened and stored server projects.
-- Kept workspace file and command search in the existing palette while adding loading, empty, accessible error, and abort handling.
-- Added canonical server-aware session selection that opens/touches the owning project, reuses an existing tab, preserves drafts, and navigates to the selected tab without duplicating it.
-
-### Validation
-
-Run from `packages/app`:
-
-```text
-bun test --preload ./happydom.ts ./src/components/dialog-select-file-controller.test.ts ./src/context/command.test.ts ./src/context/command-keybind.test.ts
-11 pass, 0 fail, 37 assertions
-
-bun test ./src/components/dialog-select-file-controller.test.ts
-3 pass, 0 fail, 13 assertions
-
-bun run typecheck
-passed
-
-bun run build
-passed; 2,157 modules transformed
-```
-
-The production build retained existing Vite warnings for the `virtua` JSX pragma, duplicate static/dynamic theme import, duplicate sourcemap output, and large chunks.
-
-### Concerns
-
-- No live desktop interaction run was performed for this app-only task. Focused tests cover command/file/session search and canonical server-tab selection; the existing shared `List` component continues to provide keyboard selection behavior.
+- The complete `packages/slopcode` typecheck currently fails in the pre-existing Task 2 remote-job journal and HTTP route changes. It reports no errors from the Task 3 bridge, ACP adapter, CLI, or tests.
+- The ACP bridge deliberately advertises only negotiated baseline capabilities. URL elicitation and ACP update types without a lossless v1 mapping are surfaced as explicit unsupported output rather than simulated through a terminal.
+- Codex and Claude adapters, durable bridge replay, plan-save commits, and Android structured UI remain Tasks 4 and 5.

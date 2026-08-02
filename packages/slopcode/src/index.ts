@@ -21,6 +21,7 @@ import { ImportCommand } from "./cli/cmd/import"
 import { AttachCommand } from "./cli/cmd/attach"
 import { TuiThreadCommand } from "./cli/cmd/tui"
 import { AcpCommand } from "./cli/cmd/acp"
+import { RemoteOrchestratorCommand } from "./cli/cmd/remote-orchestrator"
 import { EOL } from "os"
 import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
@@ -79,6 +80,7 @@ const cli = yargs(args)
   .usage("")
   .completion("completion", "generate shell completion script")
   .command(AcpCommand)
+  .command(RemoteOrchestratorCommand)
   .command(McpCommand)
   .command(TuiThreadCommand)
   .command(AttachCommand)

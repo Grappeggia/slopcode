@@ -90,6 +90,9 @@ export type AgentOrchestrationSessionID = typeof AgentOrchestrationSessionID.Typ
 export const AgentOrchestrationTurnID = identifier("trn_", "turn ID").pipe(Schema.brand("AgentOrchestrationV1.TurnID"))
 export type AgentOrchestrationTurnID = typeof AgentOrchestrationTurnID.Type
 
+export const AgentOrchestrationToolID = identifier("tol_", "tool ID").pipe(Schema.brand("AgentOrchestrationV1.ToolID"))
+export type AgentOrchestrationToolID = typeof AgentOrchestrationToolID.Type
+
 export const AgentOrchestrationInteractionID = identifier("int_", "interaction ID").pipe(
   Schema.brand("AgentOrchestrationV1.InteractionID"),
 )
@@ -251,6 +254,7 @@ export const AgentOrchestrationApproval = exact(
     cwd: Schema.optional(AgentOrchestrationPath),
     reason: Schema.optional(body(2 * 1024, "approval reason is too large")),
     risk: Schema.optional(Schema.Literals(["low", "medium", "high"])),
+    metadata: Schema.optional(AgentOrchestrationMetadata),
   }),
 ).annotate({ identifier: "AgentOrchestrationV1.Approval" })
 export type AgentOrchestrationApproval = typeof AgentOrchestrationApproval.Type
@@ -268,6 +272,7 @@ export const AgentOrchestrationQuestion = exact(
       ),
     ),
     allowFreeform: Schema.optional(Schema.Boolean),
+    metadata: Schema.optional(AgentOrchestrationMetadata),
   }),
 ).annotate({ identifier: "AgentOrchestrationV1.Question" })
 export type AgentOrchestrationQuestion = typeof AgentOrchestrationQuestion.Type
@@ -308,6 +313,7 @@ export const AgentOrchestrationPlan = exact(
     path: AgentOrchestrationPath,
     revision: Revision,
     content: body(AgentOrchestrationLimits.maxTextBytes, "plan content is too large"),
+    metadata: Schema.optional(AgentOrchestrationMetadata),
   }),
 ).annotate({ identifier: "AgentOrchestrationV1.Plan" })
 export type AgentOrchestrationPlan = typeof AgentOrchestrationPlan.Type
@@ -355,15 +361,75 @@ const eventFields = {
   sessionID: AgentOrchestrationSessionID,
 }
 
+const responseFields = {
+  version: AgentOrchestrationVersion,
+  kind: Schema.Literal("response"),
+  requestID: AgentOrchestrationRequestID,
+  idempotencyKey: AgentOrchestrationIdempotencyKey,
+}
+
+/** A success response for a workspace, session, or turn request. */
+export const AgentOrchestrationAcceptedResponse = exact(
+  Schema.Struct({
+    ...responseFields,
+    type: Schema.Literals(["workspace.open", "session.create", "turn.create", "interaction.approval.reply", "interaction.question.reply"]),
+    workspace: Schema.optional(AgentOrchestrationWorkspace),
+    sessionID: Schema.optional(AgentOrchestrationSessionID),
+    turnID: Schema.optional(AgentOrchestrationTurnID),
+    capabilities: Schema.optional(AgentOrchestrationCapabilities),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.AcceptedResponse" })
+export type AgentOrchestrationAcceptedResponse = typeof AgentOrchestrationAcceptedResponse.Type
+
 export const AgentOrchestrationTurnOutputEvent = exact(
   Schema.Struct({
     ...eventFields,
     type: Schema.Literal("turn.output"),
     turnID: AgentOrchestrationTurnID,
     text: body(AgentOrchestrationLimits.maxTextBytes, "turn output is too large"),
+    metadata: Schema.optional(AgentOrchestrationMetadata),
   }),
 ).annotate({ identifier: "AgentOrchestrationV1.TurnOutputEvent" })
 export type AgentOrchestrationTurnOutputEvent = typeof AgentOrchestrationTurnOutputEvent.Type
+
+export const AgentOrchestrationTurnReasoningEvent = exact(
+  Schema.Struct({
+    ...eventFields,
+    type: Schema.Literal("turn.reasoning"),
+    turnID: AgentOrchestrationTurnID,
+    text: body(AgentOrchestrationLimits.maxTextBytes, "turn reasoning is too large"),
+    metadata: Schema.optional(AgentOrchestrationMetadata),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.TurnReasoningEvent" })
+export type AgentOrchestrationTurnReasoningEvent = typeof AgentOrchestrationTurnReasoningEvent.Type
+
+export const AgentOrchestrationToolUpdatedEvent = exact(
+  Schema.Struct({
+    ...eventFields,
+    type: Schema.Literal("tool.updated"),
+    turnID: AgentOrchestrationTurnID,
+    tool: exact(
+      Schema.Struct({
+        id: AgentOrchestrationToolID,
+        title: text(512, "tool title is too large"),
+        status: Schema.Literals(["pending", "in_progress", "completed", "failed"]),
+        kind: Schema.optional(Schema.Literals(["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "other"])),
+        metadata: Schema.optional(AgentOrchestrationMetadata),
+      }),
+    ),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.ToolUpdatedEvent" })
+export type AgentOrchestrationToolUpdatedEvent = typeof AgentOrchestrationToolUpdatedEvent.Type
+
+export const AgentOrchestrationTurnRetryEvent = exact(
+  Schema.Struct({
+    ...eventFields,
+    type: Schema.Literal("turn.retry"),
+    turnID: AgentOrchestrationTurnID,
+    reason: body(2 * 1024, "turn retry reason is too large"),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.TurnRetryEvent" })
+export type AgentOrchestrationTurnRetryEvent = typeof AgentOrchestrationTurnRetryEvent.Type
 
 export const AgentOrchestrationApprovalRequestedEvent = exact(
   Schema.Struct({
@@ -394,6 +460,15 @@ export const AgentOrchestrationPlanSavedEvent = exact(
 ).annotate({ identifier: "AgentOrchestrationV1.PlanSavedEvent" })
 export type AgentOrchestrationPlanSavedEvent = typeof AgentOrchestrationPlanSavedEvent.Type
 
+export const AgentOrchestrationPlanAvailableEvent = exact(
+  Schema.Struct({
+    ...eventFields,
+    type: Schema.Literal("plan.available"),
+    plan: AgentOrchestrationPlan,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.PlanAvailableEvent" })
+export type AgentOrchestrationPlanAvailableEvent = typeof AgentOrchestrationPlanAvailableEvent.Type
+
 export const AgentOrchestrationArtifactCreatedEvent = exact(
   Schema.Struct({
     ...eventFields,
@@ -406,8 +481,12 @@ export type AgentOrchestrationArtifactCreatedEvent = typeof AgentOrchestrationAr
 
 export const AgentOrchestrationEvent = Schema.Union([
   AgentOrchestrationTurnOutputEvent,
+  AgentOrchestrationTurnReasoningEvent,
+  AgentOrchestrationToolUpdatedEvent,
+  AgentOrchestrationTurnRetryEvent,
   AgentOrchestrationApprovalRequestedEvent,
   AgentOrchestrationQuestionRequestedEvent,
+  AgentOrchestrationPlanAvailableEvent,
   AgentOrchestrationPlanSavedEvent,
   AgentOrchestrationArtifactCreatedEvent,
 ]).annotate({ identifier: "AgentOrchestrationV1.Event" })
@@ -507,6 +586,7 @@ export type AgentOrchestrationRequest = typeof AgentOrchestrationRequest.Type
 export const AgentOrchestrationFrame = exact(
   Schema.Union([
     AgentOrchestrationRequest,
+    AgentOrchestrationAcceptedResponse,
     AgentOrchestrationEventReplayResponse,
     AgentOrchestrationEvent,
     AgentOrchestrationError,
