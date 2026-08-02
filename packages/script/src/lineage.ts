@@ -305,7 +305,9 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
   const upstream = await resolve(options.cwd, `refs/remotes/${options.remote}/${options.branch}`)
   if (!upstream)
     throw new Error(`Could not resolve freshly fetched canonical branch ${options.remote}/${options.branch}.`)
-  const published = await releases(options.cwd, tags)
+  const stateSha = await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`)
+  const all = await releases(options.cwd, tags)
+  const published = stateSha ? (await history(options.cwd, all, stateSha)).filter((item) => item.ancestor) : all
   return {
     ...options,
     target,
@@ -316,7 +318,7 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
     highest: published[0],
     priors: prior(published, targetVersion),
     targetSha: await resolve(options.cwd, `${tags}${target}`),
-    stateSha: await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`),
+    stateSha,
   } satisfies RemoteHistory
 }
 

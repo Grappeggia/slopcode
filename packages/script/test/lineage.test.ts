@@ -149,6 +149,20 @@ describe("release lineage", () => {
     await expect(release(ctx.repo, "1.1.0")).rejects.toThrow(`${releaseStateRef} (${wrong}) must match`)
   })
 
+  test("ignores foreign semantic tags outside the anchored release line", async () => {
+    const ctx = await setup()
+    await git(ctx.repo, "push", "origin", `${ctx.base}:refs/tags/v1.0.0`)
+    await git(ctx.repo, "push", "origin", `${ctx.base}:${releaseStateRef}`)
+    await git(ctx.repo, "switch", "-c", "foreign")
+    const foreign = await commit(ctx.repo, "foreign")
+    await git(ctx.repo, "push", "origin", `${foreign}:refs/tags/v9.0.0`)
+    await git(ctx.repo, "switch", "dev")
+    const source = await commit(ctx.repo, "release")
+    await git(ctx.repo, "push")
+
+    await expect(release(ctx.repo)).resolves.toMatchObject({ source, previous: "v1.0.0" })
+  })
+
   test("rejects prerelease, build-metadata, and backward release targets", async () => {
     const ctx = await setup()
     await git(ctx.repo, "push", "origin", `${ctx.base}:refs/tags/v2.0.0`)
