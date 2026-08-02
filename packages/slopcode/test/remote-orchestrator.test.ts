@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import path from "node:path"
 import { PassThrough } from "node:stream"
 import { spawn } from "node:child_process"
@@ -67,6 +67,46 @@ describe("remote orchestrator", () => {
     )
     expect(events.find((event) => event.type === "output")).toMatchObject({ nativeID: "native-message" })
     await session.close()
+  })
+
+  test("omits invalid ACP approval locations without stranding permission requests", async () => {
+    const cwd = await temp()
+    const outside = await temp()
+    const escape = path.join(cwd, "escape")
+    await symlink(outside, escape)
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-acp-agent.ts")
+    const values = [`${cwd}/bad\npath`, path.join(cwd, ".."), escape]
+    await Promise.all(
+      values.map(async (value) => {
+        const events: ACPEvent[] = []
+        const session = await connect({
+          agent: "slopcode",
+          cwd,
+          emit: (event) => events.push(event),
+          start: () =>
+            spawn(process.execPath, [fixture], {
+              cwd,
+              env: { ...process.env, ACP_APPROVAL_CWD: value },
+              shell: false,
+              stdio: ["pipe", "pipe", "pipe"],
+            }),
+        })
+        const turn = session.turn("fixture prompt")
+        await Bun.sleep(50)
+        const approval = events.find((event) => event.type === "approval")
+        expect(approval?.type).toBe("approval")
+        if (approval?.type === "approval") {
+          expect(approval.cwd).toBeUndefined()
+          expect(session.approval(approval.id, true)).toBe(true)
+        }
+        await Bun.sleep(50)
+        const question = events.find((event) => event.type === "question")
+        expect(question?.type).toBe("question")
+        if (question?.type === "question") expect(session.question(question.id, "yes")).toBe(true)
+        await turn
+        await session.close()
+      }),
+    )
   })
 
   test("uses fixed workspace/session/turn frames and only writes validated protocol JSON", async () => {
@@ -189,6 +229,73 @@ describe("remote orchestrator", () => {
       )
       expect(questions).toBe(1)
     }
+    await bridge.close()
+  })
+
+  test("keeps duplicate native approval IDs independent across sessions", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const approvals = new Set<number>()
+    let count = 0
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => {
+        const owner = ++count
+        return {
+          nativeID: `native-${owner}`,
+          capabilities: ["workspace", "sessions", "turns", "approvals"],
+          async turn() {
+            input.emit({ type: "approval", id: "shared-native-id", title: "approve", resolve: () => undefined })
+          },
+          approval(id) {
+            if (id === "shared-native-id") approvals.add(owner)
+            return id === "shared-native-id"
+          },
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_fixture", path: root },
+        agent: { id: "slopcode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_fixture", agent: "slopcode" }))
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_fixture", agent: "slopcode" }))
+    const sessions = output
+      .filter(
+        (item): item is Extract<Frame, { kind: "response"; type: "session.create" }> =>
+          item.kind === "response" && item.type === "session.create",
+      )
+      .map((item) => item.sessionID)
+    await Promise.all(
+      sessions.map((sessionID) =>
+        bridge.handle(frame("turn.create", { sessionID, agent: "slopcode", prompt: "hello" })),
+      ),
+    )
+    await Bun.sleep(0)
+    const interactions = output.filter(
+      (item): item is Extract<Frame, { kind: "event"; type: "interaction.approval.requested" }> =>
+        item.kind === "event" && item.type === "interaction.approval.requested",
+    )
+    expect(interactions).toHaveLength(2)
+    expect(new Set(interactions.map((item) => item.interaction.id)).size).toBe(2)
+    await Promise.all(
+      interactions.map((item) =>
+        bridge.handle(
+          frame("interaction.approval.reply", {
+            sessionID: item.sessionID,
+            interactionID: item.interaction.id,
+            revision: 1,
+            decision: "approved",
+          }),
+        ),
+      ),
+    )
+    expect(approvals).toEqual(new Set([1, 2]))
     await bridge.close()
   })
 

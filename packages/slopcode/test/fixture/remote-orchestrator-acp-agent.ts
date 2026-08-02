@@ -53,6 +53,7 @@ class Fixture {
         title: "Approve fixture",
         status: "pending",
         rawInput: { command: "echo fixture" },
+        locations: process.env.ACP_APPROVAL_CWD ? [{ path: process.env.ACP_APPROVAL_CWD }] : undefined,
       },
       options: [
         { optionId: "yes", name: "Allow", kind: "allow_once" },

@@ -14,7 +14,7 @@ import {
   type AgentOrchestrationAgentID,
   type AgentOrchestrationCapability,
 } from "@slopcode-ai/protocol"
-import { contained } from "./workspace"
+import { approvalCwd, contained } from "./workspace"
 
 export type ACPEvent =
   | { type: "output"; text: string; nativeID?: string }
@@ -255,17 +255,20 @@ export async function connect(input: {
               : { outcome: { outcome: "cancelled" } },
           )
         })
-        if (
-          !emit({
-            type: "approval",
-            id,
-            title: text(params.toolCall.title, 512, "Approve tool call"),
-            command: command(params.toolCall.rawInput),
-            cwd: params.toolCall.locations?.[0]?.path,
-            resolve: (approved) => approvals.get(id)?.(approved),
-          })
-        )
-          approvals.get(id)?.(false)
+        void approvalCwd(input.cwd, params.toolCall.locations?.[0]?.path).then((cwd) => {
+          if (!approvals.has(id)) return
+          if (
+            !emit({
+              type: "approval",
+              id,
+              title: text(params.toolCall.title, 512, "Approve tool call"),
+              command: command(params.toolCall.rawInput),
+              ...(cwd ? { cwd } : {}),
+              resolve: (approved) => approvals.get(id)?.(approved),
+            })
+          )
+            approvals.get(id)?.(false)
+        })
       })
     },
     unstable_createElicitation(params: CreateElicitationRequest) {

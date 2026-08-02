@@ -8,7 +8,7 @@ import {
   type AgentOrchestrationRequest,
 } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "./acp"
-import { contained, WorkspaceError } from "./workspace"
+import { approvalCwd, contained, WorkspaceError } from "./workspace"
 
 const decode = Schema.decodeUnknownSync(AgentOrchestrationFrame)
 const bytes = (value: string) => Buffer.byteLength(value)
@@ -149,8 +149,9 @@ export class Bridge {
       return
     }
     if (event.type === "approval" && turnID) {
-      const id = identifier("int", event.id)
+      const id = identifier("int", `${sessionID}:${event.id}`)
       this.interactions.set(id, { sessionID, kind: "approval", revision: 1, nativeID: event.id })
+      const cwd = await approvalCwd(session.workspace, event.cwd)
       this.event(sessionID, {
         type: "interaction.approval.requested",
         turnID,
@@ -159,7 +160,7 @@ export class Bridge {
           revision: 1,
           title: clean(event.title, 512, "Approve tool call"),
           ...(event.command ? { command: clean(event.command, 4 * 1024) } : {}),
-          ...(event.cwd?.startsWith(`${session.workspace}${path.sep}`) ? { cwd: event.cwd } : {}),
+          ...(cwd ? { cwd } : {}),
           risk: "medium",
           metadata: { nativeID: native(event.id) },
         },
@@ -167,7 +168,7 @@ export class Bridge {
       return
     }
     if (event.type === "question" && turnID) {
-      const id = identifier("int", event.id)
+      const id = identifier("int", `${sessionID}:${event.id}`)
       this.interactions.set(id, { sessionID, kind: "question", revision: 1, nativeID: event.id })
       this.event(sessionID, {
         type: "interaction.question.requested",
