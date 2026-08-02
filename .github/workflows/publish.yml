@@ -438,6 +438,9 @@ jobs:
           MACPORTS_BRANCH_PREFIX: ${{ vars.MACPORTS_BRANCH_PREFIX || 'slopcode-bump-' }}
           SLOPCODE_VERSION: ${{ needs.version.outputs.version }}
           SLOPCODE_RELEASE: ${{ needs.version.outputs.release }}
+          # The local release owner finalizes the GitHub release before dispatch so
+          # the app token can download its assets; npm publication remains resumable.
+          SLOPCODE_RELEASE_DRAFT: true
           SLOPCODE_SOURCE_SHA: ${{ inputs.source_sha }}
           SLOPCODE_PREVIOUS_TAG: ${{ inputs.previous_tag }}
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}

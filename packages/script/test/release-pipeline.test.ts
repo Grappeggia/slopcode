@@ -906,6 +906,7 @@ describe("workflow contracts", () => {
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).not.toContain("id-token: write")
     expect(publish).toContain("id-token: write")
     expect(publish).toContain("contents: read")
+    expect(publish).toContain("SLOPCODE_RELEASE_DRAFT: true")
     expect(publish).not.toContain("contents: write")
     expect(publish).not.toContain("packages: write")
   })
