@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,76 +7,240 @@
     <style>
       :root {
         color-scheme: dark;
-        font-family: system-ui, sans-serif;
-        background: #101114;
-        color: #f4f4f5;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --page: #0b0e12;
+        --surface: #12171d;
+        --surface-raised: #171e26;
+        --surface-soft: #1b232c;
+        --control: #0f141a;
+        --media: #0a0d11;
+        --border: #29333e;
+        --border-subtle: #202a34;
+        --border-strong: #3a4857;
+        --text: #f2f5f7;
+        --muted: #aab5c0;
+        --muted-strong: #c9d1d9;
+        --accent: #cfd36a;
+        --accent-strong: #e1e58e;
+        --accent-ink: #171a10;
+        --focus: #e9eca5;
+        --code: #c0cc83;
+        --link: #c6d3ff;
+        --success-bg: #163526;
+        --success-text: #b9e6c9;
+        --info-bg: #1a304a;
+        --info-text: #c2d9f7;
+        --danger-bg: #43252e;
+        --danger-text: #ffbec8;
+        --warning-bg: #42301e;
+        --warning-text: #ffd7a0;
+        --shadow-sm: 0 8px 24px rgb(0 0 0 / 18%);
+        --shadow-md: 0 18px 52px rgb(0 0 0 / 26%);
+        background: var(--page);
+        color: var(--text);
+      }
+
+      :root[data-theme="light"] {
+        color-scheme: light;
+        --page: #f1f4f0;
+        --surface: #ffffff;
+        --surface-raised: #f8faf7;
+        --surface-soft: #e9eee9;
+        --control: #fbfdfb;
+        --media: #e5ebe6;
+        --border: #d4ddd5;
+        --border-subtle: #e3e9e3;
+        --border-strong: #97a79a;
+        --text: #172019;
+        --muted: #59665d;
+        --muted-strong: #3d4a41;
+        --accent: #c1ca5c;
+        --accent-strong: #aab748;
+        --accent-ink: #172019;
+        --focus: #526a45;
+        --code: #526b35;
+        --link: #405d9a;
+        --success-bg: #dcefe2;
+        --success-text: #245b39;
+        --info-bg: #e0e9f8;
+        --info-text: #2b4d80;
+        --danger-bg: #f8dfe3;
+        --danger-text: #8c2938;
+        --warning-bg: #f8ead2;
+        --warning-text: #77501d;
+        --shadow-sm: 0 8px 24px rgb(43 61 48 / 8%);
+        --shadow-md: 0 18px 52px rgb(43 61 48 / 12%);
       }
 
       body {
         margin: 0;
         padding: 32px;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 8% 0%, rgb(207 211 106 / 7%), transparent 30rem),
+          var(--page);
+        color: var(--text);
+        transition: background-color 160ms ease, color 160ms ease;
       }
 
       main {
-        max-width: 760px;
+        max-width: 880px;
         margin: 0 auto;
       }
 
+      .page-header {
+        display: grid;
+        gap: 10px;
+        margin-bottom: 28px;
+      }
+
       h1 {
-        font-size: 1.5rem;
-        margin: 0 0 8px;
+        max-width: 22ch;
+        margin: 0;
+        color: var(--text);
+        font-size: clamp(1.8rem, 4vw, 2.35rem);
+        letter-spacing: -0.04em;
+        line-height: 1.05;
       }
 
       h2 {
-        font-size: 1.1rem;
-        margin: 32px 0 16px;
+        margin: 34px 0 14px;
+        color: var(--text);
+        font-size: 1.05rem;
+        letter-spacing: -0.01em;
       }
 
       p {
-        color: #b7bac4;
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.98rem;
         line-height: 1.5;
+      }
+
+      .eyebrow {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
       }
 
       .toolbar {
         display: grid;
         gap: 12px;
-        margin: 24px 0;
-        padding: 16px;
-        border: 1px solid #34363d;
-        border-radius: 12px;
-        background: #181a1f;
+        margin: 14px 0;
+        padding: 20px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 16px;
+        background: var(--surface);
+        box-shadow: var(--shadow-sm);
+        transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
       }
 
-      .toolbar label {
-        color: #b7bac4;
+      .toolbar-title {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .toolbar-title strong,
+      .appearance-heading strong {
+        display: block;
+        color: var(--text);
+        font-size: 1rem;
+      }
+
+      .toolbar-hint {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .appearance-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .appearance-heading strong {
+        font-size: 1rem;
+      }
+
+      .appearance-copy {
+        margin: 4px 0 0;
+        color: var(--muted);
         font-size: 0.85rem;
+      }
+
+      .theme-toggle {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(78px, 1fr));
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface-soft);
+      }
+
+      .theme-button {
+        min-height: 44px;
+        padding: 8px 12px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        color: var(--muted);
+        background: transparent;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .theme-button[aria-pressed="true"] {
+        border-color: var(--accent-strong);
+        color: var(--accent-ink);
+        background: var(--accent);
+        box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+      }
+
+      .theme-button:hover:not([aria-pressed="true"]),
+      .tab:hover:not([aria-selected="true"]) {
+        border-color: var(--border-strong);
+        color: var(--text);
+        background: var(--surface-soft);
+      }
+
+      .theme-button:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
       }
 
       .tabs {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 8px;
+        gap: 6px;
       }
 
       .tab {
         min-height: 48px;
         padding: 10px 8px;
-        border: 1px solid #5c606b;
+        border: 1px solid var(--border);
         border-radius: 8px;
-        color: #b7bac4;
-        background: #101114;
+        color: var(--muted);
+        background: var(--control);
         font: inherit;
         cursor: pointer;
       }
 
       .tab[aria-selected="true"] {
-        border-color: #d8d86c;
-        color: #101114;
-        background: #d8d86c;
+        border-color: var(--accent-strong);
+        color: var(--accent-ink);
+        background: var(--accent);
+        box-shadow: 0 3px 10px rgb(0 0 0 / 14%);
       }
 
       .tab:focus-visible {
-        outline: 2px solid #f4f4f5;
+        outline: 2px solid var(--focus);
         outline-offset: 2px;
       }
 
@@ -85,6 +249,10 @@
         flex-wrap: wrap;
         align-items: center;
         gap: 8px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-subtle);
+        color: var(--muted-strong);
+        font-size: 0.85rem;
       }
 
       .badge {
@@ -92,41 +260,44 @@
         padding: 4px 8px;
         border-radius: 999px;
         font-size: 0.78rem;
-        background: #4b3520;
-        color: #ffd7a0;
+        background: var(--warning-bg);
+        color: var(--warning-text);
       }
 
       .badge.passed {
-        background: #1c4b35;
-        color: #b5f3ca;
+        background: var(--success-bg);
+        color: var(--success-text);
       }
 
       .badge.running {
-        background: #263d60;
-        color: #bcd8ff;
+        background: var(--info-bg);
+        color: var(--info-text);
       }
 
       .badge.blocked {
-        background: #5a2f35;
-        color: #ffc4cc;
+        background: var(--danger-bg);
+        color: var(--danger-text);
       }
 
       .badge.setup-required {
-        background: #4b3520;
-        color: #ffd7a0;
+        background: var(--warning-bg);
+        color: var(--warning-text);
       }
 
       .notice {
         margin: 16px 0;
         padding: 12px 16px;
-        border-left: 3px solid #d8d86c;
-        background: #1b1c20;
-        color: #d5d7df;
+        border: 1px solid var(--border-subtle);
+        border-left: 4px solid var(--accent);
+        border-radius: 12px;
+        background: var(--surface-raised);
+        color: var(--muted-strong);
+        box-shadow: var(--shadow-sm);
       }
 
       .gallery {
         display: grid;
-        gap: 24px;
+        gap: 18px;
         margin: 0;
         padding: 0;
         list-style: none;
@@ -134,52 +305,123 @@
 
       figure {
         margin: 0;
+        overflow: hidden;
+        border: 1px solid var(--border-subtle);
+        border-radius: 16px;
+        background: var(--surface);
+        box-shadow: var(--shadow-md);
+      }
+
+      .figure-media {
+        padding: 12px;
+        background: var(--media);
+      }
+
+      .figure-link {
+        display: block;
+        max-width: 720px;
+        margin: 0 auto;
       }
 
       img {
         display: block;
-        width: min(100%, 540px);
+        width: 100%;
         height: auto;
-        border: 1px solid #34363d;
-        border-radius: 12px;
-        background: #181a1f;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgb(0 0 0 / 20%);
       }
 
       figcaption {
-        margin-top: 8px;
-        color: #b7bac4;
+        margin: 0;
+        padding: 14px 16px 16px;
+        color: var(--muted);
         font-size: 0.95rem;
+        line-height: 1.45;
       }
 
       figcaption strong {
         display: block;
         margin-bottom: 4px;
-        color: #f4f4f5;
+        color: var(--text);
+        font-size: 0.98rem;
       }
 
       a {
-        color: inherit;
+        color: var(--link);
+      }
+
+      .figure-link:focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 4px;
       }
 
       .empty {
         padding: 20px;
-        border: 1px dashed #5c606b;
+        border: 1px dashed var(--border);
         border-radius: 12px;
-        color: #b7bac4;
+        background: var(--surface);
+        color: var(--muted);
       }
 
       code {
-        color: #e3e4a0;
+        color: var(--code);
+      }
+
+      @media (max-width: 520px) {
+        body {
+          padding: 20px;
+        }
+
+        .appearance-heading {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .theme-toggle {
+          width: 100%;
+        }
+
+        .toolbar-title {
+          align-items: start;
+          flex-direction: column;
+        }
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>Slopcode Android SSH E2E gallery</h1>
-      <p>Sanitized emulator evidence for the computer → workspace → agentic-session flow.</p>
+      <header class="page-header">
+        <span class="eyebrow">Release evidence · Android</span>
+        <h1>Slopcode Android SSH E2E gallery</h1>
+        <p>Sanitized emulator evidence for the computer → workspace → agentic-session flow.</p>
+      </header>
+
+      <section class="toolbar" aria-label="Gallery appearance">
+        <div class="appearance-heading">
+          <div>
+            <strong>Gallery appearance</strong>
+            <p class="appearance-copy">Choose a comfortable reading theme.</p>
+          </div>
+          <div class="theme-toggle" role="group" aria-label="Choose gallery appearance">
+            <button class="theme-button" type="button" data-theme-option="light" aria-pressed="false">
+              Light
+            </button>
+            <button class="theme-button" type="button" data-theme-option="dark" aria-pressed="true">
+              Dark
+            </button>
+          </div>
+        </div>
+      </section>
 
       <section class="toolbar" aria-label="Agent evidence selector">
-        <span id="agent-label">Backend agent</span>
+        <div class="toolbar-title">
+          <div>
+            <span class="eyebrow" id="agent-label">Evidence set</span>
+            <strong>Backend agent</strong>
+          </div>
+          <span class="toolbar-hint">Switch the complete SSH run shown below</span>
+        </div>
         <div id="agent-tabs" class="tabs" role="tablist" aria-labelledby="agent-label">
           <button
             class="tab"
@@ -247,26 +489,45 @@
 
     <script>
       const tabs = [...document.querySelectorAll("[data-agent]")]
+      const themeButtons = [...document.querySelectorAll("[data-theme-option]")]
       const status = document.querySelector("#status")
       const shared = document.querySelector("#shared")
       const flow = document.querySelector("#agent-flow")
       const heading = document.querySelector("#agent-heading")
       let selectedAgent = "slopcode-cli"
 
+      function applyTheme(value, persist = true) {
+        const theme = value === "light" ? "light" : "dark"
+        document.documentElement.dataset.theme = theme
+        themeButtons.forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.themeOption === theme))
+        })
+        if (persist) localStorage.setItem("slopcode-gallery-theme", theme)
+      }
+
+      themeButtons.forEach((button) => {
+        button.addEventListener("click", () => applyTheme(button.dataset.themeOption))
+      })
+      applyTheme(localStorage.getItem("slopcode-gallery-theme") ?? "dark", false)
+
       function item(value) {
         const entry = document.createElement("li")
         const figure = document.createElement("figure")
+        const media = document.createElement("div")
         const link = document.createElement("a")
         const image = document.createElement("img")
         const caption = document.createElement("figcaption")
         const title = document.createElement("strong")
         image.src = value.src
         image.alt = value.alt
+        media.className = "figure-media"
+        link.className = "figure-link"
         link.href = value.src
         link.append(image)
         title.textContent = value.title
         caption.append(title, document.createTextNode(value.caption))
-        figure.append(link, caption)
+        media.append(link)
+        figure.append(media, caption)
         entry.append(figure)
         return entry
       }
