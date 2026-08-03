@@ -541,7 +541,7 @@ export const layer = Layer.effect(
         ...(question && identifier ? { question: { ...question, id: identifier, revision: 1 } } : {}),
       }
       return journal
-        .append({
+        .appendIf({
           jobID: job.state.id,
           id: id("evt"),
           type,
@@ -557,15 +557,20 @@ export const layer = Layer.effect(
                 },
               }
             : {}),
+          accept: (current) => !["completed", "failed", "stopped"].includes(current.status),
         })
         .pipe(
-          Effect.tap(({ state, event }) =>
-            Effect.sync(() => {
-              job.state = state
-              for (const listener of job.listeners) Queue.offerUnsafe(listener, event)
-            }),
-          ),
-          Effect.map(({ event }) => event),
+          Effect.flatMap((result) => {
+            if (result.type === "skipped") return Effect.sync(() => {
+              job.state = result.state
+              return undefined
+            })
+            return Effect.sync(() => {
+              job.state = result.state
+              for (const listener of job.listeners) Queue.offerUnsafe(listener, result.event)
+              return result.event
+            })
+          }),
         )
     }
 

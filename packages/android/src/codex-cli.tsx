@@ -677,7 +677,7 @@ export function RemoteAgentSession(props: Props) {
     const stopJobs = props.background?.subscribe((message) => {
       if (!message.job || !match(message.job)) return
       setBackgroundJob(message.job)
-      if (["completed", "failed", "stopped"].includes(message.job.status)) {
+      if (["completed", "failed", "stopped", "revoked", "expired"].includes(message.job.status)) {
         setResult({
           output: message.job.output ?? message.job.error ?? "",
           status: remoteJobResultStatus(message.job.status),

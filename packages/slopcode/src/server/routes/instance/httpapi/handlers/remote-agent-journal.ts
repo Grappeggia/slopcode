@@ -44,6 +44,24 @@ export type Interaction = {
   readonly resolution?: Record<string, unknown>
 }
 
+type AppendInput = {
+  readonly jobID: string
+  readonly id: string
+  readonly type: string
+  readonly data: Event["data"]
+  readonly reduce: (state: State, event: Event) => State
+  readonly interaction?: {
+    readonly id: string
+    readonly kind: "approval" | "question"
+    readonly payload: Record<string, unknown>
+  }
+  readonly completion?: { readonly id: string; readonly revision: number; readonly digest: string }
+}
+
+type AppendResult =
+  | { readonly type: "appended"; readonly state: State; readonly event: Event }
+  | { readonly type: "skipped"; readonly state: State }
+
 export class JobNotFoundError extends Error {
   readonly _tag = "RemoteAgentJournalJobNotFoundError"
 
@@ -110,19 +128,10 @@ export interface Interface {
     readonly jobID: string
     readonly message: string
   }) => Effect.Effect<State, JobNotFoundError>
-  readonly append: (input: {
-    readonly jobID: string
-    readonly id: string
-    readonly type: string
-    readonly data: Event["data"]
-    readonly reduce: (state: State, event: Event) => State
-    readonly interaction?: {
-      readonly id: string
-      readonly kind: "approval" | "question"
-      readonly payload: Record<string, unknown>
-    }
-    readonly completion?: { readonly id: string; readonly revision: number; readonly digest: string }
-  }) => Effect.Effect<{ readonly state: State; readonly event: Event }, JobNotFoundError>
+  readonly append: (input: AppendInput) => Effect.Effect<{ readonly state: State; readonly event: Event }, JobNotFoundError>
+  readonly appendIf: (
+    input: AppendInput & { readonly accept: (state: State) => boolean },
+  ) => Effect.Effect<AppendResult, JobNotFoundError>
   readonly replay: (input: {
     readonly jobID: string
     readonly cursor?: string
@@ -341,10 +350,12 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
         .pipe(Effect.map((rows) => rows.map(job)))
 
-    const append: Interface["append"] = (input) =>
+    const appendIf: Interface["appendIf"] = (input) =>
       atomic(function* (tx) {
         const current = yield* find(tx, input.jobID)
         if (!current) return yield* Effect.fail(new JobNotFoundError(input.jobID))
+        const currentState = job(current).state
+        if (!input.accept(currentState)) return { type: "skipped" as const, state: currentState }
         const last = yield* tx.get<{ sequence: number }>(
           sql`SELECT sequence FROM remote_agent_event WHERE job_id = ${input.jobID} ORDER BY sequence DESC LIMIT 1`,
         )
@@ -409,8 +420,16 @@ export const layer = Layer.effect(
         yield* tx.run(sql`UPDATE remote_agent_job SET state = ${stored}, backend_session_id = ${state.sessionID ?? null},
           terminal_outcome = ${["completed", "failed", "stopped"].includes(state.status) ? state.status : null}, updated_at = ${now}
           WHERE id = ${input.jobID}`)
-        return { state, event: candidate }
+        return { type: "appended" as const, state, event: candidate }
       })
+
+    const append: Interface["append"] = (input) =>
+      appendIf({ ...input, accept: () => true }).pipe(
+        Effect.flatMap((result) => {
+          if (result.type === "appended") return Effect.succeed({ state: result.state, event: result.event })
+          return Effect.die("unconditional remote agent event append was skipped")
+        }),
+      )
 
     const replay: Interface["replay"] = (input) =>
       atomic(function* (tx) {
@@ -546,6 +565,7 @@ export const layer = Layer.effect(
       get,
       failStart,
       append,
+      appendIf,
       replay,
       createInteraction,
       beginInteraction,

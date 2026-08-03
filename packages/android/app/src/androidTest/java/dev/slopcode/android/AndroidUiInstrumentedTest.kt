@@ -201,15 +201,20 @@ class AndroidUiInstrumentedTest {
       assertHit(ready, "menu")
       assertHit(ready, "disconnect")
       assertHit(ready, "prompt")
-      assertHit(ready, "send")
-      assertHit(ready, "stop")
-      assertHit(ready, "diagnostics")
+      assertTrue(scrollIntoView(scenario, "#agent-prompt"))
+      waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("send").getBoolean("visible") }
+      assertHit(snapshot(scenario), "send")
+      assertTrue(scrollButtonIntoView(scenario, "Stop"))
+      waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("stop").getBoolean("visible") }
+      assertHit(snapshot(scenario), "stop")
       assertTrue(clickAria(scenario, "Open navigation"))
       waitFor(scenario) { snapshot(scenario).optString("drawerOpen") == "true" }
       assertHit(snapshot(scenario), "activeSession")
       assertTrue(closeNavigation(scenario))
       waitFor(scenario) { snapshot(scenario).optString("drawerOpen").isEmpty() }
 
+      assertTrue(scrollIntoView(scenario, "summary"))
+      assertHit(snapshot(scenario), "diagnostics")
       assertTrue(clickSummary(scenario, "Diagnostics"))
       waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("interactive").getInt("height") > 0 }
       assertTrue(scrollIntoView(scenario, "details[open] button"))
@@ -405,6 +410,11 @@ class AndroidUiInstrumentedTest {
     """(() => { const item = document.querySelector(${json(selector)}); if (!item) return JSON.stringify(false); item.scrollIntoView({ block: 'center', inline: 'nearest' }); return JSON.stringify(true) })()""",
   ).let(::string).toBoolean()
 
+  private fun scrollButtonIntoView(scenario: ActivityScenario<MainActivity>, label: String) = evaluate(
+    scenario,
+    """(() => { const value = ${json(label)}; const item = [...document.querySelectorAll('button')].find((button) => button.innerText.replace(/\s+/g, ' ').trim() === value); if (!item) return JSON.stringify(false); item.scrollIntoView({ block: 'center', inline: 'nearest' }); return JSON.stringify(true) })()""",
+  ).let(::string).toBoolean()
+
   private fun input(scenario: ActivityScenario<MainActivity>, selector: String, value: String) = evaluate(
     scenario,
     """(() => { const item = document.querySelector(""" + json(selector) + """); if (!(item instanceof HTMLInputElement) && !(item instanceof HTMLTextAreaElement)) return JSON.stringify(false); const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(item), 'value')?.set; setter?.call(item, """ + json(value) + """); item.value = """ + json(value) + """; item.dispatchEvent(new Event('input', { bubbles: true })); item.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: """ + json(value) + """ })); item.dispatchEvent(new Event('change', { bubbles: true })); return JSON.stringify(true) })()""",
@@ -454,10 +464,11 @@ class AndroidUiInstrumentedTest {
   }
 
   private fun scrollLandscapeForActions(scenario: ActivityScenario<MainActivity>) {
-    evaluate(
+    val result = evaluate(
       scenario,
-      "document.querySelector('[data-ssh-shell] main')?.scrollIntoView({ block: 'center', inline: 'nearest' }); JSON.stringify(true)",
+      "(() => { const content = document.querySelector('[data-ssh-shell-content]'); const main = content?.querySelector('main'); if (!main) return JSON.stringify({ scrollable: false }); main.scrollTo({ top: Math.max(0, main.scrollHeight - main.clientHeight), left: 0, behavior: 'instant' }); return JSON.stringify({ scrollable: content.contains(main) && main.scrollHeight >= main.clientHeight, scrollTop: main.scrollTop }); })()",
     )
+    assertTrue("The SSH shell content container is not the measured landscape scroll surface: " + result, string(result).contains("\"scrollable\":true"))
   }
 
   private fun hasElement(scenario: ActivityScenario<MainActivity>, selector: String) = evaluate(

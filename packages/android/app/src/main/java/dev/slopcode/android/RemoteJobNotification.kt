@@ -25,8 +25,26 @@ internal fun remoteJobActionInteraction(job: RemoteJobState) = listOf(
   job.status,
   job.sessionID.orEmpty(),
   job.approval?.optString("id").orEmpty(),
+  job.approval?.optInt("revision", -1)?.toString().orEmpty(),
   job.question?.optString("id").orEmpty(),
+  job.question?.optInt("revision", -1)?.toString().orEmpty(),
 ).joinToString("\u0000")
+
+internal data class RemoteJobActionContext(val id: String, val revision: Int)
+
+internal fun remoteJobActionContext(job: RemoteJobState, action: String): RemoteJobActionContext? {
+  val interaction = when (action) {
+    RemoteJobAction.APPROVE, RemoteJobAction.REJECT -> job.approval
+    RemoteJobAction.ANSWER -> job.question
+    else -> null
+  } ?: return null
+  val id = interaction.optString("id").takeIf { it.isNotEmpty() } ?: return null
+  val revision = interaction.optInt("revision", -1).takeIf { it in 1..1_000_000 } ?: return null
+  return RemoteJobActionContext(id, revision)
+}
+
+internal fun remoteJobActionStillCurrent(job: RemoteJobState, interaction: String, action: String) =
+  remoteJobActionInteraction(job) == interaction && remoteJobNotificationActionAllowed(job, action)
 
 internal fun remoteJobActionIdempotencyKey(job: RemoteJobState, action: String) = "action_" +
   MessageDigest.getInstance("SHA-256")

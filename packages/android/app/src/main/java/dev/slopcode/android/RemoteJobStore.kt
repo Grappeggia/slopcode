@@ -53,6 +53,21 @@ internal class RemoteJobStore(context: Context) {
       next
     }
 
+  fun updateIf(
+    id: String,
+    event: RemoteJobEvent? = null,
+    predicate: (RemoteJobState) -> Boolean,
+    change: (RemoteJobState) -> RemoteJobState,
+  ): RemoteJobState? = synchronized(lock) {
+    val current = read().firstOrNull { it.id == id } ?: return@synchronized null
+    if (!predicate(current)) return@synchronized null
+    val next = change(current)
+    val jobs = (read().filterNot { it.id == id } + next).takeLast(MAX_JOBS)
+    write(jobs)
+    notify(next, event)
+    next
+  }
+
   fun fcmToken(): String? = synchronized(lock) {
     prefs.getString(FCM_TOKEN, null)
   }

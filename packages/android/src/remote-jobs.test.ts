@@ -65,6 +65,34 @@ describe("Android durable remote jobs", () => {
     expect(failed.error).toBe("offline")
   })
 
+  test("preserves interaction revisions and treats revoked and expired as terminal", () => {
+    const approval = applyRemoteJobEvent(
+      job,
+      parseRemoteJobEvent({
+        id: "evt_revision",
+        jobID: "job_1",
+        type: "job.approval",
+        data: { approval: { id: "apr_1", revision: 3, title: "Write files" } },
+      })!,
+    )
+    expect(approval.approval).toMatchObject({ id: "apr_1", revision: 3 })
+
+    const revoked = applyRemoteJobEvent(
+      approval,
+      parseRemoteJobEvent({ id: "evt_revoked", jobID: "job_1", type: "job.revoked", data: { message: "Access revoked" } })!,
+    )
+    expect(revoked.status).toBe("revoked")
+    expect(revoked.error).toBe("Access revoked")
+
+    const expired = applyRemoteJobEvent(
+      approval,
+      parseRemoteJobEvent({ id: "evt_expired", jobID: "job_1", type: "job.expired", data: { message: "Approval expired" } })!,
+    )
+    expect(expired.status).toBe("expired")
+    expect(expired.error).toBe("Approval expired")
+    expect(applyRemoteJobEvent(expired, parseRemoteJobEvent({ id: "evt_late", jobID: "job_1", type: "job.progress", data: {} })!)).toEqual(expired)
+  })
+
   test("ignores duplicate cursors and rejects untrusted event envelopes", () => {
     const event = parseRemoteJobEvent({
       id: "evt_1",

@@ -136,6 +136,8 @@ export function SshShell(props: Props) {
         type="button"
         aria-label={open() ? "Close navigation" : "Open navigation"}
         aria-expanded={open()}
+        aria-hidden={open() ? "true" : undefined}
+        inert={open()}
         onClick={() => setOpen((value) => !value)}
         ref={(node) => (menu = node)}
         data-ssh-menu-toggle

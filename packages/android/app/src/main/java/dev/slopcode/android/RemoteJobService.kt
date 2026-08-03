@@ -87,12 +87,18 @@ internal class RemoteJobService : Service() {
         if (action == RemoteJobAction.STOP) {
           val accepted = runCatching { http.action(current, action, payload) }.getOrDefault(false)
           if (!accepted) {
-            store.update(id, event(id, "job.stop_failed", mapOf("message" to "Remote stop request failed"))) {
-              remoteJobActionFailure(it, action, "Remote stop request failed")
-            }?.let(::notifyJob)
+            store.updateIf(
+              id,
+              event(id, "job.stop_failed", mapOf("message" to "Remote stop request failed")),
+              { remoteJobActionStillCurrent(it, lease.interaction, action) },
+            ) { remoteJobActionFailure(it, action, "Remote stop request failed") }?.let(::notifyJob)
             return@use
           }
-          store.update(id, event(id, "job.stopped", mapOf("message" to "Stopped by user"))) {
+          store.updateIf(
+            id,
+            event(id, "job.stopped", mapOf("message" to "Stopped by user")),
+            { remoteJobActionStillCurrent(it, lease.interaction, action) },
+          ) {
             it.copy(
               status = RemoteJobStatus.STOPPED,
               error = "Stopped by user",
@@ -105,13 +111,21 @@ internal class RemoteJobService : Service() {
         }
         val accepted = runCatching { http.action(current, action, payload) }.getOrDefault(false)
         if (!accepted) {
-          store.update(id, event(id, "job.failed", mapOf("error" to "Remote action failed"))) {
+          store.updateIf(
+            id,
+            event(id, "job.failed", mapOf("error" to "Remote action failed")),
+            { remoteJobActionStillCurrent(it, lease.interaction, action) },
+          ) {
             it.copy(status = RemoteJobStatus.FAILED, error = "Remote action failed", updatedAt = System.currentTimeMillis())
           }?.let(::notifyJob)
-          return@execute
+          return@use
         }
         if (action == RemoteJobAction.RETRY) {
-          store.update(id, event(id, "job.retry", mapOf("message" to "Retrying remote job"))) {
+          val updated = store.updateIf(
+            id,
+            event(id, "job.retry", mapOf("message" to "Retrying remote job")),
+            { remoteJobActionStillCurrent(it, lease.interaction, action) },
+          ) {
             it.copy(
               status = RemoteJobStatus.RETRYING,
               started = true,
@@ -122,11 +136,15 @@ internal class RemoteJobService : Service() {
               question = null,
               updatedAt = System.currentTimeMillis(),
             )
-          }?.let(::notifyJob)
-          schedule(id)
+          }?.also(::notifyJob)
+          if (updated != null) schedule(id)
           return@execute
         }
-        store.update(id, event(id, "job.progress", mapOf("message" to "Remote action accepted"))) {
+        val updated = store.updateIf(
+          id,
+          event(id, "job.progress", mapOf("message" to "Remote action accepted")),
+          { remoteJobActionStillCurrent(it, lease.interaction, action) },
+        ) {
           it.copy(
             status = RemoteJobStatus.RUNNING,
             approval = null,
@@ -135,8 +153,8 @@ internal class RemoteJobService : Service() {
             retryAction = null,
             updatedAt = System.currentTimeMillis(),
           )
-        }?.let(::notifyJob)
-        schedule(id)
+        }?.also(::notifyJob)
+        if (updated != null) schedule(id)
       }
     }
   }

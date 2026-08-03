@@ -39,9 +39,11 @@ queueMicrotask(() => {
       document.body.dataset.closedOpen = drawer?.getAttribute("data-ssh-drawer-open") ?? ""
       document.body.dataset.closedHidden = drawer?.getAttribute("aria-hidden") ?? ""
       document.body.dataset.closedInert = drawer?.hasAttribute("inert") ? "true" : "false"
-      document.body.dataset.closedContentHidden = content?.getAttribute("aria-hidden") ?? ""
-      document.body.dataset.closedContentInert = content?.hasAttribute("inert") ? "true" : "false"
-      document.body.dataset.closedFocus = document.activeElement?.getAttribute("aria-label") ?? ""
-    })
+    document.body.dataset.closedContentHidden = content?.getAttribute("aria-hidden") ?? ""
+    document.body.dataset.closedContentInert = content?.hasAttribute("inert") ? "true" : "false"
+    document.body.dataset.closedFocus = document.activeElement?.getAttribute("aria-label") ?? ""
+    document.body.dataset.menuHidden = menu?.getAttribute("aria-hidden") ?? ""
+    document.body.dataset.menuInert = menu?.hasAttribute("inert") ? "true" : "false"
   })
+})
 })

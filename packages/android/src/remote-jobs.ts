@@ -9,6 +9,8 @@ export const REMOTE_JOB_STATUSES = [
   "completed",
   "failed",
   "stopped",
+  "revoked",
+  "expired",
 ] as const
 
 export type RemoteJobStatus = (typeof REMOTE_JOB_STATUSES)[number]
@@ -21,6 +23,7 @@ export type RemoteCommandPreview = {
 
 export type RemoteApproval = {
   id?: string
+  revision?: number
   title: string
   command?: string
   cwd?: string
@@ -30,6 +33,7 @@ export type RemoteApproval = {
 
 export type RemoteQuestion = {
   id?: string
+  revision?: number
   prompt: string
   options?: string[]
   allowFreeform?: boolean
@@ -210,6 +214,10 @@ export function parseRemoteApproval(value: unknown): RemoteApproval | undefined 
     if (!next) return
     result[key] = next
   }
+  if (value.revision !== undefined) {
+    if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) return
+    result.revision = value.revision
+  }
   if (value.cwd !== undefined) {
     const cwd = directory(value.cwd)
     if (!cwd) return
@@ -231,6 +239,10 @@ export function parseRemoteQuestion(value: unknown): RemoteQuestion | undefined 
     const id = text(value.id, MAX_ID_LENGTH)
     if (!id) return
     result.id = id
+  }
+  if (value.revision !== undefined) {
+    if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) return
+    result.revision = value.revision
   }
   if (value.options !== undefined) {
     if (!Array.isArray(value.options) || value.options.length > 32) return
@@ -520,7 +532,13 @@ function terminal(type: string) {
   if (type.endsWith("completed")) return "completed" as const
   if (type.endsWith("failed")) return "failed" as const
   if (type.endsWith("stopped") || type.endsWith("stop")) return "stopped" as const
+  if (type.endsWith("revoked")) return "revoked" as const
+  if (type.endsWith("expired")) return "expired" as const
   if (type.endsWith("retry") || type.endsWith("retried")) return "retrying" as const
+}
+
+export function remoteJobStatusTerminal(value: RemoteJobStatus) {
+  return value === "completed" || value === "failed" || value === "stopped" || value === "revoked" || value === "expired"
 }
 
 export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): RemoteJob {
@@ -530,7 +548,7 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
   const reviewEvent = event.type.endsWith("review.updated") || event.type.endsWith("comment")
   const retryEvent = event.type.endsWith("retry") || event.type.endsWith("retried")
   if (
-    (current.status === "completed" || current.status === "failed" || current.status === "stopped") &&
+    remoteJobStatusTerminal(current.status) &&
     !reviewEvent &&
     !retryEvent
   )
@@ -554,7 +572,7 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
       ? current.output
       : `${current.output ?? ""}${event.data.output}`.slice(-MAX_OUTPUT_LENGTH)
   const error =
-    event.data.error ?? (done === "failed" || done === "stopped" ? event.data.message : undefined) ?? current.error
+    event.data.error ?? (done && remoteJobStatusTerminal(done) ? event.data.message : undefined) ?? current.error
   return {
     ...current,
     status: nextStatus,
@@ -610,7 +628,7 @@ export function remoteJobStatusLabel(value: RemoteJobStatus) {
 
 export function remoteJobResultStatus(value: RemoteJobStatus) {
   if (value === "completed") return "completed" as const
-  if (value === "failed") return "failed" as const
+  if (value === "failed" || value === "revoked" || value === "expired") return "failed" as const
   return "timed_out" as const
 }
 

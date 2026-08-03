@@ -30,12 +30,20 @@ class AndroidBridge(
   private val webView: WebView,
 ) {
   private val notificationState = activity.getSharedPreferences("slopcode.permission", android.content.Context.MODE_PRIVATE)
-  private val deepLinks = CopyOnWriteArrayList<String>()
+  private val deepLinks = DeepLinkDelivery(MAX_DEEP_LINKS)
+  private val deepLinkLock = Any()
   private val permission = CopyOnWriteArrayList<(String) -> Unit>()
   private val storageLock = Any()
   private val channelId = "slopcode.android"
   private val manager = activity.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as NotificationManager
   private val key = MasterKey.Builder(activity).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+  private val deepLinkPrefs = EncryptedSharedPreferences.create(
+    activity,
+    "slopcode.deep.links",
+    key,
+    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+  )
   private val jobs = RemoteJobStore(activity)
   private val sshEvents = CopyOnWriteArrayList<String>()
   private val ssh = SshTransport(activity, ::queueSshEvent)
@@ -61,6 +69,7 @@ class AndroidBridge(
     val channel = NotificationChannel(channelId, "SlopCode", NotificationManager.IMPORTANCE_DEFAULT)
     manager.createNotificationChannel(channel)
     permissionState()
+    restoreDeepLinkHistory()
     ContextCompat.registerReceiver(
       activity,
       jobReceiver,
@@ -254,7 +263,13 @@ class AndroidBridge(
         session.size > 1 ||
         (session.singleOrNull()?.matches(Regex("(?:ses|pty)_[A-Za-z0-9._:-]+")) == false)
       ) return null
-      return url
+      return Uri.Builder()
+        .scheme("slopcode")
+        .authority("remote-session")
+        .appendQueryParameter("job", job[0])
+        .apply { session.singleOrNull()?.let { appendQueryParameter("session", it) } }
+        .build()
+        .toString()
     }
     if (host != "open-project" && host != "new-session") return null
     val directories = uri.getQueryParameters("directory")
@@ -271,10 +286,9 @@ class AndroidBridge(
 
   fun enqueueDeepLink(url: String) {
     val value = safeDeepLink(url) ?: return
-    synchronized(deepLinks) {
-      if (deepLinks.contains(value)) return
-      while (deepLinks.size >= MAX_DEEP_LINKS) deepLinks.removeAt(0)
-      deepLinks += value
+    synchronized(deepLinkLock) {
+      if (!deepLinks.enqueue(value)) return
+      persistDeepLinkHistory()
     }
   }
 
@@ -326,7 +340,7 @@ class AndroidBridge(
   fun flushDeepLinks() {
     if (!rendererReady) return
     val nonce = rendererNonce ?: return
-    val urls = consumeLinks()
+    val urls = peekLinks()
     if (urls.isEmpty()) return
     val payload = JSONObject()
       .put("type", "slopcode.deep-links")
@@ -337,10 +351,9 @@ class AndroidBridge(
       .toString()
     webView.post {
       if (!rendererReady || rendererNonce != nonce) {
-        synchronized(deepLinks) {
-          urls.asReversed().forEach { url ->
-            if (!deepLinks.contains(url)) deepLinks.add(0, url)
-          }
+        synchronized(deepLinkLock) {
+          deepLinks.requeue(urls)
+          persistDeepLinkHistory()
         }
         return@post
       }
@@ -348,10 +361,40 @@ class AndroidBridge(
     }
   }
 
-  private fun consumeLinks(): List<String> = synchronized(deepLinks) {
-    val urls = deepLinks.toList()
-    deepLinks.clear()
+  private fun consumeLinks(): List<String> = synchronized(deepLinkLock) {
+    val urls = deepLinks.consume()
+    persistDeepLinkHistory()
     urls
+  }
+
+  private fun peekLinks(): List<String> = synchronized(deepLinkLock) {
+    deepLinks.peek()
+  }
+
+  private fun restoreDeepLinkHistory() {
+    val raw = deepLinkPrefs.getString(DEEP_LINK_HISTORY, null) ?: return
+    val value = runCatching { JSONObject(raw) }.getOrNull() ?: return
+    val storedHistory = value.optJSONObject("history") ?: value
+    val history = storedHistory.keys().asSequence().mapNotNull { url ->
+      val timestamp = storedHistory.optLong(url, -1L).takeIf { it > 0 }
+      timestamp?.let { url to it }
+    }.toMap()
+    val queued = value.optJSONArray("pending")?.let { array ->
+      (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf(String::isNotBlank) }
+    } ?: emptyList()
+    synchronized(deepLinkLock) {
+      deepLinks.restore(history, queued)
+      persistDeepLinkHistory()
+    }
+  }
+
+  private fun persistDeepLinkHistory() {
+    val history = JSONObject()
+    deepLinks.history().forEach { (url, timestamp) -> history.put(url, timestamp) }
+    val pending = JSONArray()
+    deepLinks.peek().forEach(pending::put)
+    val value = JSONObject().put("history", history).put("pending", pending)
+    check(deepLinkPrefs.edit().putString(DEEP_LINK_HISTORY, value.toString()).commit()) { "Deep-link history could not be persisted" }
   }
 
   private fun capabilities() =
@@ -803,5 +846,6 @@ class AndroidBridge(
     private const val MAX_ARGS = 8
     private const val MAX_STORAGE_KEYS = 512
     private const val MAX_DEEP_LINKS = 32
+    private const val DEEP_LINK_HISTORY = "history.v1"
   }
 }

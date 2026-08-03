@@ -176,7 +176,9 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
         const message = event as MessageEvent
         if (!trustedAndroidMessage(message)) return
         const urls = parseDeepLinkMessage(message.data, nonce)
-        if (urls.length > 0) listener(urls)
+        if (urls.length === 0) return
+        listener(urls)
+        void bridge.consumeDeepLinks(nonce).catch(() => undefined)
       }
       window.addEventListener("message", handler)
       void prepareDeepLinks()

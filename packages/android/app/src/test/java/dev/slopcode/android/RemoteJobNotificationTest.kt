@@ -63,6 +63,18 @@ class RemoteJobNotificationTest {
     assertTrue(remoteJobNotificationActionAllowed(failed, RemoteJobAction.STOP))
   }
 
+  @Test
+  fun actionCompletionCannotOverwriteARevokedInteraction() {
+    val approval = state(RemoteJobStatus.WAITING_APPROVAL).copy(
+      approval = JSONObject().put("id", "apr_1").put("revision", 1),
+    )
+    val interaction = remoteJobActionInteraction(approval)
+    val revoked = approval.copy(status = RemoteJobStatus.REVOKED)
+
+    assertTrue(remoteJobActionStillCurrent(approval, interaction, RemoteJobAction.APPROVE))
+    assertFalse(remoteJobActionStillCurrent(revoked, interaction, RemoteJobAction.APPROVE))
+  }
+
   private fun state(status: String) = RemoteJobState(
     id = "job_notification",
     serverUrl = "https://desktop.example.com",

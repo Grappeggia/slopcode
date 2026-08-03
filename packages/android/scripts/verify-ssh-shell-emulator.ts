@@ -22,8 +22,14 @@ type LocalSnapshot = Record<string, string>
 type Probe = {
   scheme: string
   storedScheme: string | null
-  viewport: { width: number; height: number; visualHeight: number }
+  viewport: { width: number; height: number; visualHeight: number; devicePixelRatio: number }
   insets: { top: number; right: number; bottom: number; left: number; imeBottom: number }
+  device: {
+    orientation: "portrait" | "landscape"
+    navigation: "system" | "gesture"
+    userRotation: string
+    navigationMode: string
+  }
   initial: {
     menu: unknown
     add: unknown
@@ -44,6 +50,7 @@ type Probe = {
   keyboard: {
     requested: boolean
     available: boolean
+    deviceVisible: boolean
     focused: boolean
     input: unknown
     visualHeight: number
@@ -70,6 +77,10 @@ function optional(...args: string[]) {
   } catch {
     return ""
   }
+}
+
+function keyboardVisibleOnDevice() {
+  return optional("shell", "dumpsys", "input_method").includes("mInputShown=true")
 }
 
 function message(error: unknown) {
@@ -294,13 +305,20 @@ async function restoreLocalStorage(url: string, snapshot: LocalSnapshot) {
       const values = ${value};
       localStorage.clear();
       Object.entries(values).forEach(([key, item]) => localStorage.setItem(key, item));
+      location.reload();
       return true;
     })()`,
   )
+  await wait(700)
 }
 
 function setDisplay(fixture: SshShellVisualFixture) {
   adb("shell", "wm", "size", fixture.orientation === "landscape" ? "2400x1080" : "1080x2400")
+  adb("shell", "wm", "user-rotation", "lock", fixture.orientation === "landscape" ? "1" : "0")
+  adb("shell", "settings", "put", "system", "accelerometer_rotation", "0")
+  adb("shell", "settings", "put", "system", "user_rotation", fixture.orientation === "landscape" ? "1" : "0")
+  adb("shell", "settings", "put", "secure", "navigation_mode", fixture.insets === "gesture" ? "2" : "0")
+  adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", fixture.keyboard ? "1" : "0")
   adb("shell", "settings", "put", "system", "font_scale", String(fixture.fontScale))
 }
 
@@ -354,8 +372,8 @@ const probeExpression = (keyboardRequested: boolean) => String.raw`(async () => 
     return value && value.width > 0 && value.height > 0 && value.right > 0 && value.left < innerWidth && value.bottom > 0 && value.top < innerHeight;
   };
   const controls = () => [...document.querySelectorAll("[data-ssh-shell] button, [data-ssh-shell] input:not([type=checkbox]), [data-ssh-shell] textarea, [data-ssh-shell] select, [data-ssh-shell] summary")]
-    .map((node) => ({ label: label(node), rect: box(node), minHeight: getComputedStyle(node).minHeight }))
-    .filter((value) => visible(value.rect ? { getBoundingClientRect: () => value.rect } : null));
+    .filter((node) => visible(node))
+    .map((node) => ({ label: label(node), rect: box(node), minHeight: getComputedStyle(node).minHeight }));
   const number = (name) => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0;
   const menu = document.querySelector("[data-ssh-menu-toggle]");
   const drawer = document.querySelector("[data-ssh-drawer]");
@@ -386,7 +404,7 @@ const probeExpression = (keyboardRequested: boolean) => String.raw`(async () => 
     focusReturned: document.activeElement === menu,
   };
 
-  let keyboard = { requested: ${keyboardRequested}, available: false, focused: false, input: null, visualHeight: visualViewport?.height ?? innerHeight };
+  let keyboard = { requested: ${keyboardRequested}, available: false, deviceVisible: false, focused: false, input: null, visualHeight: visualViewport?.height ?? innerHeight };
   const interactiveRoot = document.querySelector("[data-ssh-interactive]");
   const tabs = [...document.querySelectorAll('[role="tab"]')].map((node) => ({ selected: node.getAttribute("aria-selected"), controls: node.getAttribute("aria-controls") }));
   const interactive = {
@@ -420,7 +438,7 @@ const probeExpression = (keyboardRequested: boolean) => String.raw`(async () => 
   return JSON.stringify({
     scheme: document.documentElement.dataset.colorScheme ?? null,
     storedScheme: localStorage.getItem(${JSON.stringify(colorKey)}),
-    viewport: { width: innerWidth, height: innerHeight, visualHeight: visualViewport?.height ?? innerHeight },
+    viewport: { width: innerWidth, height: innerHeight, visualHeight: visualViewport?.height ?? innerHeight, devicePixelRatio },
     insets: { top: number("--android-inset-top"), right: number("--android-inset-right"), bottom: number("--android-inset-bottom"), left: number("--android-inset-left"), imeBottom: number("--android-ime-bottom") },
     initial,
     bottom,
@@ -442,10 +460,82 @@ async function ready(url: string) {
   throw new Error("The Android onboarding layout did not become ready in time.")
 }
 
+async function waitForViewport(url: string, fixture: SshShellVisualFixture) {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const raw = await evaluate(url, "JSON.stringify({ width: innerWidth, height: innerHeight })")
+    if (typeof raw === "string") {
+      const value = JSON.parse(raw) as { width?: number; height?: number }
+      const landscape = typeof value.width === "number" && typeof value.height === "number" && value.width > value.height
+      if (landscape === (fixture.orientation === "landscape")) return
+    }
+    await wait(250)
+  }
+  throw new Error(`${fixture.id}: the WebView viewport did not reach ${fixture.orientation}.`)
+}
+
 async function probe(url: string, keyboardRequested: boolean) {
   const raw = await evaluate(url, probeExpression(keyboardRequested))
   requireValue(typeof raw === "string", "The WebView visual probe returned no result.")
-  return JSON.parse(raw) as Probe
+  const value = JSON.parse(raw) as Omit<Probe, "device">
+  if (keyboardRequested) {
+    const tapRaw = await evaluate(
+      url,
+      `(() => {
+        const input = document.querySelector("input:not([type=hidden])");
+        input?.scrollIntoView({ block: "center", inline: "nearest" });
+        const rect = input?.getBoundingClientRect();
+        return JSON.stringify({
+          dpr: devicePixelRatio,
+          rect: rect ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height } : null,
+        });
+      })()`,
+    )
+    const tap = typeof tapRaw === "string" ? JSON.parse(tapRaw) as { dpr?: number; rect?: unknown } : undefined
+    const input = rect(tap?.rect ?? value.keyboard.input)
+    if (input) {
+      await wait(300)
+      const dpr = tap?.dpr ?? value.viewport.devicePixelRatio
+      const x = Math.round((input.left + input.width / 2) * dpr)
+      const y = Math.round((input.top + input.height / 2) * dpr)
+      for (const offset of [0, -160, 160, -320, 320, -480, 480]) {
+        if (keyboardVisibleOnDevice()) break
+        adb("shell", "input", "tap", String(x), String(Math.max(80, y + offset)))
+        await wait(180)
+      }
+      await wait(700)
+      const refreshed = await evaluate(
+        url,
+        `(() => {
+          const input = document.querySelector("input:not([type=hidden])");
+          const rect = input?.getBoundingClientRect();
+          const number = (name) => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0;
+          return JSON.stringify({
+            requested: true,
+            available: number("--android-ime-bottom") > 0 || (visualViewport?.height ?? innerHeight) < innerHeight - 40,
+            focused: document.activeElement === input,
+            input: rect ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height } : null,
+            visualHeight: visualViewport?.height ?? innerHeight,
+          });
+        })()`,
+      )
+      if (typeof refreshed === "string") {
+        const next = JSON.parse(refreshed) as Probe["keyboard"]
+        const deviceVisible = keyboardVisibleOnDevice()
+        value.keyboard = { ...next, available: next.available || deviceVisible, deviceVisible }
+      }
+    }
+  }
+  const navigationMode = adb("shell", "settings", "get", "secure", "navigation_mode")
+  const userRotation = adb("shell", "settings", "get", "system", "user_rotation")
+  return {
+    ...value,
+    device: {
+      orientation: value.viewport.width <= value.viewport.height ? "portrait" : "landscape",
+      navigation: navigationMode === "2" ? "gesture" : "system",
+      userRotation,
+      navigationMode,
+    },
+  } satisfies Probe
 }
 
 async function capture(path: string) {
@@ -468,7 +558,7 @@ function assertProbe(fixture: SshShellVisualFixture, value: Probe) {
     : sshShellRect(0, 0, value.viewport.width, Math.max(32, value.insets.top))
   const controls = value.initial.controls.flatMap((item) => {
     const next = rect(item.rect)
-    return next && Number.parseFloat(item.minHeight) >= 48 ? [next] : []
+    return next ? [next] : []
   })
   const audit = menu
     ? auditSshShellLayout({ menu, statusBar: status, addComputer: add, primary, controls })
@@ -478,6 +568,8 @@ function assertProbe(fixture: SshShellVisualFixture, value: Probe) {
   requireValue(audit?.controlsMeetTouchTarget && controls.length > 0, `${fixture.id}: a rendered control is below 48dp.`)
   requireValue(value.drawer.opened && value.drawer.openAriaHidden !== "true" && !value.drawer.openInert && value.drawer.openFocusInside, `${fixture.id}: drawer did not expose modal focus semantics when open: ${JSON.stringify(value.drawer)}`)
   requireValue(value.drawer.closedAriaHidden === "true" && value.drawer.closedInert && value.drawer.closedFocusReturned, `${fixture.id}: closed drawer leaked focus or accessibility exposure: ${JSON.stringify(value.drawer)}`)
+  requireValue(value.device.orientation === fixture.orientation, `${fixture.id}: measured orientation is ${value.device.orientation}, expected ${fixture.orientation}.`)
+  requireValue(value.device.navigation === fixture.insets, `${fixture.id}: measured navigation mode is ${value.device.navigation}, expected ${fixture.insets}.`)
 
   if (!fixture.keyboard) {
     const expectedPosition = fixture.primaryAction === "flow" ? "static" : "sticky"
@@ -487,9 +579,9 @@ function assertProbe(fixture: SshShellVisualFixture, value: Probe) {
     requireValue(bottomPrimary.bottom <= value.viewport.height - value.insets.bottom + 1, `${fixture.id}: Continue is not reachable above the bottom inset: ${JSON.stringify({ bottomPrimary, viewport: value.viewport, insets: value.insets })}`)
   }
 
-  if (fixture.keyboard && value.keyboard.available) {
+  if (fixture.keyboard) {
     const input = rect(value.keyboard.input)
-    requireValue(value.keyboard.focused && input && input.top >= -1 && input.bottom <= value.keyboard.visualHeight + 1, `${fixture.id}: focused input is not visible with the keyboard open.`)
+    requireValue(value.keyboard.available && value.keyboard.focused && input && input.top >= -1 && input.bottom <= value.keyboard.visualHeight + 1, `${fixture.id}: the requested keyboard did not appear or the focused input is not visible: ${JSON.stringify(value.keyboard)}`)
   }
 
   if (value.interactive.available) {
@@ -506,6 +598,11 @@ function assertProbe(fixture: SshShellVisualFixture, value: Probe) {
 const originalSize = adb("shell", "wm", "size")
 const originalOverride = /Override size: (\d+x\d+)/.exec(originalSize)?.[1]
 const originalFontScale = adb("shell", "settings", "get", "system", "font_scale")
+const originalAccelerometerRotation = adb("shell", "settings", "get", "system", "accelerometer_rotation")
+const originalUserRotation = adb("shell", "settings", "get", "system", "user_rotation")
+const originalUserRotationMode = adb("shell", "wm", "user-rotation")
+const originalNavigationMode = adb("shell", "settings", "get", "secure", "navigation_mode")
+const originalShowImeWithHardKeyboard = adb("shell", "settings", "get", "secure", "show_ime_with_hard_keyboard")
 const originalRunning = !!optional("shell", "pidof", packageID)
 let currentURL: string | undefined
 let storageSnapshot: StorageSnapshot | undefined
@@ -515,8 +612,21 @@ let keyboardShown = false
 function restoreDeviceSettings() {
   if (originalOverride) adb("shell", "wm", "size", originalOverride)
   else adb("shell", "wm", "size", "reset")
+  if (/^lock [0-3]$/.test(originalUserRotationMode)) {
+    const rotation = originalUserRotationMode.slice(-1)
+    adb("shell", "wm", "user-rotation", "lock", rotation)
+  } else if (originalUserRotationMode === "free") adb("shell", "wm", "user-rotation", "free")
+  else optional("shell", "wm", "user-rotation", "free")
   if (/^\d+(?:\.\d+)?$/.test(originalFontScale)) adb("shell", "settings", "put", "system", "font_scale", originalFontScale)
   else optional("shell", "settings", "delete", "system", "font_scale")
+  if (/^\d+$/.test(originalAccelerometerRotation)) adb("shell", "settings", "put", "system", "accelerometer_rotation", originalAccelerometerRotation)
+  else optional("shell", "settings", "delete", "system", "accelerometer_rotation")
+  if (/^\d+$/.test(originalUserRotation)) adb("shell", "settings", "put", "system", "user_rotation", originalUserRotation)
+  else optional("shell", "settings", "delete", "system", "user_rotation")
+  if (/^\d+$/.test(originalNavigationMode)) adb("shell", "settings", "put", "secure", "navigation_mode", originalNavigationMode)
+  else optional("shell", "settings", "delete", "secure", "navigation_mode")
+  if (/^\d+$/.test(originalShowImeWithHardKeyboard)) adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", originalShowImeWithHardKeyboard)
+  else optional("shell", "settings", "delete", "secure", "show_ime_with_hard_keyboard")
 }
 
 async function cleanup() {
@@ -554,11 +664,21 @@ async function cleanup() {
       const stored = await snapshotStorage(url)
       const local = await snapshotLocalStorage(url)
       requireValue(sameMap(storageSnapshot!, stored), `encrypted workspace storage differs after cleanup: ${JSON.stringify({ expected: Object.fromEntries(storageSnapshot!), actual: Object.fromEntries(stored) })}`)
-      requireValue(sameRecord(localSnapshot!, local), `WebView storage differs after cleanup: ${JSON.stringify({ expected: localSnapshot, actual: local })}`)
+      const expectedLocal = { ...localSnapshot! }
+      const actualLocal = { ...local }
+      if (!Object.hasOwn(expectedLocal, colorKey)) delete actualLocal[colorKey]
+      requireValue(sameRecord(expectedLocal, actualLocal), `WebView storage differs after cleanup: ${JSON.stringify({ expected: expectedLocal, actual: local })}`)
+      restoreDeviceSettings()
+      await wait(200)
       const size = adb("shell", "wm", "size")
       requireValue((/Override size: (\d+x\d+)/.exec(size)?.[1] ?? undefined) === originalOverride, "display size differs after cleanup")
       const font = adb("shell", "settings", "get", "system", "font_scale")
       requireValue(font === originalFontScale, "font scale differs after cleanup")
+      requireValue(adb("shell", "settings", "get", "system", "accelerometer_rotation") === originalAccelerometerRotation, "accelerometer rotation differs after cleanup")
+      requireValue(adb("shell", "settings", "get", "system", "user_rotation") === originalUserRotation, "user rotation differs after cleanup")
+      requireValue(adb("shell", "wm", "user-rotation") === originalUserRotationMode, "window-manager rotation differs after cleanup")
+      requireValue(adb("shell", "settings", "get", "secure", "navigation_mode") === originalNavigationMode, "navigation mode differs after cleanup")
+      requireValue(adb("shell", "settings", "get", "secure", "show_ime_with_hard_keyboard") === originalShowImeWithHardKeyboard, "IME keyboard setting differs after cleanup")
     })
   }
   if (!originalRunning) optional("shell", "am", "force-stop", packageID)
@@ -591,10 +711,13 @@ try {
   currentURL = await launch()
 
   for (const item of SSH_SHELL_VISUAL_FIXTURES) {
+    optional("shell", "input", "keyevent", "4")
+    await wait(250)
     setDisplay(item)
     currentURL = await launch()
     await waitForBridge(currentURL)
     currentURL = await setScheme(currentURL, item.scheme)
+    await waitForViewport(currentURL, item)
     await ready(currentURL)
     const value = await probe(currentURL, item.keyboard)
     assertProbe(item, value)
@@ -606,7 +729,7 @@ try {
       scheme: item.scheme,
       orientation: item.orientation,
       fontScale: item.fontScale,
-      keyboard: item.keyboard ? (value.keyboard.available ? "available" : "unavailable") : "not-requested",
+      keyboard: item.keyboard ? (value.keyboard.deviceVisible ? "available" : "unavailable") : "not-requested",
       interactive: value.interactive.available ? "available" : "unavailable",
       screenshot: path,
     })

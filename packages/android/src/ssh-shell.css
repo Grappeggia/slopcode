@@ -151,7 +151,7 @@
   color: var(--ssh-text);
 }
 
-[data-ssh-shell] > main {
+[data-ssh-shell] main {
   box-sizing: border-box;
   block-size: 100dvh;
   min-block-size: 100dvh;
@@ -161,7 +161,7 @@
   padding-bottom: max(24px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 24px)) !important;
 }
 
-[data-ssh-shell] > main form > button[type="submit"] {
+[data-ssh-shell] main form > button[type="submit"] {
   position: sticky;
   bottom: max(12px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 12px));
   z-index: 20;
@@ -219,12 +219,12 @@
     top: max(32px, calc(var(--android-inset-top) + 12px));
   }
 
-  [data-ssh-shell] > main {
+  [data-ssh-shell] main {
     padding-top: max(64px, calc(var(--android-inset-top) + 64px)) !important;
     padding-bottom: max(16px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 16px)) !important;
   }
 
-  [data-ssh-shell] > main form > button[type="submit"] {
+  [data-ssh-shell] main form > button[type="submit"] {
     /* A sticky action can cover the preceding Add computer action on short
        landscape screens. Let the page reserve normal flow space instead. */
     position: static;
@@ -232,7 +232,7 @@
     box-shadow: none;
   }
 
-  [data-ssh-shell] > main > :is(form, section) {
+  [data-ssh-shell] main > :is(form, section) {
     gap: 16px !important;
   }
 }

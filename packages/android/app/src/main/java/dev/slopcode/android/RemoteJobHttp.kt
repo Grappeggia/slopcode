@@ -94,8 +94,15 @@ internal class RemoteJobHttp(
 
   fun action(job: RemoteJobState, action: String, payload: JSONObject? = null): Boolean {
     if (!RemoteJobAction.valid(action)) return false
-    val body = JSONObject().put("action", action).apply {
+    val key = remoteJobActionIdempotencyKey(job, action)
+    val body = JSONObject().apply {
       payload?.keys()?.forEach { key -> put(key, payload.opt(key)) }
+      put("action", action)
+      put("idempotencyKey", key)
+      remoteJobActionContext(job, action)?.let {
+        put("interactionID", it.id)
+        put("expectedRevision", it.revision)
+      }
     }
     val response = call(
       job,
@@ -103,7 +110,7 @@ internal class RemoteJobHttp(
       method = "POST",
       query = mapOf("workspace" to job.workspaceID, "path" to job.directory),
       body = body,
-      headers = mapOf("Idempotency-Key" to remoteJobActionIdempotencyKey(job, action)),
+      headers = mapOf("Idempotency-Key" to key),
     )
     response.use {
       return it.isSuccessful

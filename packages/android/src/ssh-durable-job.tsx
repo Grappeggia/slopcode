@@ -1,5 +1,6 @@
-import { Show } from "solid-js"
+import { onCleanup, onMount, Show } from "solid-js"
 import { remoteJobStatusLabel, type RemoteJob } from "./remote-jobs"
+import { installAndroidBack } from "./android-back"
 import { SshShell } from "./ssh-shell"
 
 type Props = {
@@ -8,6 +9,14 @@ type Props = {
 }
 
 export function SshDurableJob(props: Props) {
+  onMount(() => {
+    const releaseBack = installAndroidBack(() => {
+      props.onContinue()
+      return true
+    })
+    onCleanup(releaseBack)
+  })
+
   return (
     <SshShell>
       <main data-ssh-durable-job class="min-h-screen bg-surface-base p-4 pt-20 text-text-strong sm:p-6 sm:pt-20">

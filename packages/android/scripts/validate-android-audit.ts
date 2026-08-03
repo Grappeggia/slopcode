@@ -224,4 +224,7 @@ try {
 }
 
 console.log(JSON.stringify({ report: join(root, "report.json"), ...report }))
-if (Object.values(report.checks).some((check) => check.status === "failed")) process.exitCode = 1
+const unavailableAllowed = Bun.env.ANDROID_AUDIT_ALLOW_UNAVAILABLE === "1"
+if (Object.values(report.checks).some((check) => check.status === "failed" || (!unavailableAllowed && check.status === "unavailable"))) {
+  process.exitCode = 1
+}

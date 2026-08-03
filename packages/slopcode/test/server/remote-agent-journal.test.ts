@@ -180,6 +180,39 @@ describe("remote agent journal", () => {
     )
   })
 
+  test("atomically skips a stale terminal transition", async () => {
+    await run(
+      ":memory:",
+      Effect.gen(function* () {
+        const journal = yield* Journal
+        yield* start()
+        const results = yield* Effect.all(
+          [
+            journal.appendIf({
+              jobID: "job_test",
+              id: "evt_stop",
+              type: "job.stopped",
+              data: { message: "Stopped by user" },
+              accept: (current) => !["completed", "failed", "stopped"].includes(current.status),
+              reduce: (current, event) => ({ ...current, status: "stopped", cursor: event.cursor, updatedAt: 2 }),
+            }),
+            journal.appendIf({
+              jobID: "job_test",
+              id: "evt_complete",
+              type: "job.completed",
+              data: {},
+              accept: (current) => !["completed", "failed", "stopped"].includes(current.status),
+              reduce: (current, event) => ({ ...current, status: "completed", cursor: event.cursor, updatedAt: 2 }),
+            }),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect(results.map((result) => result.type).sort()).toEqual(["appended", "skipped"])
+        expect((yield* journal.get("job_test"))?.state.status).toBe("stopped")
+      }),
+    )
+  })
+
   test("requires a snapshot when a retained event tail no longer covers the cursor", async () => {
     await run(
       ":memory:",
