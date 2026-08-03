@@ -226,7 +226,7 @@
 
       .tabs {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         gap: 6px;
       }
 
@@ -472,12 +472,23 @@
           >
             Claude Code
           </button>
+          <button
+            class="tab"
+            id="tab-antigravity"
+            role="tab"
+            aria-controls="agent-flow"
+            aria-selected="false"
+            tabindex="-1"
+            data-agent="antigravity-cli"
+          >
+            Antigravity
+          </button>
         </div>
         <div id="status" class="status" aria-live="polite"></div>
       </section>
 
       <div class="notice">
-        Release gate: every upgrade must produce a fresh complete run for all four agents. The selector changes both the
+        Release gate: every upgrade must produce a fresh complete run for all five agents. The selector changes both the
         agent status and the agent-specific evidence below; shared onboarding evidence is shown for context.
       </div>
 

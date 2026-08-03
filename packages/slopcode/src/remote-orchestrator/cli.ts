@@ -8,7 +8,7 @@ import type { ACPEvent, Session } from "./acp"
 
 type Agent = Extract<AgentOrchestrationAgentID, "codex" | "claude" | "antigravity">
 type Format = "stream" | "text"
-type Launch = (agent: Agent, cwd: string, prompt: string, format: Format) => ChildProcess
+export type Launch = (agent: Agent, cwd: string, prompt: string, format: Format) => ChildProcess
 
 const programs: Record<Agent, readonly string[]> = {
   codex: ["codex", "exec", "--json"],

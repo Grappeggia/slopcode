@@ -327,6 +327,56 @@ internal class SshTransport(
       }
   }
 
+  fun codexAppServerStatus(raw: String): JSONObject {
+    val requested = JSONObject(raw).optString("directory", "/")
+    val directory = workspace.require(
+      SshPath.normalize(requested)
+        ?: throw SshTransportException("invalid_configuration", "Codex App Server configuration is invalid."),
+    )
+    val codex = JSONObject().put("agent", SshAgent.CODEX.id).put("directory", directory)
+    val preflight = version(codex.toString())
+    val auth = if (preflight.optBoolean("ok")) authStatus(codex.toString()) else null
+    var handshake = "not_run"
+    var probeError: String? = null
+    if (preflight.optBoolean("ok") && auth?.optBoolean("loggedIn") == true) {
+      probeError = probeCodexAppServer(directory)
+      handshake = if (probeError == null) "verified" else "failed"
+    }
+    val ready = handshake == "verified"
+    val state = when {
+      !preflight.optBoolean("ok") && preflight.optInt("exitCode") == 127 -> "not_installed"
+      !preflight.optBoolean("ok") -> "unavailable"
+      auth?.optBoolean("loggedIn") != true -> "needs_sign_in"
+      !ready -> "unavailable"
+      else -> "ready"
+    }
+    val message = when (state) {
+      "not_installed" -> "Install Codex before its App Server can start."
+      "needs_sign_in" -> "Sign in to Codex before its App Server can start."
+      "unavailable" -> probeError ?: "Codex App Server could not complete its SSH handshake."
+      else -> "Codex App Server is ready to start through this encrypted SSH connection."
+    }
+    val output = listOfNotNull(
+      preflight.optString("output").takeIf(String::isNotBlank),
+      auth?.optString("output")?.takeIf(String::isNotBlank),
+      message,
+    ).joinToString("\n")
+    return JSONObject()
+      .put("executable", "codex")
+      .put("state", state)
+      .put("ready", ready)
+      .put("handshake", handshake)
+      .put("message", message)
+      .put("output", output.take(MAX_OUTPUT_CHARS))
+      .put("preflight", preflight)
+      .apply {
+        if (auth != null) put("auth", auth)
+        if (preflight.has("error")) put("error", preflight.optString("error"))
+        if (auth?.has("error") == true) put("error", auth.optString("error"))
+        if (probeError != null) put("error", probeError)
+      }
+  }
+
   fun start(raw: String): JSONObject {
     val request = SshStartRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "SSH agent session configuration is invalid.")
@@ -700,6 +750,56 @@ internal class SshTransport(
     }
   }
 
+  private fun probeCodexAppServer(directory: String): String? {
+    val next = currentSession()
+    val channel = next.openChannel("exec") as ChannelExec
+    val stderr = ByteArrayOutputStream()
+    channel.setPty(false)
+    channel.setCommand(SshCommand.codexAppServer(directory))
+    channel.setErrStream(stderr)
+    return try {
+      channel.connect(CONNECT_TIMEOUT_MS)
+      val output = channel.outputStream
+      val input = channel.inputStream
+      val init = """
+        {"id":1,"method":"initialize","params":{"clientInfo":{"name":"slopcode-android","version":"v1"},"capabilities":null}}
+        {"method":"initialized"}
+        {"id":2,"method":"thread/start","params":{"cwd":${JSONObject.quote(directory)}}}
+      """.trimIndent().replace("\n", "\n") + "\n"
+      output.write(init.toByteArray(StandardCharsets.UTF_8))
+      output.flush()
+      val deadline = System.currentTimeMillis() + APP_SERVER_PROBE_TIMEOUT_MS
+      val bytes = ByteArrayOutputStream()
+      val buffer = ByteArray(4 * 1024)
+      while (System.currentTimeMillis() < deadline && !channel.isClosed) {
+        while (input.available() > 0) {
+          val count = input.read(buffer, 0, minOf(buffer.size, input.available()))
+          if (count <= 0) break
+          bytes.write(buffer, 0, count)
+          if (bytes.size() > MAX_APP_SERVER_PROBE_BYTES) throw SshTransportException("app_server_probe_failed", "Codex App Server returned too much handshake data.")
+        }
+        val lines = bytes.toString(StandardCharsets.UTF_8.name()).split('\n')
+        val result = lines.asSequence()
+          .mapNotNull { line -> runCatching { JSONObject(line) }.getOrNull() }
+          .firstOrNull { it.optString("id") == "2" || it.optInt("id", -1) == 2 }
+        if (result != null) {
+          if (result.has("error")) return "Codex App Server rejected the workspace probe."
+          val thread = result.optJSONObject("result")?.optJSONObject("thread")
+          if (!thread?.optString("id").isNullOrBlank()) return null
+          return "Codex App Server returned an invalid workspace probe."
+        }
+        Thread.sleep(20)
+      }
+      val detail = stderr.toString(StandardCharsets.UTF_8.name()).trim()
+      if (detail.isNotEmpty()) "Codex App Server handshake failed: ${detail.take(512)}"
+      else "Codex App Server handshake timed out."
+    } catch (cause: Throwable) {
+      if (cause is SshTransportException) cause.message else "Codex App Server handshake failed."
+    } finally {
+      runCatching { channel.disconnect() }
+    }
+  }
+
   private fun readBounded(input: InputStream): String {
     val output = ByteArrayOutputStream()
     val buffer = ByteArray(4 * 1024)
@@ -748,7 +848,10 @@ internal class SshTransport(
     if (cause is JSchException && (message.contains("auth fail") || message.contains("auth cancel"))) {
       return SshTransportException("authentication_failed", "SSH authentication failed. Check the password or private key.", cause)
     }
-    if (message.contains("unknownhost") || message.contains("unknown host key")) {
+    if (cause is java.net.UnknownHostException || message.contains("unknownhost")) {
+      return SshTransportException("network_error", "Could not resolve the SSH host. Check the hostname and network.", cause)
+    }
+    if (message.contains("unknown host key")) {
       return SshTransportException("host_key_required", "The SSH host key must be confirmed before connecting.", cause)
     }
     if (message.contains("auth") || message.contains("permission denied")) {
@@ -790,6 +893,8 @@ internal class SshTransport(
     private const val MAX_INPUT_BYTES = 128 * 1024
     private const val MAX_ORCHESTRATOR_FRAME_BYTES = 256 * 1024
     private const val INSTALL_TIMEOUT_MS = 120_000L
+    private const val APP_SERVER_PROBE_TIMEOUT_MS = 15_000L
+    private const val MAX_APP_SERVER_PROBE_BYTES = 64 * 1024
     private const val MAX_PREFETCH_FOLDERS = 8
   }
 }

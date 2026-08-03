@@ -48,6 +48,8 @@ describe("android security source regressions", () => {
     expect(bridge).toContain("sourceOrigin.toString() != TRUSTED_ORIGIN")
     expect(bridge).toContain('"deepLinksReady"')
     expect(bridge).toContain('"sshHome"')
+    expect(bridge).toContain('"sshCodexAppServerStatus"')
+    expect(sshTransport).toContain("fun codexAppServerStatus(raw: String): JSONObject")
     expect(bridge).toContain("argBoolean(args, 1)")
     expect(bridge).toContain("commit()")
     expect(bridge).toContain("MAX_MESSAGE_BYTES")

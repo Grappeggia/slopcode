@@ -15,7 +15,8 @@ import {
   type AgentOrchestrationCapability,
 } from "@slopcode-ai/protocol"
 import { approvalCwd, contained } from "./workspace"
-import { connect as connectCli } from "./cli"
+import { connect as connectCli, type Launch as CliLaunch } from "./cli"
+import { connect as connectCodex, type Launch as CodexLaunch } from "./codex-app-server"
 
 export type ACPEvent =
   | { type: "output"; text: string; nativeID?: string }
@@ -138,9 +139,21 @@ export async function connect(input: {
   cwd: string
   emit: (event: ACPEvent) => void
   start?: Launch
+  codexStart?: CodexLaunch
+  cliStart?: CliLaunch
 }): Promise<Session> {
-  if (input.agent === "codex" || input.agent === "claude" || input.agent === "antigravity")
-    return connectCli({ agent: input.agent, cwd: input.cwd, emit: input.emit })
+  if (input.agent === "codex") {
+    try {
+      return await connectCodex({ cwd: input.cwd, emit: input.emit, start: input.codexStart })
+    } catch (error) {
+      process.stderr.write(
+        `[remote-orchestrator/codex] App Server unavailable; using CLI fallback: ${safe(error instanceof Error ? error.message : "startup failed", 512, "startup failed")}\n`,
+      )
+      return connectCli({ agent: input.agent, cwd: input.cwd, emit: input.emit, start: input.cliStart })
+    }
+  }
+  if (input.agent === "claude" || input.agent === "antigravity")
+    return connectCli({ agent: input.agent, cwd: input.cwd, emit: input.emit, start: input.cliStart })
   if (input.agent !== "slopcode" && input.agent !== "opencode")
     throw new Error(`agent ${input.agent} does not support ACP`)
   const child = (input.start ?? launch)(input.agent, input.cwd)

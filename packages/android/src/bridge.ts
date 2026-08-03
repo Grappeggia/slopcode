@@ -11,7 +11,9 @@ import {
 } from "./remote-jobs"
 import {
   parseSshConnectResult,
+  checkCodexAppServer,
   parseSshCredential,
+  parseSshCodexAppServerStatus,
   parseSshEventMessage,
   parseSshHome,
   parseSshListing,
@@ -103,6 +105,7 @@ export type AndroidNativeBridge = {
   sshSelectWorkspace?(path: string): Promise<unknown>
   sshExec?(input: string): Promise<unknown>
   sshAuthStatus?(input: string): Promise<unknown>
+  sshCodexAppServerStatus?(input: string): Promise<unknown>
   sshStart?(input: string): Promise<unknown>
   sshOrchestratorStart?(input: string): Promise<unknown>
   sshOrchestratorInput?(value: string): Promise<unknown>
@@ -203,6 +206,7 @@ export function getAndroidBridge(
     sshSelectWorkspace: (path) => call("sshSelectWorkspace", path),
     sshExec: (input) => call("sshExec", input),
     sshAuthStatus: (input) => call("sshAuthStatus", input),
+    sshCodexAppServerStatus: (input) => call("sshCodexAppServerStatus", input),
     sshStart: (input) => call("sshStart", input),
     sshOrchestratorStart: (input) => call("sshOrchestratorStart", input),
     sshOrchestratorInput: (value) => call("sshOrchestratorInput", value),
@@ -298,6 +302,32 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
         parseSshAuthStatus,
         "Android returned an invalid SSH authentication result.",
       ),
+    codexAppServerStatus: async (directory) => {
+      const fallback = () =>
+        checkCodexAppServer(
+          {
+            execVersion: (agent, folder) =>
+              result(
+                bridge.sshExec!(JSON.stringify({ agent, directory: folder })),
+                parseSshPreflight,
+                "Android returned an invalid SSH preflight result.",
+              ),
+            execAuthStatus: (agent, folder) =>
+              result(
+                bridge.sshAuthStatus!(JSON.stringify({ agent, directory: folder })),
+                parseSshAuthStatus,
+                "Android returned an invalid SSH authentication result.",
+              ),
+          },
+          directory,
+        )
+      if (!bridge.sshCodexAppServerStatus) return fallback()
+      return result(
+        bridge.sshCodexAppServerStatus(JSON.stringify({ directory })),
+        parseSshCodexAppServerStatus,
+        "Android returned an invalid Codex App Server status.",
+      )
+    },
     start: (input) =>
       result(bridge.sshStart!(JSON.stringify(input)), parseSshStart, "Android returned an invalid SSH session result."),
     orchestratorStart: async (directory) => {

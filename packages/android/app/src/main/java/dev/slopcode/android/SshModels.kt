@@ -129,6 +129,8 @@ internal object SshCommand {
 
   fun login(agent: SshAgent, directory: String) = command(directory, *agent.loginArgs.toTypedArray())
 
+  fun codexAppServer(directory: String) = command(directory, "codex", "app-server", "--stdio")
+
   fun orchestrator(directory: String) = command(directory, "slopcode", "remote-orchestrator", "--stdio")
 
   private fun command(directory: String, vararg args: String) = script(directory, "exec ${args.joinToString(" ") { argument(it) }}")

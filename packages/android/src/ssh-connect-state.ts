@@ -57,6 +57,7 @@ export function resetSshOnboarding(auth: SshConnectAuth = "password") {
     showHidden: false,
     error: "",
     preflight: undefined,
+    appServer: undefined,
     setup: undefined,
     setupInput: "",
     checkingLogin: false,

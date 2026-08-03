@@ -10,6 +10,7 @@ import {
   type SshEvent,
   type SshFolderEntry,
   type SshFolderListing,
+  type SshCodexAppServerStatus,
   type SshSetupAction,
   type SshTransport,
 } from "./ssh"
@@ -139,6 +140,7 @@ export function SshConnect(props: Props) {
   const [browseBusy, setBrowseBusy] = createSignal(false)
   const [error, setError] = createSignal("")
   const [preflight, setPreflight] = createSignal<string>()
+  const [appServer, setAppServer] = createSignal<SshCodexAppServerStatus>()
   const [setup, setSetup] = createSignal<Setup>()
   const [setupInput, setSetupInput] = createSignal("")
   const [checkingLogin, setCheckingLogin] = createSignal(false)
@@ -309,6 +311,7 @@ export function SshConnect(props: Props) {
     setShowHidden(next.showHidden)
     setError(next.error)
     setPreflight(next.preflight)
+    setAppServer(next.appServer)
     setSetup(next.setup)
     setSetupInput(next.setupInput)
     setCheckingLogin(next.checkingLogin)
@@ -401,6 +404,7 @@ export function SshConnect(props: Props) {
     setAgent(value)
     setSetup()
     setPreflight()
+    setAppServer()
     setError("")
   }
 
@@ -427,17 +431,27 @@ export function SshConnect(props: Props) {
   const refreshAgentStatuses = async (folder: string, request = onboarding.current(), profile = selectedProfile()) => {
     const results = await Promise.all(
       SSH_AGENTS.map(async (value) => {
+        const server = value === "codex-cli" ? await props.ssh.codexAppServerStatus(folder).catch(() => undefined) : undefined
+        if (value === "codex-cli") return { value, result: server?.preflight, auth: server?.auth, server }
         const result = await props.ssh.execVersion(value, folder).catch(() => undefined)
         const auth = result?.ok ? await props.ssh.execAuthStatus(value, folder).catch(() => undefined) : undefined
-        return { value, result, auth }
+        return { value, result, auth, server }
       }),
     )
     if (!active(request, profile) || folder !== directory()) return
+    const server = results.find((item) => item.value === "codex-cli")?.server
+    if (agent() === "codex-cli") setAppServer(server)
     setAgentStatuses(
       Object.fromEntries(
-        results.map(({ value, result, auth }) => [
+        results.map(({ value, result, auth, server }) => [
           value,
-          result
+          server
+            ? server.ready
+              ? "Ready"
+              : server.state === "not_installed"
+                ? "Not installed"
+                : "Needs setup"
+            : result
             ? !result.ok
               ? result.exitCode === 127
                 ? "Not installed"
@@ -594,23 +608,25 @@ export function SshConnect(props: Props) {
       return false
     }
     try {
-      const result = await props.ssh.execVersion(selected, folder)
+      const server = selected === "codex-cli" ? await props.ssh.codexAppServerStatus(folder) : undefined
+      const result = server?.preflight ?? (await props.ssh.execVersion(selected, folder))
       if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
       setAgentStatuses((current) => ({
         ...current,
-        [selected]: result.ok ? "Ready" : result.exitCode === 127 ? "Not installed" : "Needs setup",
+        [selected]: server ? (server.ready ? "Ready" : server.state === "not_installed" ? "Not installed" : "Needs setup") : result.ok ? "Ready" : result.exitCode === 127 ? "Not installed" : "Needs setup",
       }))
-      setPreflight(result.output || result.error || `${result.executable} exited with ${result.exitCode}.`)
+      if (selected === "codex-cli") setAppServer(server)
+      setPreflight(server?.output || result.output || result.error || `${result.executable} exited with ${result.exitCode}.`)
       if (result.exitCode === 127) {
         setSetup({ action: "install", state: "available", output: "" })
         setError("")
         return false
       }
       if (!result.ok) {
-        setError(result.error ?? `The ${agentName(agent())} preflight failed.`)
+        setError(server?.error ?? server?.message ?? result.error ?? `The ${agentName(agent())} preflight failed.`)
         return false
       }
-      const auth = await props.ssh.execAuthStatus(selected, folder)
+      const auth = server?.auth ?? (await props.ssh.execAuthStatus(selected, folder))
       if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
       setPreflight(
         [
@@ -622,6 +638,11 @@ export function SshConnect(props: Props) {
           .join("\n"),
       )
       if (auth.loggedIn) {
+        if (server && !server.ready) {
+          setAgentStatuses((current) => ({ ...current, [selected]: "Needs setup" }))
+          setError(server.error ?? server.message)
+          return false
+        }
         setSetup()
         setAgentStatuses((current) => ({ ...current, [selected]: "Ready" }))
         setError("")
@@ -1278,10 +1299,45 @@ export function SshConnect(props: Props) {
             <Show when={preflight()}>
               <pre class="rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular">{preflight()}</pre>
             </Show>
+            <Show when={agent() === "codex-cli"}>
+              <section
+                class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3"
+                aria-label="Codex App Server readiness"
+                aria-live="polite"
+              >
+                <div>
+                  <h2 class="text-14-medium">Codex App Server</h2>
+                  <p class="text-12-regular text-text-weak">
+                    Starts privately through SSH when your session begins; it is never exposed to the network.
+                  </p>
+                </div>
+                <ol class="grid grid-cols-3 gap-2" aria-label="Codex App Server checklist">
+                  <li class={`rounded-lg border p-3 text-12-regular ${appServer()?.preflight.ok ? "border-border-brand-base" : "border-border-weak-base"}`}>
+                    <span class="block text-text-weak">1</span>
+                    <span class="block mt-1">{appServer()?.preflight.ok ? "Installed — complete" : "Installed — checking"}</span>
+                  </li>
+                  <li class={`rounded-lg border p-3 text-12-regular ${appServer()?.auth?.loggedIn ? "border-border-brand-base" : "border-border-weak-base"}`}>
+                    <span class="block text-text-weak">2</span>
+                    <span class="block mt-1">{appServer()?.auth?.loggedIn ? "Signed in — complete" : "Signed in — checking"}</span>
+                  </li>
+                  <li
+                    class={`rounded-lg border p-3 text-12-regular ${appServer()?.ready ? "border-border-brand-base" : "border-border-weak-base"}`}
+                    aria-label={appServer()?.ready ? "App Server ready — complete" : "App Server handshake — checking"}
+                  >
+                    <span class="block text-text-weak">3</span>
+                    <span class="block mt-1">{appServer()?.ready ? "Ready — complete" : "Handshake — checking"}</span>
+                  </li>
+                </ol>
+                <p class={`text-12-regular ${appServer()?.ready ? "text-text-success" : "text-text-weak"}`}>
+                  {appServer()?.message ?? "Checking Codex App Server readiness…"}
+                </p>
+              </section>
+            </Show>
             <Show when={setup()}>
               {(current) => (
                 <section
                   class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3"
+                  aria-label="Agent setup"
                   aria-live="polite"
                 >
                   <div>

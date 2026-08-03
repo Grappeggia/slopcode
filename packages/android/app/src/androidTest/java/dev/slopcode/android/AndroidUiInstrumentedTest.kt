@@ -271,7 +271,7 @@ class AndroidUiInstrumentedTest {
           const button = (value) => [...document.querySelectorAll('button')].find((item) => clean(item.innerText) === value || clean(item.innerText).includes(value))
           const summary = (value) => [...document.querySelectorAll('summary')].find((item) => clean(item.innerText) === value)
           const box = (item) => {
-            if (!item) return { width: 0, height: 0, top: -1, bottom: -1, left: -1, right: -1, visible: false }
+            if (!(item instanceof Element)) return { width: 0, height: 0, top: -1, bottom: -1, left: -1, right: -1, visible: false }
             const rect = item.getBoundingClientRect()
             const style = getComputedStyle(item)
             const viewport = visualViewport || { width: innerWidth, height: innerHeight }
@@ -279,7 +279,7 @@ class AndroidUiInstrumentedTest {
             return { width: Math.round(rect.width), height: Math.round(rect.height), top: Math.round(rect.top), bottom: Math.round(rect.bottom), left: Math.round(rect.left), right: Math.round(rect.right), visible }
           }
           const style = (item) => {
-            const value = item || document.documentElement
+            const value = item instanceof Element ? item : document.documentElement
             const result = getComputedStyle(value)
             let background = result.backgroundColor
             if (background === 'transparent' || background === 'rgba(0, 0, 0, 0)') background = getComputedStyle(value.parentElement || document.documentElement).backgroundColor
@@ -316,7 +316,7 @@ class AndroidUiInstrumentedTest {
             const badge = [...item.querySelectorAll('span')].find((node) => statusValues.has(clean(node.innerText)))
             return { name, status: clean(badge?.innerText), text: clean(item.innerText), rect: box(item), statusContrast: contrast(badge) }
           })
-          const setupNode = document.querySelector('section[aria-live="polite"]')
+          const setupNode = document.querySelector('section[aria-label="Agent setup"]')
           const setup = setupNode ? { text: clean(setupNode.innerText), rect: box(setupNode), action: clean(setupNode.innerText).includes('is not installed') ? 'install' : 'login', steps: [...setupNode.querySelectorAll('li')].map((item) => clean(item.innerText)) } : null
           const hidden = document.querySelector("input[type='checkbox']")
           const shell = document.querySelector('[data-ssh-shell]')
@@ -621,7 +621,7 @@ class AndroidUiInstrumentedTest {
           const request = JSON.parse(raw);
           const args = request.args || [];
           const parse = (value) => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
-          const call = ['sshConnect', 'sshExec', 'sshAuthStatus', 'sshStart', 'sshOrchestratorStart'].includes(request.method) ? parse(args[0]) : {};
+          const call = ['sshConnect', 'sshExec', 'sshAuthStatus', 'sshCodexAppServerStatus', 'sshStart', 'sshOrchestratorStart'].includes(request.method) ? parse(args[0]) : {};
           const frame = request.method === 'sshOrchestratorInput' ? parse(args[0]) : {};
           if (request.method === 'setSystemBars') {
             const dark = args[0] === true;
@@ -659,6 +659,7 @@ class AndroidUiInstrumentedTest {
             const missing = call.agent === 'codex-cli' || call.agent === 'antigravity-cli';
             result = { agent: call.agent, executable: call.agent, exitCode: missing ? 127 : 0, output: missing ? 'not found' : 'ready', ok: !missing };
           }
+          if (request.method === 'sshCodexAppServerStatus') result = { executable: 'codex', state: 'not_installed', ready: false, handshake: 'not_run', message: 'Install Codex before its App Server can start.', output: 'codex: not found', preflight: { agent: 'codex-cli', executable: 'codex', exitCode: 127, output: 'not found', ok: false } };
           if (request.method === 'sshAuthStatus') result = { agent: call.agent, executable: call.agent, exitCode: 0, output: call.agent === 'opencode-cli' ? 'sign in required' : 'signed in', ok: true, loggedIn: call.agent !== 'opencode-cli' };
           if (request.method === 'sshOrchestratorStart') { channel = 'ssh_orchestrator'; result = { id: channel, status: 'started' }; }
           if (request.method === 'sshOrchestratorInput') {

@@ -602,6 +602,11 @@ class AndroidBridge(
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH authentication check")
           sshAsync(id, replyProxy) { ssh.authStatus(raw) }
         }
+        "sshCodexAppServerStatus" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid Codex App Server request")
+          sshAsync(id, replyProxy) { ssh.codexAppServerStatus(raw) }
+        }
         "sshStart" -> {
           arity(args, 1)
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH session request")

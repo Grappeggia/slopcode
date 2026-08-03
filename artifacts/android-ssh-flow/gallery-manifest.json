@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-02T17:55:00-07:00",
-  "build": "android debug",
-  "requiredAgents": ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code"],
+  "generatedAt": "2026-08-03T09:01:36-07:00",
+  "build": "android debug · native Codex App Server handshake",
+  "requiredAgents": ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code", "antigravity-cli"],
   "shared": [
     {
       "id": "appearance",
@@ -38,13 +38,62 @@
       "caption": "Use the compact SFTP browser, breadcrumbs, recent folders, and hidden files off by default.",
       "src": "latest-10-workspace.png",
       "alt": "Remote workspace folder browser"
+    },
+    {
+      "id": "debug-portrait-light",
+      "title": "Latest build · portrait light",
+      "caption": "Fresh emulator capture from the current debug APK with the saved computer and workspace fixture.",
+      "src": "release-debug-00-portrait-light.png",
+      "alt": "Latest Android debug build in portrait light mode"
+    },
+    {
+      "id": "debug-portrait-dark",
+      "title": "Latest build · portrait dark",
+      "caption": "The same onboarding surface rendered in the refreshed dark theme.",
+      "src": "release-debug-01-portrait-dark.png",
+      "alt": "Latest Android debug build in portrait dark mode"
+    },
+    {
+      "id": "debug-portrait-keyboard",
+      "title": "Latest build · keyboard-safe onboarding",
+      "caption": "Large-font keyboard fixture keeps the computer selection controls reachable above the IME.",
+      "src": "release-debug-02-portrait-light-keyboard.png",
+      "alt": "Latest Android debug build with the keyboard open"
+    },
+    {
+      "id": "debug-portrait-dark-keyboard",
+      "title": "Latest build · dark keyboard",
+      "caption": "Dark mode remains readable while the Android keyboard is active.",
+      "src": "release-debug-03-portrait-dark-keyboard.png",
+      "alt": "Latest Android debug build in dark mode with the keyboard open"
+    },
+    {
+      "id": "debug-landscape-light",
+      "title": "Latest build · landscape light",
+      "caption": "Landscape layout keeps the drawer control and primary action clear of system insets.",
+      "src": "release-debug-04-landscape-light.png",
+      "alt": "Latest Android debug build in landscape light mode"
+    },
+    {
+      "id": "debug-landscape-dark",
+      "title": "Latest build · landscape dark",
+      "caption": "Landscape dark-mode capture from the current emulator build.",
+      "src": "release-debug-05-landscape-dark.png",
+      "alt": "Latest Android debug build in landscape dark mode"
+    },
+    {
+      "id": "debug-landscape-keyboard",
+      "title": "Latest build · landscape keyboard",
+      "caption": "Large-font landscape keyboard fixture captured before the emulator's final rotation timeout.",
+      "src": "release-debug-06-landscape-light-keyboard.png",
+      "alt": "Latest Android debug build in landscape with the keyboard fixture"
     }
   ],
   "agents": {
     "slopcode-cli": {
       "label": "Slopcode",
-      "status": "blocked",
-      "runId": "emulator-2026-08-02-slopcode",
+      "status": "needs-run",
+      "runId": "emulator-2026-08-03-ui-matrix",
       "screenshots": [
         {
           "id": "complete",
@@ -57,8 +106,8 @@
     },
     "codex-cli": {
       "label": "Codex",
-      "status": "passed",
-      "runId": "emulator-2026-08-02-codex",
+      "status": "needs-run",
+      "runId": "emulator-2026-08-03-ui-matrix",
       "screenshots": [
         {
           "id": "working",
@@ -78,8 +127,8 @@
     },
     "opencode-cli": {
       "label": "OpenCode",
-      "status": "blocked",
-      "runId": "emulator-2026-08-02-opencode",
+      "status": "needs-run",
+      "runId": "emulator-2026-08-03-ui-matrix",
       "screenshots": [
         {
           "id": "ready",
@@ -99,8 +148,8 @@
     },
     "claude-code": {
       "label": "Claude Code",
-      "status": "setup-required",
-      "runId": "emulator-2026-08-02-claude",
+      "status": "needs-run",
+      "runId": "emulator-2026-08-03-ui-matrix",
       "screenshots": [
         {
           "id": "setup",
@@ -110,6 +159,12 @@
           "alt": "Claude Code sign-in required checklist"
         }
       ]
+    },
+    "antigravity-cli": {
+      "label": "Antigravity",
+      "status": "needs-run",
+      "runId": "emulator-2026-08-03-ui-matrix",
+      "screenshots": []
     }
   }
 }

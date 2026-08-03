@@ -3,6 +3,9 @@ import {
   normalizeSshTarget,
   parseSshConnectResult,
   parseSshAuthStatus,
+  parseSshCodexAppServerStatus,
+  checkCodexAppServer,
+  codexAppServerStatus,
   parseSshEventMessage,
   parseSshHome,
   parseSshListing,
@@ -157,6 +160,53 @@ describe("direct SSH boundary parsing", () => {
         loggedIn: true,
       }),
     ).toMatchObject({ agent: "antigravity-cli", loggedIn: true })
+  })
+
+  test("derives Codex App Server readiness from the allowlisted Codex checks", async () => {
+    const preflight = { agent: "codex-cli", executable: "codex", exitCode: 0, output: "codex 1.2.3", ok: true } as const
+    expect(
+      codexAppServerStatus(preflight, { ...preflight, output: "Logged in", loggedIn: true }, "verified"),
+    ).toMatchObject({ state: "ready", ready: true, handshake: "verified", executable: "codex" })
+    expect(codexAppServerStatus(preflight, { ...preflight, output: "Not logged in", loggedIn: false })).toMatchObject({
+      state: "needs_sign_in",
+      ready: false,
+    })
+    expect(codexAppServerStatus({ ...preflight, exitCode: 127, ok: false })).toMatchObject({
+      state: "not_installed",
+      ready: false,
+    })
+    await expect(
+      checkCodexAppServer(
+        {
+          execVersion: async () => preflight,
+          execAuthStatus: async () => ({ ...preflight, output: "Logged in", loggedIn: true }),
+        },
+        "/workspace",
+      ),
+    ).resolves.toMatchObject({ state: "unavailable", ready: false, handshake: "not_run" })
+    expect(
+      parseSshCodexAppServerStatus({
+        executable: "codex",
+        state: "ready",
+        ready: true,
+        handshake: "verified",
+        message: "Ready",
+        output: "codex 1.2.3",
+        preflight,
+        auth: { ...preflight, loggedIn: true },
+      }),
+    ).toMatchObject({ ready: true, preflight })
+    expect(
+      parseSshCodexAppServerStatus({
+        executable: "codex",
+        state: "ready",
+        ready: true,
+        message: "Ready",
+        output: "codex 1.2.3",
+        preflight: { ...preflight, agent: "opencode-cli" },
+        auth: { ...preflight, loggedIn: true },
+      }),
+    ).toBeUndefined()
   })
 
   test("uses only fixed setup recipes and accepts only bounded setup events", () => {

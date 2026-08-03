@@ -86,6 +86,18 @@ export type SshAuthStatus = SshPreflight & {
   loggedIn: boolean
 }
 
+export type SshCodexAppServerStatus = {
+  executable: "codex"
+  state: "ready" | "needs_sign_in" | "not_installed" | "unavailable"
+  ready: boolean
+  handshake: "verified" | "failed" | "not_run"
+  message: string
+  output: string
+  preflight: SshPreflight
+  auth?: SshAuthStatus
+  error?: string
+}
+
 export type SshSessionStart = {
   id: string
   status: "started"
@@ -121,6 +133,7 @@ export type SshTransport = {
   selectWorkspace(path: string): Promise<string>
   execVersion(agent: SshAgent, directory: string): Promise<SshPreflight>
   execAuthStatus(agent: SshAgent, directory: string): Promise<SshAuthStatus>
+  codexAppServerStatus(directory: string): Promise<SshCodexAppServerStatus>
   start(input: {
     operation: "interactive" | "prompt" | SshSetupAction
     agent: SshAgent
@@ -359,6 +372,118 @@ export function parseSshAuthStatus(value: unknown): SshAuthStatus | undefined {
   if (!object(value) || typeof value.loggedIn !== "boolean") return
   const preflight = parseSshPreflight(value)
   return preflight ? { ...preflight, loggedIn: value.loggedIn } : undefined
+}
+
+export function codexAppServerStatus(
+  preflight: SshPreflight,
+  auth?: SshAuthStatus,
+  handshake: SshCodexAppServerStatus["handshake"] = "not_run",
+  probeError?: string,
+): SshCodexAppServerStatus {
+  if (!preflight.ok) {
+    const installed = preflight.exitCode !== 127
+    const message = installed
+      ? "Codex needs attention before its App Server can start."
+      : "Install Codex before its App Server can start."
+    return {
+      executable: "codex",
+      state: installed ? "unavailable" : "not_installed",
+      ready: false,
+      handshake: "not_run",
+      message,
+      output: preflight.output || preflight.error || message,
+      preflight,
+      ...(preflight.error ? { error: preflight.error } : {}),
+    }
+  }
+  if (!auth?.loggedIn) {
+    const message = "Sign in to Codex before its App Server can start."
+    return {
+      executable: "codex",
+      state: "needs_sign_in",
+      ready: false,
+      handshake: "not_run",
+      message,
+      output: [preflight.output, auth?.output, message].filter(Boolean).join("\n"),
+      preflight,
+      ...(auth ? { auth } : {}),
+      ...(auth?.error ? { error: auth.error } : {}),
+    }
+  }
+  if (handshake !== "verified") {
+    const message = probeError ?? "Codex App Server handshake could not be verified on this Android build."
+    return {
+      executable: "codex",
+      state: "unavailable",
+      ready: false,
+      handshake,
+      message,
+      output: [preflight.output, auth.output, message].filter(Boolean).join("\n"),
+      preflight,
+      auth,
+      ...(probeError ? { error: probeError } : {}),
+    }
+  }
+  const message = "Codex App Server is ready to start through this encrypted SSH connection."
+  return {
+    executable: "codex",
+    state: "ready",
+    ready: true,
+    handshake: "verified",
+    message,
+    output: [preflight.output, auth.output, message].filter(Boolean).join("\n"),
+    preflight,
+    auth,
+  }
+}
+
+export async function checkCodexAppServer(
+  ssh: Pick<SshTransport, "execVersion" | "execAuthStatus">,
+  directory: string,
+) {
+  const preflight = await ssh.execVersion("codex-cli", directory)
+  if (!preflight.ok) return codexAppServerStatus(preflight)
+  return codexAppServerStatus(preflight, await ssh.execAuthStatus("codex-cli", directory))
+}
+
+export function parseSshCodexAppServerStatus(value: unknown): SshCodexAppServerStatus | undefined {
+  if (
+    !object(value) ||
+    value.executable !== "codex" ||
+    typeof value.ready !== "boolean" ||
+    typeof value.message !== "string" ||
+    (value.handshake !== "verified" && value.handshake !== "failed" && value.handshake !== "not_run")
+  )
+    return
+  if (
+    value.state !== "ready" &&
+    value.state !== "needs_sign_in" &&
+    value.state !== "not_installed" &&
+    value.state !== "unavailable"
+  )
+    return
+  const preflight = parseSshPreflight(value.preflight)
+  const auth = value.auth === undefined ? undefined : parseSshAuthStatus(value.auth)
+  if (
+    !preflight ||
+    preflight.agent !== "codex-cli" ||
+    (value.auth !== undefined && (!auth || auth.agent !== "codex-cli")) ||
+    typeof value.output !== "string"
+  )
+    return
+  if (value.state === "ready" && (value.ready !== true || value.handshake !== "verified" || auth?.loggedIn !== true)) return
+  if (value.state !== "ready" && value.ready !== false) return
+  return {
+    executable: "codex",
+    state: value.state,
+    ready: value.ready,
+    handshake: value.handshake,
+    message: value.message,
+    output: value.output,
+    preflight,
+    ...(auth ? { auth } : {}),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+  }
 }
 
 export function parseSshStart(value: unknown): SshSessionStart | undefined {

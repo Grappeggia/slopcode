@@ -6,6 +6,10 @@ import { spawn } from "node:child_process"
 import { Schema } from "effect"
 import { AgentOrchestrationFrame, AgentOrchestrationLimits } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
+import {
+  argv as appServerArgv,
+  connect as connectCodex,
+} from "@/remote-orchestrator/codex-app-server"
 import { argv, connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
 import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
@@ -28,7 +32,7 @@ const frame = (type: string, value: Record<string, unknown>) =>
     ...value,
   })
 const waitFor = async (condition: () => boolean) => {
-  for (let index = 0; index < 100 && !condition(); index++) await Bun.sleep(1)
+  for (let index = 0; index < 2_000 && !condition(); index++) await Bun.sleep(1)
   expect(condition()).toBe(true)
 }
 type SessionResponse = Frame & { kind: "response"; type: "session.create"; sessionID: string }
@@ -100,6 +104,94 @@ describe("remote orchestrator", () => {
       expect(session.question("unknown", "answer")).toBe(false)
       await session.close()
     }
+  })
+
+  test("uses the allowlisted Codex App Server lifecycle and maps rich events", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-codex-app-server.ts")
+    const session = await connectCodex({
+      cwd,
+      emit: (event) => events.push(event),
+      start: () => spawn(process.execPath, [fixture], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+    })
+    expect(appServerArgv).toEqual(["codex", "app-server", "--stdio"])
+    expect(session.nativeID).toBe("codex-thread")
+    expect(session.capabilities).toEqual([
+      "workspace",
+      "sessions",
+      "turns",
+      "approvals",
+      "questions",
+      "plans",
+      "artifacts",
+    ])
+    const turn = session.turn("safe prompt")
+    await waitFor(() => events.filter((event) => event.type === "approval").length >= 2)
+    const approval = events.find((event) => event.type === "approval" && event.title === "Run fixture command")
+    expect(approval).toMatchObject({
+      type: "approval",
+      title: "Run fixture command",
+      command: "printf fixture",
+      cwd,
+    })
+    for (const item of events.filter((event): event is Extract<ACPEvent, { type: "approval" }> => event.type === "approval"))
+      expect(session.approval(item.id, true)).toBe(true)
+    await waitFor(() => events.filter((event) => event.type === "question").length >= 2)
+    const question = events.find((event) => event.type === "question" && event.prompt === "Continue fixture?")
+    expect(question).toMatchObject({ type: "question", prompt: "Continue fixture?", options: ["Yes"] })
+    for (const item of events.filter((event): event is Extract<ACPEvent, { type: "question" }> => event.type === "question"))
+      expect(session.question(item.id, "Yes")).toBe(true)
+    await turn
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["output", "reasoning", "tool", "plan", "approval", "question", "artifact"]),
+    )
+    expect(events.find((event) => event.type === "output")).toMatchObject({
+      text: "Fixture complete",
+      nativeID: "codex-message",
+    })
+    expect(events.find((event) => event.type === "artifact")).toMatchObject({
+      name: "created.txt",
+      path: path.join(cwd, "created.txt"),
+      kind: "diff",
+    })
+    await session.close()
+  })
+
+  test("resumes Codex App Server threads through the adapter seam", async () => {
+    const cwd = await temp()
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-codex-app-server.ts")
+    const session = await connectCodex({
+      cwd,
+      resume: "codex-thread",
+      emit: () => undefined,
+      start: () => spawn(process.execPath, [fixture], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+    })
+    expect(session.nativeID).toBe("codex-thread")
+    await session.close()
+  })
+
+  test("falls back to codex exec when Codex App Server cannot start", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-cli-agent.ts")
+    const session = await connect({
+      agent: "codex",
+      cwd,
+      emit: (event) => events.push(event),
+      codexStart: () =>
+        spawn(process.execPath, ["-e", 'process.stderr.write("app-server unavailable\\n"); process.exit(2)'], {
+          cwd,
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      cliStart: (_agent, dir) =>
+        spawn(process.execPath, [fixture, "codex"], { cwd: dir, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+    })
+    expect(session.capabilities).toEqual(["workspace", "sessions", "turns"])
+    await session.turn("fallback prompt")
+    expect(events).toContainEqual(expect.objectContaining({ type: "output", text: "codex:fallback prompt" }))
+    await session.close()
   })
 
   test("passes Antigravity prompts as a single argv value and parses stream JSON", async () => {
