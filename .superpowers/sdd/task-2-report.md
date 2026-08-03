@@ -34,4 +34,4 @@
 
 ## Commit
 
-Follow-up commit: pending.
+Follow-up implementation commit: `bfa4879a50` (`fix(android): close task 2 shell layout gaps`).
