@@ -28,7 +28,9 @@ export function sshShellRect(left: number, top: number, width: number, height: n
 }
 
 export function sshShellRectsOverlap(first: SshShellRect, second: SshShellRect) {
-  return first.left < second.right && first.right > second.left && first.top < second.bottom && first.bottom > second.top
+  return (
+    first.left < second.right && first.right > second.left && first.top < second.bottom && first.bottom > second.top
+  )
 }
 
 export function auditSshShellLayout(input: {
@@ -49,12 +51,76 @@ export function auditSshShellLayout(input: {
 // Stable names for emulator runs. This is the requested coverage matrix only;
 // rendered coverage is reported by verify-ssh-shell-emulator.ts.
 export const SSH_SHELL_VISUAL_FIXTURES = [
-  { id: "portrait-light-system", scheme: "light", orientation: "portrait", fontScale: 1, keyboard: false, insets: "system", primaryAction: "sticky" },
-  { id: "portrait-dark-system", scheme: "dark", orientation: "portrait", fontScale: 1, keyboard: false, insets: "system", primaryAction: "sticky" },
-  { id: "portrait-light-large-keyboard", scheme: "light", orientation: "portrait", fontScale: 1.3, keyboard: true, insets: "system", primaryAction: "sticky" },
-  { id: "portrait-dark-large-keyboard", scheme: "dark", orientation: "portrait", fontScale: 1.3, keyboard: true, insets: "gesture", primaryAction: "sticky" },
-  { id: "landscape-light-system", scheme: "light", orientation: "landscape", fontScale: 1, keyboard: false, insets: "system", primaryAction: "flow" },
-  { id: "landscape-dark-system", scheme: "dark", orientation: "landscape", fontScale: 1, keyboard: false, insets: "system", primaryAction: "flow" },
-  { id: "landscape-light-large-keyboard", scheme: "light", orientation: "landscape", fontScale: 1.3, keyboard: true, insets: "gesture", primaryAction: "flow" },
-  { id: "landscape-dark-large-keyboard", scheme: "dark", orientation: "landscape", fontScale: 1.3, keyboard: true, insets: "gesture", primaryAction: "flow" },
+  {
+    id: "portrait-light-system",
+    scheme: "light",
+    orientation: "portrait",
+    fontScale: 1,
+    keyboard: false,
+    insets: "system",
+    primaryAction: "sticky",
+  },
+  {
+    id: "portrait-dark-system",
+    scheme: "dark",
+    orientation: "portrait",
+    fontScale: 1,
+    keyboard: false,
+    insets: "system",
+    primaryAction: "sticky",
+  },
+  {
+    id: "portrait-light-large-keyboard",
+    scheme: "light",
+    orientation: "portrait",
+    fontScale: 1.3,
+    keyboard: true,
+    insets: "system",
+    primaryAction: "sticky",
+  },
+  {
+    id: "portrait-dark-large-keyboard",
+    scheme: "dark",
+    orientation: "portrait",
+    fontScale: 1.3,
+    keyboard: true,
+    insets: "gesture",
+    primaryAction: "sticky",
+  },
+  {
+    id: "landscape-light-system",
+    scheme: "light",
+    orientation: "landscape",
+    fontScale: 1,
+    keyboard: false,
+    insets: "system",
+    primaryAction: "flow",
+  },
+  {
+    id: "landscape-dark-system",
+    scheme: "dark",
+    orientation: "landscape",
+    fontScale: 1,
+    keyboard: false,
+    insets: "system",
+    primaryAction: "flow",
+  },
+  {
+    id: "landscape-light-large-keyboard",
+    scheme: "light",
+    orientation: "landscape",
+    fontScale: 1.3,
+    keyboard: true,
+    insets: "gesture",
+    primaryAction: "flow",
+  },
+  {
+    id: "landscape-dark-large-keyboard",
+    scheme: "dark",
+    orientation: "landscape",
+    fontScale: 1.3,
+    keyboard: true,
+    insets: "gesture",
+    primaryAction: "flow",
+  },
 ] as const satisfies readonly SshShellVisualFixture[]

@@ -203,162 +203,165 @@ export function SshSession(props: Props) {
 
   return (
     <SshShell workspace={props.workspace} sessionID={activeID()} sessionState={sessionState()}>
-      <main data-ssh-interactive class="ssh-shell-page min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6">
+      <main
+        data-ssh-interactive
+        class="ssh-shell-page min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6"
+      >
         <section
           data-ssh-interactive-panel
           class="ssh-shell-panel w-full max-w-3xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4"
         >
-        <div class="flex flex-col gap-1">
-          <h1 class="text-20-medium">{name(props.workspace.agent)} over SSH</h1>
-          <p class="text-14-regular text-text-weak">
-            {props.workspace.username}@{props.workspace.host}:{props.workspace.port}
-          </p>
-          <p class="text-14-regular text-text-weak">Working directory: {props.workspace.directory}</p>
-        </div>
-
-        <Show when={preflight()}>
-          <div class="rounded-md border border-border-weak-base p-3 text-12-regular">
-            <span class="text-12-regular text-text-weak">Preflight</span>
-            <pre class="whitespace-pre-wrap">{preflight()}</pre>
-          </div>
-        </Show>
-
-        <div class="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy() || !connected() || mode() === "interactive"}
-            onClick={() => void startInteractive()}
-            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
-          >
-            Start interactive PTY
-          </button>
-          <button
-            type="button"
-            disabled={busy() || !connected()}
-            onClick={() => void interrupt()}
-            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
-          >
-            Ctrl-C
-          </button>
-          <button
-            type="button"
-            disabled={busy() || !connected()}
-            onClick={() => void resize()}
-            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
-          >
-            Resize PTY
-          </button>
-          <button
-            type="button"
-            disabled={busy()}
-            onClick={() => void disconnect()}
-            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
-          >
-            Disconnect
-          </button>
-          <button
-            type="button"
-            disabled={busy()}
-            onClick={() => void agentic()}
-            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
-          >
-            Return to agentic session
-          </button>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <label class="flex flex-col gap-1 text-12-regular">
-            Columns
-            <input
-              value={cols()}
-              onInput={(event) => setCols(event.currentTarget.value)}
-              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-            />
-          </label>
-          <label class="flex flex-col gap-1 text-12-regular">
-            Rows
-            <input
-              value={rows()}
-              onInput={(event) => setRows(event.currentTarget.value)}
-              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
-            />
-          </label>
-        </div>
-
-        <div class="grid grid-cols-2 gap-2" role="tablist" aria-label="SSH agent input mode">
-          <button
-            type="button"
-            id="ssh-mode-prompt"
-            role="tab"
-            aria-selected={mode() === "prompt"}
-            aria-controls="ssh-session-input"
-            tabIndex={mode() === "prompt" ? 0 : -1}
-            onClick={() => setMode("prompt")}
-            class={`rounded-md border px-3 py-2 ${mode() === "prompt" ? "border-border-brand-base" : "border-border-weak-base"}`}
-          >
-            One-shot prompt
-          </button>
-          <button
-            type="button"
-            disabled={!activeID()}
-            id="ssh-mode-interactive"
-            role="tab"
-            aria-selected={mode() === "interactive"}
-            aria-controls="ssh-session-input"
-            tabIndex={mode() === "interactive" ? 0 : -1}
-            onClick={() => setMode("interactive")}
-            class={`rounded-md border px-3 py-2 disabled:opacity-50 ${mode() === "interactive" ? "border-border-brand-base" : "border-border-weak-base"}`}
-          >
-            Interactive input
-          </button>
-        </div>
-
-        <textarea
-          id="ssh-session-input"
-          aria-label="Prompt or interactive PTY input"
-          rows="4"
-          value={prompt()}
-          disabled={!connected() || busy()}
-          onInput={(event) => setPrompt(event.currentTarget.value)}
-          placeholder={
-            mode() === "interactive" ? "Input sent to the remote PTY" : "Prompt sent through the CLI's one-shot mode"
-          }
-          class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 disabled:opacity-50"
-        />
-        <button
-          type="button"
-          disabled={!prompt() || busy() || !connected()}
-          onClick={() => void send()}
-          class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 disabled:opacity-50"
-        >
-          {busy() ? "Working…" : mode() === "interactive" ? "Send PTY input" : "Run one-shot prompt"}
-        </button>
-
-        <pre
-          aria-label="SSH agent output"
-          class="min-h-48 max-h-96 overflow-auto rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular"
-        >
-          {output() || (busy() ? "Connecting to SSH host…" : "No output yet.")}
-        </pre>
-        <Show when={exitCode() !== undefined}>
-          <p class="text-12-regular text-text-weak">Last exit code: {exitCode()}</p>
-        </Show>
-        <Show when={error()}>
-          <div class="flex flex-col gap-2">
-            <p role="alert" class="text-14-regular text-text-on-critical-base">
-              {error()}
+          <div class="flex flex-col gap-1">
+            <h1 class="text-20-medium">{name(props.workspace.agent)} over SSH</h1>
+            <p class="text-14-regular text-text-weak">
+              {props.workspace.username}@{props.workspace.host}:{props.workspace.port}
             </p>
-            <Show when={!connected()}>
-              <button
-                type="button"
-                onClick={() => props.onDisconnected()}
-                class="rounded-md border border-border-weak-base px-3 py-2"
-              >
-                Return to SSH setup
-              </button>
-            </Show>
+            <p class="text-14-regular text-text-weak">Working directory: {props.workspace.directory}</p>
           </div>
-        </Show>
+
+          <Show when={preflight()}>
+            <div class="rounded-md border border-border-weak-base p-3 text-12-regular">
+              <span class="text-12-regular text-text-weak">Preflight</span>
+              <pre class="whitespace-pre-wrap">{preflight()}</pre>
+            </div>
+          </Show>
+
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy() || !connected() || mode() === "interactive"}
+              onClick={() => void startInteractive()}
+              class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+            >
+              Start interactive PTY
+            </button>
+            <button
+              type="button"
+              disabled={busy() || !connected()}
+              onClick={() => void interrupt()}
+              class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+            >
+              Ctrl-C
+            </button>
+            <button
+              type="button"
+              disabled={busy() || !connected()}
+              onClick={() => void resize()}
+              class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+            >
+              Resize PTY
+            </button>
+            <button
+              type="button"
+              disabled={busy()}
+              onClick={() => void disconnect()}
+              class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+            >
+              Disconnect
+            </button>
+            <button
+              type="button"
+              disabled={busy()}
+              onClick={() => void agentic()}
+              class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+            >
+              Return to agentic session
+            </button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <label class="flex flex-col gap-1 text-12-regular">
+              Columns
+              <input
+                value={cols()}
+                onInput={(event) => setCols(event.currentTarget.value)}
+                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+              />
+            </label>
+            <label class="flex flex-col gap-1 text-12-regular">
+              Rows
+              <input
+                value={rows()}
+                onInput={(event) => setRows(event.currentTarget.value)}
+                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+              />
+            </label>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2" role="tablist" aria-label="SSH agent input mode">
+            <button
+              type="button"
+              id="ssh-mode-prompt"
+              role="tab"
+              aria-selected={mode() === "prompt"}
+              aria-controls="ssh-session-input"
+              tabIndex={mode() === "prompt" ? 0 : -1}
+              onClick={() => setMode("prompt")}
+              class={`rounded-md border px-3 py-2 ${mode() === "prompt" ? "border-border-brand-base" : "border-border-weak-base"}`}
+            >
+              One-shot prompt
+            </button>
+            <button
+              type="button"
+              disabled={!activeID()}
+              id="ssh-mode-interactive"
+              role="tab"
+              aria-selected={mode() === "interactive"}
+              aria-controls="ssh-session-input"
+              tabIndex={mode() === "interactive" ? 0 : -1}
+              onClick={() => setMode("interactive")}
+              class={`rounded-md border px-3 py-2 disabled:opacity-50 ${mode() === "interactive" ? "border-border-brand-base" : "border-border-weak-base"}`}
+            >
+              Interactive input
+            </button>
+          </div>
+
+          <textarea
+            id="ssh-session-input"
+            aria-label="Prompt or interactive PTY input"
+            rows="4"
+            value={prompt()}
+            disabled={!connected() || busy()}
+            onInput={(event) => setPrompt(event.currentTarget.value)}
+            placeholder={
+              mode() === "interactive" ? "Input sent to the remote PTY" : "Prompt sent through the CLI's one-shot mode"
+            }
+            class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 disabled:opacity-50"
+          />
+          <button
+            type="button"
+            disabled={!prompt() || busy() || !connected()}
+            onClick={() => void send()}
+            class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 disabled:opacity-50"
+          >
+            {busy() ? "Working…" : mode() === "interactive" ? "Send PTY input" : "Run one-shot prompt"}
+          </button>
+
+          <pre
+            aria-label="SSH agent output"
+            class="min-h-48 max-h-96 overflow-auto rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular"
+          >
+            {output() || (busy() ? "Connecting to SSH host…" : "No output yet.")}
+          </pre>
+          <Show when={exitCode() !== undefined}>
+            <p class="text-12-regular text-text-weak">Last exit code: {exitCode()}</p>
+          </Show>
+          <Show when={error()}>
+            <div class="flex flex-col gap-2">
+              <p role="alert" class="text-14-regular text-text-on-critical-base">
+                {error()}
+              </p>
+              <Show when={!connected()}>
+                <button
+                  type="button"
+                  onClick={() => props.onDisconnected()}
+                  class="rounded-md border border-border-weak-base px-3 py-2"
+                >
+                  Return to SSH setup
+                </button>
+              </Show>
+            </div>
+          </Show>
         </section>
       </main>
     </SshShell>

@@ -6,7 +6,10 @@ export type SshRemoteSessionRoute =
   | { kind: "durable-job"; job: RemoteJob }
   | { kind: "recovery"; message: string }
 
-export function sshRemoteSessionRoute(link: RemoteSessionDeepLink | undefined, jobs: RemoteJob[]): SshRemoteSessionRoute {
+export function sshRemoteSessionRoute(
+  link: RemoteSessionDeepLink | undefined,
+  jobs: RemoteJob[],
+): SshRemoteSessionRoute {
   if (!link) return { kind: "agentic" }
   const result = resolveRemoteSession(link, jobs)
   if ("error" in result) return { kind: "recovery", message: result.error }

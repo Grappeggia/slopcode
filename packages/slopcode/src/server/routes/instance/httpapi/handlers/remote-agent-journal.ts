@@ -128,7 +128,9 @@ export interface Interface {
     readonly jobID: string
     readonly message: string
   }) => Effect.Effect<State, JobNotFoundError>
-  readonly append: (input: AppendInput) => Effect.Effect<{ readonly state: State; readonly event: Event }, JobNotFoundError>
+  readonly append: (
+    input: AppendInput,
+  ) => Effect.Effect<{ readonly state: State; readonly event: Event }, JobNotFoundError>
   readonly appendIf: (
     input: AppendInput & { readonly accept: (state: State) => boolean },
   ) => Effect.Effect<AppendResult, JobNotFoundError>

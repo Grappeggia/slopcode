@@ -5,7 +5,12 @@ const root = fileURLToPath(new URL("..", import.meta.url))
 
 async function ready(url: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (await fetch(url).then((response) => response.ok).catch(() => false)) return
+    if (
+      await fetch(url)
+        .then((response) => response.ok)
+        .catch(() => false)
+    )
+      return
     await Bun.sleep(100)
   }
   throw new Error("Vite did not start the SSH shell DOM fixture")
@@ -23,7 +28,15 @@ describe("SSH shell modal drawer DOM contract", () => {
     try {
       await ready(url)
       const chrome = Bun.spawn(
-        ["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu", "--virtual-time-budget=1500", "--dump-dom", url],
+        [
+          "google-chrome",
+          "--headless=new",
+          "--no-sandbox",
+          "--disable-gpu",
+          "--virtual-time-budget=1500",
+          "--dump-dom",
+          url,
+        ],
         { stdout: "pipe", stderr: "ignore" },
       )
       const html = await new Response(chrome.stdout).text()

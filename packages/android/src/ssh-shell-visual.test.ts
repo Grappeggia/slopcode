@@ -5,10 +5,16 @@ describe("SSH shell visual fixture matrix", () => {
   test("defines the requested emulator coverage matrix", () => {
     expect(SSH_SHELL_VISUAL_FIXTURES).toHaveLength(8)
     expect(new Set(SSH_SHELL_VISUAL_FIXTURES.map((item) => item.scheme))).toEqual(new Set(["light", "dark"]))
-    expect(new Set(SSH_SHELL_VISUAL_FIXTURES.map((item) => item.orientation))).toEqual(new Set(["portrait", "landscape"]))
+    expect(new Set(SSH_SHELL_VISUAL_FIXTURES.map((item) => item.orientation))).toEqual(
+      new Set(["portrait", "landscape"]),
+    )
     expect(SSH_SHELL_VISUAL_FIXTURES.some((item) => item.fontScale >= 1.3 && item.keyboard)).toBeTrue()
     expect(new Set(SSH_SHELL_VISUAL_FIXTURES.map((item) => item.insets))).toEqual(new Set(["system", "gesture"]))
-    expect(SSH_SHELL_VISUAL_FIXTURES.filter((item) => item.orientation === "landscape").every((item) => item.primaryAction === "flow")).toBeTrue()
+    expect(
+      SSH_SHELL_VISUAL_FIXTURES.filter((item) => item.orientation === "landscape").every(
+        (item) => item.primaryAction === "flow",
+      ),
+    ).toBeTrue()
   })
 
   test("audits measured geometry supplied by the emulator checker", () => {

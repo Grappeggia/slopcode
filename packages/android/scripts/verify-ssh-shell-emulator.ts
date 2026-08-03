@@ -123,7 +123,9 @@ function strings(value: unknown) {
 
 function parseMap(value: unknown): LocalSnapshot {
   if (!record(value)) throw new Error("The WebView returned an invalid local-storage snapshot.")
-  return Object.fromEntries(Object.entries(value).filter((item): item is [string, string] => typeof item[1] === "string"))
+  return Object.fromEntries(
+    Object.entries(value).filter((item): item is [string, string] => typeof item[1] === "string"),
+  )
 }
 
 function sameMap(first: Map<string, string>, second: Map<string, string>) {
@@ -338,8 +340,12 @@ async function setScheme(url: string, scheme: SshShellVisualFixture["scheme"]) {
     next,
     `JSON.stringify({ rendered: document.documentElement.dataset.colorScheme ?? null, stored: localStorage.getItem(${JSON.stringify(colorKey)}) })`,
   )
-  const value = typeof raw === "string" ? (JSON.parse(raw) as { rendered?: string | null; stored?: string | null }) : undefined
-  requireValue(value?.rendered === scheme && value.stored === scheme, `Could not set the rendered theme to ${scheme}: ${JSON.stringify(value)}`)
+  const value =
+    typeof raw === "string" ? (JSON.parse(raw) as { rendered?: string | null; stored?: string | null }) : undefined
+  requireValue(
+    value?.rendered === scheme && value.stored === scheme,
+    `Could not set the rendered theme to ${scheme}: ${JSON.stringify(value)}`,
+  )
   return next
 }
 
@@ -465,7 +471,8 @@ async function waitForViewport(url: string, fixture: SshShellVisualFixture) {
     const raw = await evaluate(url, "JSON.stringify({ width: innerWidth, height: innerHeight })")
     if (typeof raw === "string") {
       const value = JSON.parse(raw) as { width?: number; height?: number }
-      const landscape = typeof value.width === "number" && typeof value.height === "number" && value.width > value.height
+      const landscape =
+        typeof value.width === "number" && typeof value.height === "number" && value.width > value.height
       if (landscape === (fixture.orientation === "landscape")) return
     }
     await wait(250)
@@ -490,7 +497,7 @@ async function probe(url: string, keyboardRequested: boolean) {
         });
       })()`,
     )
-    const tap = typeof tapRaw === "string" ? JSON.parse(tapRaw) as { dpr?: number; rect?: unknown } : undefined
+    const tap = typeof tapRaw === "string" ? (JSON.parse(tapRaw) as { dpr?: number; rect?: unknown }) : undefined
     const input = rect(tap?.rect ?? value.keyboard.input)
     if (input) {
       await wait(300)
@@ -540,58 +547,111 @@ async function probe(url: string, keyboardRequested: boolean) {
 
 async function capture(path: string) {
   const result = Bun.spawnSync(["adb", "-s", serial, "exec-out", "screencap", "-p"], { stdout: "pipe", stderr: "pipe" })
-  if (result.exitCode !== 0) throw new Error(decode.decode(result.stderr) || "Could not capture the emulator screenshot.")
+  if (result.exitCode !== 0)
+    throw new Error(decode.decode(result.stderr) || "Could not capture the emulator screenshot.")
   await Bun.write(path, result.stdout)
 }
 
 function assertProbe(fixture: SshShellVisualFixture, value: Probe) {
-  requireValue(value.scheme === fixture.scheme, `${fixture.id}: rendered theme is ${value.scheme ?? "unknown"}, expected ${fixture.scheme}; stored=${value.storedScheme ?? "none"}.`)
+  requireValue(
+    value.scheme === fixture.scheme,
+    `${fixture.id}: rendered theme is ${value.scheme ?? "unknown"}, expected ${fixture.scheme}; stored=${value.storedScheme ?? "none"}.`,
+  )
   const menu = rect(value.initial.menu)
   const add = rect(value.initial.add)
   const primary = rect(value.initial.primary)
   const bottomAdd = rect(value.bottom.add)
   const bottomPrimary = rect(value.bottom.primary)
-  requireValue(menu && (fixture.keyboard || add) && (fixture.keyboard || primary), `${fixture.id}: onboarding controls were not rendered.`)
+  requireValue(
+    menu && (fixture.keyboard || add) && (fixture.keyboard || primary),
+    `${fixture.id}: onboarding controls were not rendered.`,
+  )
 
-  const status = fixture.orientation === "landscape" && value.insets.top === 0
-    ? sshShellRect(0, 0, Math.max(32, value.insets.left), value.viewport.height)
-    : sshShellRect(0, 0, value.viewport.width, Math.max(32, value.insets.top))
+  const status =
+    fixture.orientation === "landscape" && value.insets.top === 0
+      ? sshShellRect(0, 0, Math.max(32, value.insets.left), value.viewport.height)
+      : sshShellRect(0, 0, value.viewport.width, Math.max(32, value.insets.top))
   const controls = value.initial.controls.flatMap((item) => {
     const next = rect(item.rect)
     return next ? [next] : []
   })
-  const audit = menu
-    ? auditSshShellLayout({ menu, statusBar: status, addComputer: add, primary, controls })
-    : undefined
-  requireValue(audit?.menuClearsStatusBar, `${fixture.id}: hamburger intersects the measured status-bar region: ${JSON.stringify({ menu, status, insets: value.insets, viewport: value.viewport })}`)
+  const audit = menu ? auditSshShellLayout({ menu, statusBar: status, addComputer: add, primary, controls }) : undefined
+  requireValue(
+    audit?.menuClearsStatusBar,
+    `${fixture.id}: hamburger intersects the measured status-bar region: ${JSON.stringify({ menu, status, insets: value.insets, viewport: value.viewport })}`,
+  )
   requireValue(audit?.primaryClearsAddComputer, `${fixture.id}: Continue intersects Add computer.`)
-  requireValue(audit?.controlsMeetTouchTarget && controls.length > 0, `${fixture.id}: a rendered control is below 48dp.`)
-  requireValue(value.drawer.opened && value.drawer.openAriaHidden !== "true" && !value.drawer.openInert && value.drawer.openFocusInside, `${fixture.id}: drawer did not expose modal focus semantics when open: ${JSON.stringify(value.drawer)}`)
-  requireValue(value.drawer.closedAriaHidden === "true" && value.drawer.closedInert && value.drawer.closedFocusReturned, `${fixture.id}: closed drawer leaked focus or accessibility exposure: ${JSON.stringify(value.drawer)}`)
-  requireValue(value.device.orientation === fixture.orientation, `${fixture.id}: measured orientation is ${value.device.orientation}, expected ${fixture.orientation}.`)
-  requireValue(value.device.navigation === fixture.insets, `${fixture.id}: measured navigation mode is ${value.device.navigation}, expected ${fixture.insets}.`)
+  requireValue(
+    audit?.controlsMeetTouchTarget && controls.length > 0,
+    `${fixture.id}: a rendered control is below 48dp.`,
+  )
+  requireValue(
+    value.drawer.opened &&
+      value.drawer.openAriaHidden !== "true" &&
+      !value.drawer.openInert &&
+      value.drawer.openFocusInside,
+    `${fixture.id}: drawer did not expose modal focus semantics when open: ${JSON.stringify(value.drawer)}`,
+  )
+  requireValue(
+    value.drawer.closedAriaHidden === "true" && value.drawer.closedInert && value.drawer.closedFocusReturned,
+    `${fixture.id}: closed drawer leaked focus or accessibility exposure: ${JSON.stringify(value.drawer)}`,
+  )
+  requireValue(
+    value.device.orientation === fixture.orientation,
+    `${fixture.id}: measured orientation is ${value.device.orientation}, expected ${fixture.orientation}.`,
+  )
+  requireValue(
+    value.device.navigation === fixture.insets,
+    `${fixture.id}: measured navigation mode is ${value.device.navigation}, expected ${fixture.insets}.`,
+  )
 
   if (!fixture.keyboard) {
     const expectedPosition = fixture.primaryAction === "flow" ? "static" : "sticky"
-    requireValue(value.initial.primaryPosition === expectedPosition, `${fixture.id}: primary action position is ${value.initial.primaryPosition}.`)
+    requireValue(
+      value.initial.primaryPosition === expectedPosition,
+      `${fixture.id}: primary action position is ${value.initial.primaryPosition}.`,
+    )
     requireValue(bottomAdd && bottomPrimary, `${fixture.id}: bottom onboarding controls were not rendered.`)
-    requireValue(auditSshShellLayout({ menu, statusBar: status, addComputer: bottomAdd, primary: bottomPrimary, controls }).primaryClearsAddComputer, `${fixture.id}: bottom control audit was invalid.`)
-    requireValue(bottomPrimary.bottom <= value.viewport.height - value.insets.bottom + 1, `${fixture.id}: Continue is not reachable above the bottom inset: ${JSON.stringify({ bottomPrimary, viewport: value.viewport, insets: value.insets })}`)
+    requireValue(
+      auditSshShellLayout({ menu, statusBar: status, addComputer: bottomAdd, primary: bottomPrimary, controls })
+        .primaryClearsAddComputer,
+      `${fixture.id}: bottom control audit was invalid.`,
+    )
+    requireValue(
+      bottomPrimary.bottom <= value.viewport.height - value.insets.bottom + 1,
+      `${fixture.id}: Continue is not reachable above the bottom inset: ${JSON.stringify({ bottomPrimary, viewport: value.viewport, insets: value.insets })}`,
+    )
   }
 
   if (fixture.keyboard) {
     const input = rect(value.keyboard.input)
-    requireValue(value.keyboard.available && value.keyboard.focused && input && input.top >= -1 && input.bottom <= value.keyboard.visualHeight + 1, `${fixture.id}: the requested keyboard did not appear or the focused input is not visible: ${JSON.stringify(value.keyboard)}`)
+    requireValue(
+      value.keyboard.available &&
+        value.keyboard.focused &&
+        input &&
+        input.top >= -1 &&
+        input.bottom <= value.keyboard.visualHeight + 1,
+      `${fixture.id}: the requested keyboard did not appear or the focused input is not visible: ${JSON.stringify(value.keyboard)}`,
+    )
   }
 
   if (value.interactive.available) {
     requireValue(value.interactive.tabs.length >= 2, `${fixture.id}: interactive mode tabs are missing.`)
-    requireValue(value.interactive.tabs.filter((item) => item.selected === "true").length === 1, `${fixture.id}: interactive tab selection is invalid.`)
-    requireValue(value.interactive.inputLabel === "Prompt or interactive PTY input", `${fixture.id}: interactive prompt input is not labeled.`)
-    requireValue(value.interactive.controls.every((item) => {
-      const next = rect(item.rect)
-      return !!next && next.width >= 48 && next.height >= 48 && Number.parseFloat(item.minHeight) >= 48
-    }), `${fixture.id}: interactive PTY control is below the 48dp target.`)
+    requireValue(
+      value.interactive.tabs.filter((item) => item.selected === "true").length === 1,
+      `${fixture.id}: interactive tab selection is invalid.`,
+    )
+    requireValue(
+      value.interactive.inputLabel === "Prompt or interactive PTY input",
+      `${fixture.id}: interactive prompt input is not labeled.`,
+    )
+    requireValue(
+      value.interactive.controls.every((item) => {
+        const next = rect(item.rect)
+        return !!next && next.width >= 48 && next.height >= 48 && Number.parseFloat(item.minHeight) >= 48
+      }),
+      `${fixture.id}: interactive PTY control is below the 48dp target.`,
+    )
   }
 }
 
@@ -617,15 +677,20 @@ function restoreDeviceSettings() {
     adb("shell", "wm", "user-rotation", "lock", rotation)
   } else if (originalUserRotationMode === "free") adb("shell", "wm", "user-rotation", "free")
   else optional("shell", "wm", "user-rotation", "free")
-  if (/^\d+(?:\.\d+)?$/.test(originalFontScale)) adb("shell", "settings", "put", "system", "font_scale", originalFontScale)
+  if (/^\d+(?:\.\d+)?$/.test(originalFontScale))
+    adb("shell", "settings", "put", "system", "font_scale", originalFontScale)
   else optional("shell", "settings", "delete", "system", "font_scale")
-  if (/^\d+$/.test(originalAccelerometerRotation)) adb("shell", "settings", "put", "system", "accelerometer_rotation", originalAccelerometerRotation)
+  if (/^\d+$/.test(originalAccelerometerRotation))
+    adb("shell", "settings", "put", "system", "accelerometer_rotation", originalAccelerometerRotation)
   else optional("shell", "settings", "delete", "system", "accelerometer_rotation")
-  if (/^\d+$/.test(originalUserRotation)) adb("shell", "settings", "put", "system", "user_rotation", originalUserRotation)
+  if (/^\d+$/.test(originalUserRotation))
+    adb("shell", "settings", "put", "system", "user_rotation", originalUserRotation)
   else optional("shell", "settings", "delete", "system", "user_rotation")
-  if (/^\d+$/.test(originalNavigationMode)) adb("shell", "settings", "put", "secure", "navigation_mode", originalNavigationMode)
+  if (/^\d+$/.test(originalNavigationMode))
+    adb("shell", "settings", "put", "secure", "navigation_mode", originalNavigationMode)
   else optional("shell", "settings", "delete", "secure", "navigation_mode")
-  if (/^\d+$/.test(originalShowImeWithHardKeyboard)) adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", originalShowImeWithHardKeyboard)
+  if (/^\d+$/.test(originalShowImeWithHardKeyboard))
+    adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", originalShowImeWithHardKeyboard)
   else optional("shell", "settings", "delete", "secure", "show_ime_with_hard_keyboard")
 }
 
@@ -663,22 +728,46 @@ async function cleanup() {
       await waitForBridge(url)
       const stored = await snapshotStorage(url)
       const local = await snapshotLocalStorage(url)
-      requireValue(sameMap(storageSnapshot!, stored), `encrypted workspace storage differs after cleanup: ${JSON.stringify({ expected: Object.fromEntries(storageSnapshot!), actual: Object.fromEntries(stored) })}`)
+      requireValue(
+        sameMap(storageSnapshot!, stored),
+        `encrypted workspace storage differs after cleanup: ${JSON.stringify({ expected: Object.fromEntries(storageSnapshot!), actual: Object.fromEntries(stored) })}`,
+      )
       const expectedLocal = { ...localSnapshot! }
       const actualLocal = { ...local }
       if (!Object.hasOwn(expectedLocal, colorKey)) delete actualLocal[colorKey]
-      requireValue(sameRecord(expectedLocal, actualLocal), `WebView storage differs after cleanup: ${JSON.stringify({ expected: expectedLocal, actual: local })}`)
+      requireValue(
+        sameRecord(expectedLocal, actualLocal),
+        `WebView storage differs after cleanup: ${JSON.stringify({ expected: expectedLocal, actual: local })}`,
+      )
       restoreDeviceSettings()
       await wait(200)
       const size = adb("shell", "wm", "size")
-      requireValue((/Override size: (\d+x\d+)/.exec(size)?.[1] ?? undefined) === originalOverride, "display size differs after cleanup")
+      requireValue(
+        (/Override size: (\d+x\d+)/.exec(size)?.[1] ?? undefined) === originalOverride,
+        "display size differs after cleanup",
+      )
       const font = adb("shell", "settings", "get", "system", "font_scale")
       requireValue(font === originalFontScale, "font scale differs after cleanup")
-      requireValue(adb("shell", "settings", "get", "system", "accelerometer_rotation") === originalAccelerometerRotation, "accelerometer rotation differs after cleanup")
-      requireValue(adb("shell", "settings", "get", "system", "user_rotation") === originalUserRotation, "user rotation differs after cleanup")
-      requireValue(adb("shell", "wm", "user-rotation") === originalUserRotationMode, "window-manager rotation differs after cleanup")
-      requireValue(adb("shell", "settings", "get", "secure", "navigation_mode") === originalNavigationMode, "navigation mode differs after cleanup")
-      requireValue(adb("shell", "settings", "get", "secure", "show_ime_with_hard_keyboard") === originalShowImeWithHardKeyboard, "IME keyboard setting differs after cleanup")
+      requireValue(
+        adb("shell", "settings", "get", "system", "accelerometer_rotation") === originalAccelerometerRotation,
+        "accelerometer rotation differs after cleanup",
+      )
+      requireValue(
+        adb("shell", "settings", "get", "system", "user_rotation") === originalUserRotation,
+        "user rotation differs after cleanup",
+      )
+      requireValue(
+        adb("shell", "wm", "user-rotation") === originalUserRotationMode,
+        "window-manager rotation differs after cleanup",
+      )
+      requireValue(
+        adb("shell", "settings", "get", "secure", "navigation_mode") === originalNavigationMode,
+        "navigation mode differs after cleanup",
+      )
+      requireValue(
+        adb("shell", "settings", "get", "secure", "show_ime_with_hard_keyboard") === originalShowImeWithHardKeyboard,
+        "IME keyboard setting differs after cleanup",
+      )
     })
   }
   if (!originalRunning) optional("shell", "am", "force-stop", packageID)
@@ -688,7 +777,15 @@ async function cleanup() {
 }
 
 let failure: unknown
-const results: Array<{ id: string; scheme: string; orientation: string; fontScale: number; keyboard: string; interactive: string; screenshot: string }> = []
+const results: Array<{
+  id: string
+  scheme: string
+  orientation: string
+  fontScale: number
+  keyboard: string
+  interactive: string
+  screenshot: string
+}> = []
 
 try {
   currentURL = await launch()
@@ -741,4 +838,12 @@ try {
 const cleanupFailure = await cleanup()
 if (failure) throw failure
 if (cleanupFailure) throw new Error(`Emulator check passed its assertions but cleanup failed: ${cleanupFailure}`)
-console.log(JSON.stringify({ ok: true, matrix: results, cleanupVerified: true, interactivePty: results.some((item) => item.interactive === "available") ? "available" : "unavailable", note: "interactive PTY was not exercised because the checker has no live authenticated SSH fixture" }))
+console.log(
+  JSON.stringify({
+    ok: true,
+    matrix: results,
+    cleanupVerified: true,
+    interactivePty: results.some((item) => item.interactive === "available") ? "available" : "unavailable",
+    note: "interactive PTY was not exercised because the checker has no live authenticated SSH fixture",
+  }),
+)

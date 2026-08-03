@@ -561,10 +561,11 @@ export const layer = Layer.effect(
         })
         .pipe(
           Effect.flatMap((result) => {
-            if (result.type === "skipped") return Effect.sync(() => {
-              job.state = result.state
-              return undefined
-            })
+            if (result.type === "skipped")
+              return Effect.sync(() => {
+                job.state = result.state
+                return undefined
+              })
             return Effect.sync(() => {
               job.state = result.state
               for (const listener of job.listeners) Queue.offerUnsafe(listener, result.event)

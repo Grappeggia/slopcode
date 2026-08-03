@@ -76,9 +76,9 @@ export function SshShell(props: Props) {
         return
       }
       if (event.key !== "Tab" || !drawer) return
-      const items = [...drawer.querySelectorAll<HTMLElement>("button, a, input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter(
-        (item) => !item.hasAttribute("disabled") && item.getAttribute("aria-hidden") !== "true",
-      )
+      const items = [
+        ...drawer.querySelectorAll<HTMLElement>("button, a, input, select, textarea, [tabindex]:not([tabindex='-1'])"),
+      ].filter((item) => !item.hasAttribute("disabled") && item.getAttribute("aria-hidden") !== "true")
       if (!items.length) return
       if (!drawer.contains(document.activeElement)) {
         event.preventDefault()
@@ -107,10 +107,15 @@ export function SshShell(props: Props) {
   createEffect(() => {
     const value = open()
     if (value) {
-      returnFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : menu
+      returnFocus =
+        document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+          ? document.activeElement
+          : menu
       queueMicrotask(() => {
         if (!open()) return
-        drawer?.querySelector<HTMLElement>("button, a, input, select, textarea, [tabindex]:not([tabindex='-1'])")?.focus()
+        drawer
+          ?.querySelector<HTMLElement>("button, a, input, select, textarea, [tabindex]:not([tabindex='-1'])")
+          ?.focus()
       })
     } else if (wasOpen) {
       returnFocus?.focus()
@@ -123,8 +128,12 @@ export function SshShell(props: Props) {
     const value = scheme()
     document.documentElement.dataset.colorScheme = value
     document.documentElement.style.colorScheme = value
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", value === "dark" ? "#111318" : "#f7f7fb")
-    void getAndroidBridge()?.setSystemBars?.(value === "dark").catch(() => undefined)
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", value === "dark" ? "#111318" : "#f7f7fb")
+    void getAndroidBridge()
+      ?.setSystemBars?.(value === "dark")
+      .catch(() => undefined)
     writeScheme(value)
   })
 

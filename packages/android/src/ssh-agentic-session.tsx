@@ -329,7 +329,7 @@ export function SshAgenticSession(props: Props) {
                 <button
                   type="button"
                   onClick={() => void reconnect()}
-                      class="min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium"
+                  class="min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium"
                 >
                   Reconnect
                 </button>
@@ -447,7 +447,7 @@ export function SshAgenticSession(props: Props) {
                             type="button"
                             disabled={busy()}
                             onClick={() => choose(option)}
-                      class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+                            class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
                           >
                             {option}
                           </button>
@@ -543,7 +543,7 @@ export function SshAgenticSession(props: Props) {
                 <button
                   type="button"
                   onClick={() => void reconnect()}
-                class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
+                  class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
                 >
                   Reconnect
                 </button>

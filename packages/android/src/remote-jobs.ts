@@ -538,7 +538,9 @@ function terminal(type: string) {
 }
 
 export function remoteJobStatusTerminal(value: RemoteJobStatus) {
-  return value === "completed" || value === "failed" || value === "stopped" || value === "revoked" || value === "expired"
+  return (
+    value === "completed" || value === "failed" || value === "stopped" || value === "revoked" || value === "expired"
+  )
 }
 
 export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): RemoteJob {
@@ -547,12 +549,7 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
   if (seen.some((value) => value === current.cursor || current.seen?.includes(value))) return current
   const reviewEvent = event.type.endsWith("review.updated") || event.type.endsWith("comment")
   const retryEvent = event.type.endsWith("retry") || event.type.endsWith("retried")
-  if (
-    remoteJobStatusTerminal(current.status) &&
-    !reviewEvent &&
-    !retryEvent
-  )
-    return current
+  if (remoteJobStatusTerminal(current.status) && !reviewEvent && !retryEvent) return current
   const done = terminal(event.type)
   const approval =
     event.type.endsWith("approval") ||
@@ -585,7 +582,13 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
     ...(event.data.question ? { question: event.data.question } : {}),
     ...(event.data.review ? { review: event.data.review } : {}),
     ...(event.data.progress === undefined ? {} : { progress: event.data.progress }),
-    ...(seen.length ? { seen: [...(current.seen ?? []), ...seen].filter((value, index, values) => values.indexOf(value) === index).slice(-MAX_SEEN_EVENTS) } : {}),
+    ...(seen.length
+      ? {
+          seen: [...(current.seen ?? []), ...seen]
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .slice(-MAX_SEEN_EVENTS),
+        }
+      : {}),
     updatedAt: Date.now(),
   }
 }

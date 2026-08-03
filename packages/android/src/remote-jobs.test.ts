@@ -79,18 +79,33 @@ describe("Android durable remote jobs", () => {
 
     const revoked = applyRemoteJobEvent(
       approval,
-      parseRemoteJobEvent({ id: "evt_revoked", jobID: "job_1", type: "job.revoked", data: { message: "Access revoked" } })!,
+      parseRemoteJobEvent({
+        id: "evt_revoked",
+        jobID: "job_1",
+        type: "job.revoked",
+        data: { message: "Access revoked" },
+      })!,
     )
     expect(revoked.status).toBe("revoked")
     expect(revoked.error).toBe("Access revoked")
 
     const expired = applyRemoteJobEvent(
       approval,
-      parseRemoteJobEvent({ id: "evt_expired", jobID: "job_1", type: "job.expired", data: { message: "Approval expired" } })!,
+      parseRemoteJobEvent({
+        id: "evt_expired",
+        jobID: "job_1",
+        type: "job.expired",
+        data: { message: "Approval expired" },
+      })!,
     )
     expect(expired.status).toBe("expired")
     expect(expired.error).toBe("Approval expired")
-    expect(applyRemoteJobEvent(expired, parseRemoteJobEvent({ id: "evt_late", jobID: "job_1", type: "job.progress", data: {} })!)).toEqual(expired)
+    expect(
+      applyRemoteJobEvent(
+        expired,
+        parseRemoteJobEvent({ id: "evt_late", jobID: "job_1", type: "job.progress", data: {} })!,
+      ),
+    ).toEqual(expired)
   })
 
   test("ignores duplicate cursors and rejects untrusted event envelopes", () => {
@@ -181,7 +196,13 @@ describe("Android durable remote jobs", () => {
     expect(
       applyRemoteJobEvent(
         retried,
-        parseRemoteJobEvent({ id: "evt_retry", cursor: "evt_retry", jobID: job.id, type: "job.progress", data: { output: "replayed" } })!,
+        parseRemoteJobEvent({
+          id: "evt_retry",
+          cursor: "evt_retry",
+          jobID: job.id,
+          type: "job.progress",
+          data: { output: "replayed" },
+        })!,
       ),
     ).toEqual(retried)
   })
@@ -189,15 +210,33 @@ describe("Android durable remote jobs", () => {
   test("rejects an out-of-order replayed event ID after newer events", () => {
     const first = applyRemoteJobEvent(
       job,
-      parseRemoteJobEvent({ id: "evt_first", cursor: "cur_first", jobID: job.id, type: "job.progress", data: { output: "first" } })!,
+      parseRemoteJobEvent({
+        id: "evt_first",
+        cursor: "cur_first",
+        jobID: job.id,
+        type: "job.progress",
+        data: { output: "first" },
+      })!,
     )
     const next = applyRemoteJobEvent(
       first,
-      parseRemoteJobEvent({ id: "evt_next", cursor: "cur_next", jobID: job.id, type: "job.progress", data: { output: " next" } })!,
+      parseRemoteJobEvent({
+        id: "evt_next",
+        cursor: "cur_next",
+        jobID: job.id,
+        type: "job.progress",
+        data: { output: " next" },
+      })!,
     )
     const replay = applyRemoteJobEvent(
       next,
-      parseRemoteJobEvent({ id: "evt_first", cursor: "cur_replay", jobID: job.id, type: "job.progress", data: { output: " replay" } })!,
+      parseRemoteJobEvent({
+        id: "evt_first",
+        cursor: "cur_replay",
+        jobID: job.id,
+        type: "job.progress",
+        data: { output: " replay" },
+      })!,
     )
 
     expect(replay).toEqual(next)

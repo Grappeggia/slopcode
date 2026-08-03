@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { readSshWorkspace, normalizeSshWorkspace, rememberSshFolder, writeSshWorkspace, type SshWorkspaceState } from "./ssh-workspace-state"
+import {
+  readSshWorkspace,
+  normalizeSshWorkspace,
+  rememberSshFolder,
+  writeSshWorkspace,
+  type SshWorkspaceState,
+} from "./ssh-workspace-state"
 
 function storage() {
   const values = new Map<string, string>()
@@ -44,10 +50,12 @@ describe("direct SSH workspace state", () => {
 
   test("persists the bounded recent-folder model used by onboarding", async () => {
     const secure = storage()
-    const next = ["/home/agent/temp/one", "/home/agent/temp/two", "/home/agent/temp/three", "/home/agent/temp/four"].reduce<SshWorkspaceState>(
-      (current, folder) => rememberSshFolder(current, folder),
-      state,
-    )
+    const next = [
+      "/home/agent/temp/one",
+      "/home/agent/temp/two",
+      "/home/agent/temp/three",
+      "/home/agent/temp/four",
+    ].reduce<SshWorkspaceState>((current, folder) => rememberSshFolder(current, folder), state)
 
     await writeSshWorkspace(secure, next)
 

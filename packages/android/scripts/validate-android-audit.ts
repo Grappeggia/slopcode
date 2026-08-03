@@ -71,9 +71,10 @@ function setting(namespace: string, key: string) {
 }
 
 function restore(namespace: string, key: string, value: string) {
-  const result = value && value !== "null"
-    ? adb("shell", "settings", "put", namespace, key, value)
-    : adb("shell", "settings", "delete", namespace, key)
+  const result =
+    value && value !== "null"
+      ? adb("shell", "settings", "put", namespace, key, value)
+      : adb("shell", "settings", "delete", namespace, key)
   if (result.code !== 0) throw new Error(detail(result, `Could not restore ${namespace}/${key}`))
 }
 
@@ -102,7 +103,9 @@ const report: {
   serial: serial ?? "default",
   package: packageID,
   screenshots: [],
-  checks: Object.fromEntries(checks.map((name) => [name, { status: "failed", detail: "Skipped after an earlier validation failure." }])),
+  checks: Object.fromEntries(
+    checks.map((name) => [name, { status: "failed", detail: "Skipped after an earlier validation failure." }]),
+  ),
 }
 
 const missing = required.filter((key) => !Bun.env[key])
@@ -112,9 +115,10 @@ let night: string | undefined
 
 function commandCheck(name: string, command: string[]) {
   const result = run(command)
-  report.checks[name] = result.code === 0
-    ? { status: "passed" }
-    : { status: "failed", detail: detail(result, `${command.join(" ")} failed`) }
+  report.checks[name] =
+    result.code === 0
+      ? { status: "passed" }
+      : { status: "failed", detail: detail(result, `${command.join(" ")} failed`) }
   return result.code === 0
 }
 
@@ -130,15 +134,28 @@ try {
     unavailable("webBuild", "Skipped by ANDROID_AUDIT_BUILD=0; using the existing debug APK.")
     unavailable("debugBuild", "Skipped by ANDROID_AUDIT_BUILD=0; using the existing debug APK.")
   }
-  if (build && !web) report.checks.debugBuild = { status: "failed", detail: "Web build failed, so the debug APK was not built." }
+  if (build && !web)
+    report.checks.debugBuild = { status: "failed", detail: "Web build failed, so the debug APK was not built." }
 
   const unit = [
     ["notificationPermission", "dev.slopcode.android.NotificationPermissionTest"],
     ["notificationActions", "dev.slopcode.android.RemoteJobNotificationTest"],
-    ["terminalEvents", "dev.slopcode.android.RemoteJobModelsTest.revokedAndExpiredEventsAreTerminalAndUnknownEventsDoNotReenableApproval"],
-    ["exactSessionLink", "dev.slopcode.android.DeepLinkDeliveryTest.notificationHrefRetainsPendingApprovalSessionWhenIntentDataIsAbsent"],
-    ["duplicateLinkDelivery", "dev.slopcode.android.DeepLinkDeliveryTest.duplicateNotificationTapDeliversOneExactSessionLink"],
-    ["cursorReplayWake", "dev.slopcode.android.RemoteJobModelsTest.offlineReconnectResumesFromCursorAndIgnoresDuplicateEvent"],
+    [
+      "terminalEvents",
+      "dev.slopcode.android.RemoteJobModelsTest.revokedAndExpiredEventsAreTerminalAndUnknownEventsDoNotReenableApproval",
+    ],
+    [
+      "exactSessionLink",
+      "dev.slopcode.android.DeepLinkDeliveryTest.notificationHrefRetainsPendingApprovalSessionWhenIntentDataIsAbsent",
+    ],
+    [
+      "duplicateLinkDelivery",
+      "dev.slopcode.android.DeepLinkDeliveryTest.duplicateNotificationTapDeliversOneExactSessionLink",
+    ],
+    [
+      "cursorReplayWake",
+      "dev.slopcode.android.RemoteJobModelsTest.offlineReconnectResumesFromCursorAndIgnoresDuplicateEvent",
+    ],
     ["fcmPayloadWake", "dev.slopcode.android.RemoteJobPushTest"],
   ] as const
   unit.forEach(([name, test]) => commandCheck(name, ["./gradlew", ":app:testDebugUnitTest", "--tests", test]))
@@ -162,10 +179,11 @@ try {
       rotation = setting("system", "accelerometer_rotation")
       userRotation = setting("system", "user_rotation")
       night = setting("secure", "ui_night_mode")
-      const instrumentation = commandCheck(
-        "activityResolution",
-        ["./gradlew", ":app:connectedDebugAndroidTest", "-Pandroid.testInstrumentationRunnerArguments.class=dev.slopcode.android.SshTransportInstrumentedTest#deepLinkIntentResolvesToMainActivity"],
-      )
+      const instrumentation = commandCheck("activityResolution", [
+        "./gradlew",
+        ":app:connectedDebugAndroidTest",
+        "-Pandroid.testInstrumentationRunnerArguments.class=dev.slopcode.android.SshTransportInstrumentedTest#deepLinkIntentResolvesToMainActivity",
+      ])
       const matrix = [
         ["portrait-light", "portrait", false],
         ["portrait-dark", "portrait", true],
@@ -183,7 +201,8 @@ try {
       } catch (cause) {
         report.checks.screenshots = { status: "failed", detail: cause instanceof Error ? cause.message : String(cause) }
       }
-      if (!instrumentation) report.checks.activityResolution = { status: "failed", detail: report.checks.activityResolution.detail }
+      if (!instrumentation)
+        report.checks.activityResolution = { status: "failed", detail: report.checks.activityResolution.detail }
     }
   }
 
@@ -195,17 +214,22 @@ try {
     unavailable("liveSsh", `Missing protected SSH configuration: ${missing.join(", ")}`)
   } else if (Bun.env.ANDROID_AUDIT_RUN_LIVE_SSH === "1") {
     const result = run(["bash", "scripts/run-ssh-e2e-all-agents.sh"])
-    report.checks.liveSsh = result.code === 0
-      ? { status: "passed" }
-      : { status: "failed", detail: detail(result, "Configured live SSH harness failed.") }
+    report.checks.liveSsh =
+      result.code === 0
+        ? { status: "passed" }
+        : { status: "failed", detail: detail(result, "Configured live SSH harness failed.") }
     await Bun.write(join(root, "live-ssh.log"), safe(`${result.output}\n${result.error}`))
   } else {
-    unavailable("liveSsh", "Protected SSH configuration is present but live execution is disabled; set ANDROID_AUDIT_RUN_LIVE_SSH=1.")
+    unavailable(
+      "liveSsh",
+      "Protected SSH configuration is present but live execution is disabled; set ANDROID_AUDIT_RUN_LIVE_SSH=1.",
+    )
   }
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause)
   Object.entries(report.checks).forEach(([name, value]) => {
-    if (value.status === "failed" && value.detail?.startsWith("Skipped after")) report.checks[name] = { status: "failed", detail: message }
+    if (value.status === "failed" && value.detail?.startsWith("Skipped after"))
+      report.checks[name] = { status: "failed", detail: message }
   })
 } finally {
   try {
@@ -213,7 +237,8 @@ try {
     if (userRotation !== undefined) restore("system", "user_rotation", userRotation)
     if (night !== undefined) {
       const result = adb("shell", "cmd", "uimode", "night", night == "2" ? "yes" : "no")
-      if (result.code !== 0) report.checks.screenshots = { status: "failed", detail: detail(result, "Could not restore night mode.") }
+      if (result.code !== 0)
+        report.checks.screenshots = { status: "failed", detail: detail(result, "Could not restore night mode.") }
     }
   } catch (cause) {
     report.checks.screenshots = { status: "failed", detail: cause instanceof Error ? cause.message : String(cause) }
@@ -225,6 +250,10 @@ try {
 
 console.log(JSON.stringify({ report: join(root, "report.json"), ...report }))
 const unavailableAllowed = Bun.env.ANDROID_AUDIT_ALLOW_UNAVAILABLE === "1"
-if (Object.values(report.checks).some((check) => check.status === "failed" || (!unavailableAllowed && check.status === "unavailable"))) {
+if (
+  Object.values(report.checks).some(
+    (check) => check.status === "failed" || (!unavailableAllowed && check.status === "unavailable"),
+  )
+) {
   process.exitCode = 1
 }
