@@ -21,6 +21,7 @@ internal class RemoteJobService : Service() {
   private lateinit var http: RemoteJobHttp
   private val executor = Executors.newCachedThreadPool()
   private val active = ConcurrentHashMap.newKeySet<String>()
+  private val actions = ConcurrentHashMap.newKeySet<String>()
 
   override fun onCreate() {
     super.onCreate()
@@ -77,40 +78,47 @@ internal class RemoteJobService : Service() {
 
   private fun scheduleAction(id: String, action: String, payload: org.json.JSONObject? = null) {
     if (!RemoteJobAction.valid(action)) return
+    val key = "$id:$action"
+    if (!actions.add(key)) return
     executor.execute {
-      val job = store.get(id) ?: return@execute
-      if (action == RemoteJobAction.STOP) {
-        runCatching { http.action(job, action, payload) }
-        store.update(id, event(id, "job.stopped", mapOf("message" to "Stopped by user"))) {
-          it.copy(status = RemoteJobStatus.STOPPED, error = "Stopped by user", updatedAt = System.currentTimeMillis())
+      try {
+        val job = store.get(id) ?: return@execute
+        if (!remoteJobNotificationActionAllowed(job, action)) return@execute
+        if (action == RemoteJobAction.STOP) {
+          runCatching { http.action(job, action, payload) }
+          store.update(id, event(id, "job.stopped", mapOf("message" to "Stopped by user"))) {
+            it.copy(status = RemoteJobStatus.STOPPED, error = "Stopped by user", updatedAt = System.currentTimeMillis())
+          }?.let(::notifyJob)
+          return@execute
         }
-        return@execute
-      }
-      val accepted = runCatching { http.action(job, action, payload) }.getOrDefault(false)
-      if (!accepted) {
-        store.update(id, event(id, "job.failed", mapOf("error" to "Remote action failed"))) {
-          it.copy(status = RemoteJobStatus.FAILED, error = "Remote action failed", updatedAt = System.currentTimeMillis())
+        val accepted = runCatching { http.action(job, action, payload) }.getOrDefault(false)
+        if (!accepted) {
+          store.update(id, event(id, "job.failed", mapOf("error" to "Remote action failed"))) {
+            it.copy(status = RemoteJobStatus.FAILED, error = "Remote action failed", updatedAt = System.currentTimeMillis())
+          }?.let(::notifyJob)
+          return@execute
         }
-        return@execute
-      }
-      if (action == RemoteJobAction.RETRY) {
-        store.update(id, event(id, "job.retry", mapOf("message" to "Retrying remote job"))) {
-          it.copy(
-            status = RemoteJobStatus.RETRYING,
-            started = true,
-            error = null,
-            approval = null,
-            question = null,
-            updatedAt = System.currentTimeMillis(),
-          )
+        if (action == RemoteJobAction.RETRY) {
+          store.update(id, event(id, "job.retry", mapOf("message" to "Retrying remote job"))) {
+            it.copy(
+              status = RemoteJobStatus.RETRYING,
+              started = true,
+              error = null,
+              approval = null,
+              question = null,
+              updatedAt = System.currentTimeMillis(),
+            )
+          }?.let(::notifyJob)
+          schedule(id)
+          return@execute
         }
+        store.update(id, event(id, "job.progress", mapOf("message" to "Remote action accepted"))) {
+          it.copy(status = RemoteJobStatus.RUNNING, approval = null, question = null, updatedAt = System.currentTimeMillis())
+        }?.let(::notifyJob)
         schedule(id)
-        return@execute
+      } finally {
+        actions.remove(key)
       }
-      store.update(id, event(id, "job.progress", mapOf("message" to "Remote action accepted"))) {
-        it.copy(status = RemoteJobStatus.RUNNING, approval = null, question = null, updatedAt = System.currentTimeMillis())
-      }
-      schedule(id)
     }
   }
 
@@ -218,15 +226,10 @@ internal class RemoteJobService : Service() {
       .setOngoing(active)
       .setOnlyAlertOnce(job.status == RemoteJobStatus.RUNNING)
     job.progress?.let { builder.setProgress(100, (it * 100).toInt().coerceIn(0, 100), false) }
-    when (job.status) {
-      RemoteJobStatus.WAITING_APPROVAL -> {
-        builder.addAction(action("Approve", job, RemoteJobAction.APPROVE))
-        builder.addAction(action("Reject", job, RemoteJobAction.REJECT))
-        builder.addAction(action("Stop", job, RemoteJobAction.STOP))
-      }
-      RemoteJobStatus.FAILED -> builder.addAction(action("Retry", job, RemoteJobAction.RETRY))
-      RemoteJobStatus.QUEUED, RemoteJobStatus.RUNNING, RemoteJobStatus.WAITING_QUESTION, RemoteJobStatus.RETRYING ->
-        builder.addAction(action("Stop", job, RemoteJobAction.STOP))
+    remoteJobNotificationActions(job).forEach { value ->
+      builder.addAction(
+        if (value == RemoteJobAction.ANSWER) openAction("Answer", job) else action(value.replaceFirstChar(Char::titlecase), job, value),
+      )
     }
     if (RemoteJobStatus.terminal(job.status)) builder.setTimeoutAfter(15 * 60 * 1000L)
     runCatching { manager.notify(notificationID(job.id), builder.build()) }
@@ -244,6 +247,12 @@ internal class RemoteJobService : Service() {
       },
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     ),
+  ).build()
+
+  private fun openAction(label: String, job: RemoteJobState) = NotificationCompat.Action.Builder(
+    0,
+    label,
+    openIntent(job),
   ).build()
 
   private fun openIntent(job: RemoteJobState) = PendingIntent.getActivity(
