@@ -33,7 +33,7 @@ Cleanup follow-up commit: `b8011da164507fb6c885d9d6f31675e91952f019` (`fix(andro
 
 Leave follow-up commit: `542bde35bb02933a46d3a595421d8fc04ba04be6` (`fix(android): clear SSH state before disconnect`).
 
-Leave-race coverage follow-up commit: pending.
+Leave-race coverage follow-up commit: `200c2a2987cae0ceda6aa42e7c391f42c4c44eb6` (`test(android): cover SSH leave reconnect race`).
 
 ## Blockers
 
