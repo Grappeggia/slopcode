@@ -21,7 +21,7 @@
 
 ## Commit
 
-Pending.
+`5a9c4f1ea263c2f0160b9d3644983b4823c0040e` (`fix(android): reset SSH onboarding state safely`).
 
 ## Blockers
 
