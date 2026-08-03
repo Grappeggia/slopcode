@@ -1,5 +1,8 @@
 package dev.slopcode.android
 
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,6 +21,23 @@ import java.nio.charset.StandardCharsets
 
 @RunWith(AndroidJUnit4::class)
 class SshTransportInstrumentedTest {
+  @Test
+  fun deepLinkIntentResolvesToMainActivity() {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("slopcode://remote-session?job=job_e2e&session=ses_e2e"))
+      .setClassName(context().packageName, MainActivity::class.java.name)
+      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val expected = "slopcode://remote-session?job=job_e2e&session=ses_e2e"
+    assertEquals(MainActivity::class.java.name, intent.resolveActivity(context().packageManager)?.className)
+    assertEquals(expected, intent.dataString)
+    assertTrue(
+      context().packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY).any { info ->
+        info.activityInfo.packageName == context().packageName &&
+          info.activityInfo.name == MainActivity::class.java.name &&
+          info.activityInfo.exported
+      },
+    )
+  }
+
   @Test
   fun firstUseRequiresTrustAndBothSupportedAuthenticationMethodsWork() {
     val fixture = fixture()
@@ -58,7 +78,13 @@ class SshTransportInstrumentedTest {
         assertFalse("Dotfiles must be hidden by default.", entry.optString("name").startsWith("."))
         assertTrue("SFTP entries must remain within the requested parent.", entry.optString("path").startsWith("${fixture.directory}/"))
       }
-      assertEquals(fixture.directory, ssh.list(fixture.directory, showHidden = true).optString("path"))
+      assertFalse("The hidden sentinel must be absent from the default SFTP listing.", entries(hidden).any { it.optString("name") == HIDDEN_SENTINEL })
+      val revealed = ssh.list(fixture.directory, showHidden = true)
+      assertEquals(fixture.directory, revealed.optString("path"))
+      val sentinel = entries(revealed).firstOrNull { it.optString("name") == HIDDEN_SENTINEL }
+      assertNotNull("Create $HIDDEN_SENTINEL in $REMOTE_ROOT before running the live harness.", sentinel)
+      assertEquals("file", sentinel?.optString("type"))
+      assertEquals("${fixture.directory}/$HIDDEN_SENTINEL", sentinel?.optString("path"))
       val invalid = runCatching { ssh.selectWorkspace("$REMOTE_ROOT/../escape") }.exceptionOrNull()
       assertTrue(invalid is SshTransportException)
       assertEquals("invalid_workspace", (invalid as SshTransportException).code)
@@ -214,25 +240,61 @@ class SshTransportInstrumentedTest {
   }
 
   @Test
-  fun networkLossFailsClosedWhenTheHarnessHasDisabledNetworking() {
+  fun networkLossDropsActivePtyThenReconnectsAndResumes() {
     val fixture = fixture()
-    if (arguments().getString("sshNetworkLoss") != "true") return
-    val ssh = transport()
+    if (arguments().getString("sshNetworkLoss") != "true") {
+      fixtureError("The live SSH harness must pass sshNetworkLoss=true; network-loss coverage cannot be skipped.")
+    }
+    val ssh = connected(fixture)
+    var offline = false
     try {
-      val error = runCatching { ssh.connect(fixture.connection("privateKey", fixture.privateKey).toString()) }.exceptionOrNull()
-      assertTrue(
-        "The emulator still reached the SSH fixture while the harness declared networking disabled.",
-        error is SshTransportException,
+      assertEquals(fixture.directory, ssh.selectWorkspace(fixture.directory).optString("path"))
+      assertPreflight(ssh, SshAgent.SLOPCODE, fixture)
+      val active = ssh.start(start("interactive", SshAgent.SLOPCODE, fixture))
+      assertSession(active)
+      offline = true
+      shell("svc wifi disable")
+      shell("svc data disable")
+      shell("settings put global airplane_mode_on 1")
+      shell("am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true")
+
+      val probe = transport()
+      try {
+        val error = runCatching { probe.connect(fixture.connection("privateKey", fixture.privateKey).toString()) }.exceptionOrNull()
+        assertTrue("The emulator still reached the SSH fixture after network isolation.", error is SshTransportException)
+        assertEquals("network_error", (error as SshTransportException).code)
+      } finally {
+        probe.close()
+      }
+
+      ssh.disconnect()
+      assertFalse(ssh.status().optBoolean("remoteTransport"))
+      restoreNetwork()
+      offline = false
+      Thread.sleep(NETWORK_RESTORE_DELAY_MS)
+      assertConnected(ssh.connect(fixture.connection("privateKey", fixture.privateKey).toString()))
+      assertEquals(fixture.directory, ssh.selectWorkspace(fixture.directory).optString("path"))
+      val events = events()
+      val resumed = ssh.start(
+        start(
+          "prompt",
+          SshAgent.SLOPCODE,
+          fixture,
+          "Reply with exactly SSH_NETWORK_RESUME_OK and then exit. Do not write files or run commands.",
+        ),
       )
-      assertEquals("network_error", (error as SshTransportException).code)
+      assertSession(resumed)
+      waitForOutput(events, resumed.optString("id"), "SSH_NETWORK_RESUME_OK")
+      assertEquals(0, waitForCompletion(events, resumed.optString("id")))
     } finally {
+      if (offline) restoreNetwork()
       ssh.close()
     }
   }
 
   private fun fixture(): Fixture {
     val args = arguments()
-    val missing = listOf("sshE2E", "sshHost", "sshUser", "sshPort", "sshDirectory", "sshPrivateKeyFile", "sshPasswordFile", "sshSetupAgent")
+    val missing = listOf("sshE2E", "sshHost", "sshUser", "sshPort", "sshDirectory", "sshPrivateKeyFile", "sshPasswordFile", "sshSetupAgent", "sshNetworkLossConfigured")
       .filter { args.getString(it).isNullOrBlank() }
     if (missing.isNotEmpty()) {
       fixtureError(
@@ -240,6 +302,7 @@ class SshTransportInstrumentedTest {
       )
     }
     if (args.getString("sshE2E") != "true") fixtureError("Live SSH E2E requires sshE2E=true from the harness.")
+    if (args.getString("sshNetworkLossConfigured") != "true") fixtureError("Live SSH E2E requires the mandatory network-loss scenario to be configured.")
     val directory = args.getString("sshDirectory")!!.trim()
     if (directory != REMOTE_ROOT) fixtureError("Live SSH E2E may only use $REMOTE_ROOT; received an unsupported remote directory.")
     val port = args.getString("sshPort")!!.toIntOrNull()?.takeIf { it in 1..65_535 }
@@ -353,6 +416,17 @@ class SshTransportInstrumentedTest {
 
   private fun context() = InstrumentationRegistry.getInstrumentation().targetContext
 
+  private fun shell(command: String) {
+    InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).close()
+  }
+
+  private fun restoreNetwork() {
+    shell("settings put global airplane_mode_on 0")
+    shell("am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false")
+    shell("svc data enable")
+    shell("svc wifi enable")
+  }
+
   private fun fixtureError(message: String): Nothing = throw AssertionError(message)
 
   private data class Fixture(
@@ -392,6 +466,8 @@ class SshTransportInstrumentedTest {
   companion object {
     private const val REMOTE_ROOT = "/home/agent/temp"
     private const val FIXTURE_DIR = "ssh-e2e"
+    private const val HIDDEN_SENTINEL = ".slopcode-android-e2e-sentinel"
+    private const val NETWORK_RESTORE_DELAY_MS = 2_000L
     private const val SESSION_TIMEOUT_MS = 120_000L
     private val SAFE_FIXTURE_FILE = Regex("[A-Za-z0-9._-]{1,96}")
     private val eventBuffer = mutableListOf<JSONObject>()

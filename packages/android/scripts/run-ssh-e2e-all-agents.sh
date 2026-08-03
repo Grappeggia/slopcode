@@ -24,6 +24,7 @@ require SSH_PASSWORD_FILE
 require SSH_E2E_SETUP_AGENT
 require SSH_E2E_ALLOW_INSTALL
 require SSH_E2E_CONFIRM
+require SSH_E2E_NETWORK_LOSS
 
 if [[ "$SSH_E2E_CONFIRM" != "live-ssh" ]]; then
   echo "Set SSH_E2E_CONFIRM=live-ssh to acknowledge real remote CLI activity." >&2
@@ -32,6 +33,11 @@ fi
 
 if [[ "$SSH_E2E_ALLOW_INSTALL" != "1" ]]; then
   echo "Set SSH_E2E_ALLOW_INSTALL=1 because this release-candidate harness tests the selected CLI installer." >&2
+  exit 2
+fi
+
+if [[ "$SSH_E2E_NETWORK_LOSS" != "1" ]]; then
+  echo "Set SSH_E2E_NETWORK_LOSS=1. The live harness always executes the real emulator network-loss scenario." >&2
   exit 2
 fi
 
@@ -86,41 +92,47 @@ fi
 
 cleanup() {
   adb shell run-as "$package" rm -rf "files/ssh-e2e" >/dev/null 2>&1 || true
-  adb shell rm -f "/data/local/tmp/slopcode-ssh-e2e-$key_name" "/data/local/tmp/slopcode-ssh-e2e-$password_name" >/dev/null 2>&1 || true
-  if [[ "${network_disabled:-false}" == true ]]; then
-    adb shell svc data enable >/dev/null 2>&1 || true
-    adb shell svc wifi enable >/dev/null 2>&1 || true
-  fi
 }
 trap cleanup EXIT
 
+stage_secret() {
+  local source=$1
+  local name=$2
+  adb shell run-as "$package" sh -c "umask 077; mkdir -p files/ssh-e2e; cat > files/ssh-e2e/$name" <"$source"
+}
+
 run() {
   local method=$1
+  local network_loss=${2:-false}
   local output
-  shift
   output=$(mktemp)
   echo "Running $method"
-  if ! adb shell am instrument -w -r \
-    -e class "$test_class#$method" \
-    -e sshE2E true \
-    -e sshHost "$SSH_HOST" \
-    -e sshPort "$port" \
-    -e sshUser "$SSH_USER" \
-    -e sshDirectory "$remote_root" \
-    -e sshPrivateKeyFile "$key_name" \
-    -e sshPasswordFile "$password_name" \
-    -e sshSetupAgent "$SSH_E2E_SETUP_AGENT" \
-    -e sshAllowInstall true \
-    "$@" \
-    "$package.test/androidx.test.runner.AndroidJUnitRunner" >"$output" 2>&1; then
+  local -a args=(
+    :app:connectedDebugAndroidTest
+    "-Pandroid.testInstrumentationRunnerArguments.class=$test_class#$method"
+    "-Pandroid.testInstrumentationRunnerArguments.sshE2E=true"
+    "-Pandroid.testInstrumentationRunnerArguments.sshHost=$SSH_HOST"
+    "-Pandroid.testInstrumentationRunnerArguments.sshPort=$port"
+    "-Pandroid.testInstrumentationRunnerArguments.sshUser=$SSH_USER"
+    "-Pandroid.testInstrumentationRunnerArguments.sshDirectory=$remote_root"
+    "-Pandroid.testInstrumentationRunnerArguments.sshPrivateKeyFile=$key_name"
+    "-Pandroid.testInstrumentationRunnerArguments.sshPasswordFile=$password_name"
+    "-Pandroid.testInstrumentationRunnerArguments.sshSetupAgent=$SSH_E2E_SETUP_AGENT"
+    "-Pandroid.testInstrumentationRunnerArguments.sshAllowInstall=true"
+    "-Pandroid.testInstrumentationRunnerArguments.sshNetworkLossConfigured=true"
+    "-Pandroid.testInstrumentationRunnerArguments.sshNetworkLoss=$network_loss"
+  )
+  if ! ./gradlew "${args[@]}" >"$output" 2>&1; then
     sed -n '1,240p' "$output" >&2
     rm -f "$output"
     return 1
   fi
-  if ! rg -q '^INSTRUMENTATION_CODE: 0$' "$output" || rg -q 'FAILURES!!!|INSTRUMENTATION_FAILED' "$output"; then
+  local result
+  result=$(find app/build/outputs/androidTest-results/connected/debug -maxdepth 1 -type f -name 'TEST-*.xml' -print -quit)
+  if [[ -z "$result" ]] || ! rg -q "<testsuite [^>]*failures=\"0\" errors=\"0\" skipped=\"0\"" "$result" || ! rg -q "testcase name=\"$method\"" "$result"; then
     sed -n '1,240p' "$output" >&2
     rm -f "$output"
-    echo "Android instrumentation did not report a successful test result for $method." >&2
+    echo "Android connected instrumentation did not report a successful result for $method." >&2
     return 1
   fi
   sed -n '1,160p' "$output"
@@ -141,13 +153,8 @@ fi
 adb install -r "$app_apk" >/dev/null
 adb install -r -t "$test_apk" >/dev/null
 adb shell pm clear "$package" >/dev/null
-adb push "$SSH_KEY_FILE" "/data/local/tmp/slopcode-ssh-e2e-$key_name" >/dev/null
-adb push "$SSH_PASSWORD_FILE" "/data/local/tmp/slopcode-ssh-e2e-$password_name" >/dev/null
-adb shell run-as "$package" mkdir -p "files/ssh-e2e"
-adb shell run-as "$package" cp "/data/local/tmp/slopcode-ssh-e2e-$key_name" "files/ssh-e2e/$key_name"
-adb shell run-as "$package" cp "/data/local/tmp/slopcode-ssh-e2e-$password_name" "files/ssh-e2e/$password_name"
-adb shell run-as "$package" chmod 600 "files/ssh-e2e/$key_name" "files/ssh-e2e/$password_name"
-adb shell rm -f "/data/local/tmp/slopcode-ssh-e2e-$key_name" "/data/local/tmp/slopcode-ssh-e2e-$password_name"
+stage_secret "$SSH_KEY_FILE" "$key_name"
+stage_secret "$SSH_PASSWORD_FILE" "$password_name"
 
 echo "Running real native SSH transport coverage against $SSH_HOST:$port. Remote artifacts are limited to $remote_root."
 run firstUseRequiresTrustAndBothSupportedAuthenticationMethodsWork
@@ -163,20 +170,11 @@ echo "Force-stopping the app before reconnecting with Keystore-backed credential
 adb shell am force-stop "$package"
 run storedCredentialsReconnectAfterProcessDeath
 
-echo "Launching the exact-session notification deep-link smoke path after process restart."
-adb shell am start -W -n "$package/.MainActivity" -a android.intent.action.VIEW \
-  -d "slopcode://remote-session?job=job_e2e&session=ses_e2e" >/dev/null
+echo "Launching and asserting the exact-session notification deep-link after process restart."
+run deepLinkIntentResolvesToMainActivity
 
-if [[ "${SSH_E2E_NETWORK_LOSS:-1}" == "1" ]]; then
-  echo "Disabling emulator Wi-Fi and mobile data to verify the native SSH network-loss failure path."
-  network_disabled=true
-  adb shell svc wifi disable
-  adb shell svc data disable
-  run networkLossFailsClosedWhenTheHarnessHasDisabledNetworking -e sshNetworkLoss true
-  adb shell svc data enable
-  adb shell svc wifi enable
-  network_disabled=false
-fi
+echo "The mandatory emulator network-loss scenario drops an active PTY and reconnects after restoration."
+run networkLossDropsActivePtyThenReconnectsAndResumes true
 
 echo "Running deterministic local Android model coverage for persisted jobs, reconnect cursors, duplicate events, and notification actions."
 ./gradlew :app:testDebugUnitTest --tests dev.slopcode.android.RemoteJobModelsTest --tests dev.slopcode.android.SshModelsTest
