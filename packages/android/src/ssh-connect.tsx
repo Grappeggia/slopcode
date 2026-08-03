@@ -19,6 +19,7 @@ import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { SshShell } from "./ssh-shell"
 import {
   connectedSshWorkspace,
+  createSshConnectionGate,
   createSshCredentialLoader,
   createSshOnboardingGeneration,
   resetSshOnboarding,
@@ -140,6 +141,7 @@ export function SshConnect(props: Props) {
   const [checkingLogin, setCheckingLogin] = createSignal(false)
   const [agentStatuses, setAgentStatuses] = createSignal<Partial<Record<SshAgent, AgentStatus>>>({})
   const credentials = createSshCredentialLoader(props.ssh)
+  const connections = createSshConnectionGate(props.ssh)
   const onboarding = createSshOnboardingGeneration()
   const selectedProfile = createMemo(() => {
     const normalized = normalizeSshTarget(target())
@@ -341,17 +343,20 @@ export function SshConnect(props: Props) {
   const changePassword = (value: string) => {
     credentials.invalidate()
     onboarding.advance()
+    setBusy(false)
     setPassword(value)
   }
 
   const changePassphrase = (value: string) => {
     credentials.invalidate()
     onboarding.advance()
+    setBusy(false)
     setPassphrase(value)
   }
 
   const chooseAgent = (value: SshAgent) => {
     onboarding.advance()
+    setBusy(false)
     setAgent(value)
     setSetup()
     setPreflight()
@@ -424,10 +429,12 @@ export function SshConnect(props: Props) {
       return
     }
     const request = onboarding.current()
+    const attempt = connections.start()
     setBusy(true)
     setError("")
     setPreflight()
     try {
+      if (!(await connections.ready(attempt)) || !active(request, profile)) return
       const result = await props.ssh.connect({
         profile,
         host: parsed.host,
@@ -439,12 +446,18 @@ export function SshConnect(props: Props) {
         saveCredentials: true,
       })
       if (result.status === "host_key_required") {
-        if (!active(request, profile)) return
+        if (!active(request, profile)) {
+          await connections.cleanup(attempt, profile)
+          return
+        }
         setPendingKey({ profile, fingerprint: result.fingerprint, type: result.type })
         setError("Verify the SSH host-key fingerprint below before trusting this host.")
         return
       }
-      if (!active(request, profile)) return
+      if (!active(request, profile)) {
+        await connections.cleanup(attempt, profile)
+        return
+      }
       setPendingKey()
       setConnected(true)
       setConnectedProfile(result.profile)
@@ -453,7 +466,10 @@ export function SshConnect(props: Props) {
       setQuery("")
       setShowHidden(false)
       const home = await props.ssh.home()
-      if (!active(request, profile)) return
+      if (!active(request, profile)) {
+        await connections.cleanup(attempt, profile)
+        return
+      }
       setHomePath(home)
       setDirectory(home)
       setConnectedDirectory(home)
@@ -510,9 +526,12 @@ export function SshConnect(props: Props) {
   }
 
   const leave = async () => {
-    const request = onboarding.current()
-    await props.ssh.disconnect().catch(() => undefined)
-    if (!onboarding.matches(request)) return
+    const profile = connectedProfile()
+    const directory = connectedDirectory()
+    const attempt = connections.start()
+    onboarding.advance()
+    const closed = await connections.close(attempt)
+    if (!closed || connectedProfile() !== profile || connectedDirectory() !== directory) return
     clearOnboarding()
     setStarted(false)
   }

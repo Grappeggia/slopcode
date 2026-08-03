@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   connectedSshWorkspace,
+  createSshConnectionGate,
   createSshCredentialLoader,
   createSshOnboardingGeneration,
   resetSshOnboarding,
@@ -91,6 +92,50 @@ describe("SSH onboarding transitions", () => {
 
     expect(generation.matches(request)).toBeFalse()
     expect(generation.matches(generation.current())).toBeTrue()
+  })
+
+  test("cleans up a stale native connection", async () => {
+    const calls: string[] = []
+    const gate = createSshConnectionGate({
+      status: async () => ({ connected: true, profile: "marcos@mac.example.com:22" }),
+      disconnect: async () => void calls.push("disconnect"),
+    })
+    const stale = gate.start()
+
+    expect(await gate.cleanup(stale, "marcos@mac.example.com:22")).toBeTrue()
+    expect(calls).toEqual(["disconnect"])
+  })
+
+  test("does not disconnect a newer connection while stale cleanup is pending", async () => {
+    const calls: string[] = []
+    const status = deferred<{ connected: boolean; profile?: string }>()
+    const gate = createSshConnectionGate({
+      status: async () => status.promise,
+      disconnect: async () => void calls.push("disconnect"),
+    })
+    const old = gate.start()
+    const cleanup = gate.cleanup(old, "marcos@mac.example.com:22")
+
+    gate.start()
+    status.resolve({ connected: true, profile: "marcos@mac.example.com:22" })
+
+    expect(await cleanup).toBeFalse()
+    expect(calls).toEqual([])
+  })
+
+  test("finishes an intentional disconnect despite an unrelated onboarding transition", async () => {
+    const calls: string[] = []
+    const gate = createSshConnectionGate({
+      status: async () => ({ connected: true, profile: "marcos@mac.example.com:22" }),
+      disconnect: async () => void calls.push("disconnect"),
+    })
+    const generation = createSshOnboardingGeneration()
+    const request = gate.start()
+
+    generation.advance()
+
+    expect(await gate.close(request)).toBeTrue()
+    expect(calls).toEqual(["disconnect"])
   })
 
   test("does not expose a draft computer or mismatched folder in shell navigation", () => {

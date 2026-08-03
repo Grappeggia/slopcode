@@ -6,6 +6,11 @@ type CredentialStore = {
   credentialGet(profile: string): Promise<SshCredential | undefined>
 }
 
+type ConnectionTransport = {
+  status(): Promise<{ connected: boolean; profile?: string }>
+  disconnect(): Promise<unknown>
+}
+
 export function emptySshCredentials(auth: SshConnectAuth = "password") {
   return {
     auth,
@@ -90,6 +95,47 @@ export function createSshOnboardingGeneration() {
     },
     matches(request: number) {
       return request === value
+    },
+  }
+}
+
+export function createSshConnectionGate(transport: ConnectionTransport) {
+  let value = 0
+  let pending = Promise.resolve()
+
+  function enqueue<T>(work: () => Promise<T>) {
+    const result = pending.then(work)
+    pending = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  return {
+    start() {
+      value += 1
+      return value
+    },
+    async ready(request: number) {
+      await pending
+      return request === value
+    },
+    cleanup(request: number, profile: string) {
+      return enqueue(async () => {
+        if (request !== value) return false
+        const status = await transport.status().catch(() => ({ connected: false, profile: undefined }))
+        if (request !== value || !status.connected || status.profile !== profile) return false
+        await transport.disconnect().catch(() => undefined)
+        return request === value
+      })
+    },
+    close(request: number) {
+      return enqueue(async () => {
+        if (request !== value) return false
+        await transport.disconnect().catch(() => undefined)
+        return request === value
+      })
     },
   }
 }
