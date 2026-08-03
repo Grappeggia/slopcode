@@ -33,9 +33,13 @@ const bounded = (limit: number, message: string) =>
   Schema.String.check(Schema.makeFilter((value: string) => (bytes(value) <= limit ? undefined : message)))
 const noControl = (message: string) =>
   Schema.makeFilter<string>((value) => (/[\u0000-\u001f\u007f-\u009f]/.test(value) ? message : undefined))
-const text = (limit: number, message: string) => bounded(limit, message).check(Schema.isMinLength(1), noControl(message))
+const text = (limit: number, message: string) =>
+  bounded(limit, message).check(Schema.isMinLength(1), noControl(message))
 const body = (limit: number, message: string) =>
-  bounded(limit, message).check(Schema.isMinLength(1), Schema.makeFilter((value: string) => (value.includes("\u0000") ? message : undefined)))
+  bounded(limit, message).check(
+    Schema.isMinLength(1),
+    Schema.makeFilter((value: string) => (value.includes("\u0000") ? message : undefined)),
+  )
 const identifier = (prefix: string, name: string) =>
   text(AgentOrchestrationLimits.maxIdentifierBytes, `${name} is too large`).pipe(
     Schema.check(Schema.isPattern(new RegExp(`^${prefix}[A-Za-z0-9._:-]+$`))),
@@ -145,16 +149,19 @@ const MetadataValue = bounded(AgentOrchestrationLimits.maxMetadataValueBytes, "m
   noControl("metadata contains control characters"),
 )
 
-export const AgentOrchestrationMetadata = Schema.Record(MetadataKey, MetadataValue).check(
-  Schema.makeFilter((value) => {
-    const entries = Object.entries(value as Record<string, string>)
-    if (entries.length > AgentOrchestrationLimits.maxMetadataEntries) return "too many metadata entries"
-    if (entries.some(([key]) => prototype(key))) return "prototype metadata keys are not allowed"
-    return entries.reduce((sum, [key, item]) => sum + bytes(key) + bytes(item), 0) <= AgentOrchestrationLimits.maxMetadataBytes
-      ? undefined
-      : "metadata is too large"
-  }),
-).annotate({ identifier: "AgentOrchestrationV1.Metadata" })
+export const AgentOrchestrationMetadata = Schema.Record(MetadataKey, MetadataValue)
+  .check(
+    Schema.makeFilter((value) => {
+      const entries = Object.entries(value as Record<string, string>)
+      if (entries.length > AgentOrchestrationLimits.maxMetadataEntries) return "too many metadata entries"
+      if (entries.some(([key]) => prototype(key))) return "prototype metadata keys are not allowed"
+      return entries.reduce((sum, [key, item]) => sum + bytes(key) + bytes(item), 0) <=
+        AgentOrchestrationLimits.maxMetadataBytes
+        ? undefined
+        : "metadata is too large"
+    }),
+  )
+  .annotate({ identifier: "AgentOrchestrationV1.Metadata" })
 export type AgentOrchestrationMetadata = typeof AgentOrchestrationMetadata.Type
 
 export const AgentOrchestrationCapability = Schema.Literals([
@@ -268,7 +275,9 @@ export const AgentOrchestrationQuestion = exact(
       Schema.Array(text(512, "question option is too large")).check(
         Schema.isMinLength(1),
         Schema.isMaxLength(AgentOrchestrationLimits.maxQuestionOptions),
-        Schema.makeFilter((value) => new Set(value).size === value.length ? undefined : "question options must be unique"),
+        Schema.makeFilter((value) =>
+          new Set(value).size === value.length ? undefined : "question options must be unique",
+        ),
       ),
     ),
     allowFreeform: Schema.optional(Schema.Boolean),
@@ -346,7 +355,10 @@ export const AgentOrchestrationArtifact = exact(
     name: text(256, "artifact name is too large"),
     kind: Schema.Literals(["file", "directory", "image", "diff", "log", "plan", "report"]),
     path: AgentOrchestrationPath,
-    size: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(AgentOrchestrationLimits.maxArtifactBytes)),
+    size: Schema.Int.check(
+      Schema.isGreaterThanOrEqualTo(0),
+      Schema.isLessThanOrEqualTo(AgentOrchestrationLimits.maxArtifactBytes),
+    ),
     mime: Schema.optional(text(128, "artifact MIME type is too large")),
     metadata: Schema.optional(AgentOrchestrationMetadata),
   }),
@@ -372,7 +384,13 @@ const responseFields = {
 export const AgentOrchestrationAcceptedResponse = exact(
   Schema.Struct({
     ...responseFields,
-    type: Schema.Literals(["workspace.open", "session.create", "turn.create", "interaction.approval.reply", "interaction.question.reply"]),
+    type: Schema.Literals([
+      "workspace.open",
+      "session.create",
+      "turn.create",
+      "interaction.approval.reply",
+      "interaction.question.reply",
+    ]),
     workspace: Schema.optional(AgentOrchestrationWorkspace),
     sessionID: Schema.optional(AgentOrchestrationSessionID),
     turnID: Schema.optional(AgentOrchestrationTurnID),
@@ -413,7 +431,9 @@ export const AgentOrchestrationToolUpdatedEvent = exact(
         id: AgentOrchestrationToolID,
         title: text(512, "tool title is too large"),
         status: Schema.Literals(["pending", "in_progress", "completed", "failed"]),
-        kind: Schema.optional(Schema.Literals(["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "other"])),
+        kind: Schema.optional(
+          Schema.Literals(["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "other"]),
+        ),
         metadata: Schema.optional(AgentOrchestrationMetadata),
       }),
     ),
@@ -536,11 +556,19 @@ export const AgentOrchestrationEventReplayResponse = exact(replayShape)
       if (value.events.some((event, index) => index > 0 && event.sequence <= value.events[index - 1]!.sequence)) {
         return "replayed events must be ordered by sequence"
       }
-      if (value.events.some((event, index) => index > 0 && cursor(event.cursor) <= cursor(value.events[index - 1]!.cursor))) {
+      if (
+        value.events.some(
+          (event, index) => index > 0 && cursor(event.cursor) <= cursor(value.events[index - 1]!.cursor),
+        )
+      ) {
         return "replayed event cursors must be ordered"
       }
       if (value.hasMore !== (value.nextCursor !== undefined)) return "event replay continuation must match hasMore"
-      if (value.nextCursor !== undefined && value.events.length > 0 && cursor(value.nextCursor) <= cursor(value.events.at(-1)!.cursor)) {
+      if (
+        value.nextCursor !== undefined &&
+        value.events.length > 0 &&
+        cursor(value.nextCursor) <= cursor(value.events.at(-1)!.cursor)
+      ) {
         return "next cursor must advance beyond replayed events"
       }
       return jsonBytes(value) <= AgentOrchestrationLimits.maxFrameBytes ? undefined : "event replay is too large"
@@ -615,7 +643,9 @@ export type AgentOrchestrationFrame = typeof AgentOrchestrationFrame.Type
 export const AgentOrchestrationFrameJson = bounded(
   AgentOrchestrationLimits.maxFrameBytes,
   "orchestration frame is too large",
-).pipe(Schema.decodeTo(Schema.fromJsonString(AgentOrchestrationFrame))).annotate({
-  identifier: "AgentOrchestrationV1.FrameJson",
-})
+)
+  .pipe(Schema.decodeTo(Schema.fromJsonString(AgentOrchestrationFrame)))
+  .annotate({
+    identifier: "AgentOrchestrationV1.FrameJson",
+  })
 export type AgentOrchestrationFrameJson = typeof AgentOrchestrationFrameJson.Type

@@ -504,9 +504,9 @@ export const layer = Layer.effect(
         if (!(yield* db.get(sql`SELECT id FROM remote_agent_job WHERE id = ${jobID}`).pipe(Effect.orDie)))
           return yield* Effect.fail(new JobNotFoundError(jobID))
         return (yield* db
-          .all<{ metadata: string }>(
-            sql`SELECT metadata FROM remote_agent_artifact WHERE job_id = ${jobID} ORDER BY created_at, id`,
-          )
+          .all<{
+            metadata: string
+          }>(sql`SELECT metadata FROM remote_agent_artifact WHERE job_id = ${jobID} ORDER BY created_at, id`)
           .pipe(Effect.orDie)).map((item) => json<Record<string, unknown>>(item.metadata))
       })
 

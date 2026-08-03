@@ -155,7 +155,7 @@ successful only when it satisfies all of the following:
      → Verifying**, rather than exposing raw install commands.
 6. **Show connection progress visually**
    - The user can see `Connecting → Verifying computer → Loading folders →
-     Checking agent → Ready`.
+Checking agent → Ready`.
    - Every failure has an inline explanation and one clear action: **Retry**,
      **Choose another folder**, or **Change sign-in method**.
 7. **Make the session agentic**

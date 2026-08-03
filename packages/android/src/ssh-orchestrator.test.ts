@@ -47,7 +47,10 @@ describe("SSH agent orchestration frames", () => {
       plan: { id: "plan_1", content: "- [ ] inspect" },
     })
     expect(planned.items).toHaveLength(1)
-    const interaction = parseInteraction({ id: "int_1", revision: 1, prompt: "Continue?", options: ["Yes"] }, "question")
+    const interaction = parseInteraction(
+      { id: "int_1", revision: 1, prompt: "Continue?", options: ["Yes"] },
+      "question",
+    )
     expect(interaction?.options).toEqual(["Yes"])
     const waiting = reduceOrchestratorEvent(planned, {
       kind: "event",

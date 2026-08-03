@@ -207,6 +207,14 @@ import type {
   RemoteAgentPromptResponses,
   RemoteAgentSessionErrors,
   RemoteAgentSessionResponses,
+  RemoteRuntimeJobArtifactErrors,
+  RemoteRuntimeJobArtifactResponses,
+  RemoteRuntimeJobPlanCommitErrors,
+  RemoteRuntimeJobPlanCommitResponses,
+  RemoteRuntimeJobPlanPrepareErrors,
+  RemoteRuntimeJobPlanPrepareResponses,
+  RemoteRuntimeJobStateErrors,
+  RemoteRuntimeJobStateResponses,
   RemoteSshBrowseErrors,
   RemoteSshBrowseResponses,
   RemoteV1PairingCreatePayload,
@@ -5619,6 +5627,9 @@ export class Job extends HeyApiClient {
       workspace?: string
       path?: string
       action?: "approve" | "reject" | "answer" | "steer" | "comment" | "stop" | "retry"
+      interactionID?: string | RemoteV1WorkspaceSsh
+      expectedRevision?: number | RemoteV1WorkspaceSsh
+      idempotencyKey?: string | RemoteV1WorkspaceSsh
       answer?: string | RemoteV1WorkspaceSsh
       prompt?: string | RemoteV1WorkspaceSsh
       comment?:
@@ -5641,6 +5652,9 @@ export class Job extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "query", key: "path" },
             { in: "body", key: "action" },
+            { in: "body", key: "interactionID" },
+            { in: "body", key: "expectedRevision" },
+            { in: "body", key: "idempotencyKey" },
             { in: "body", key: "answer" },
             { in: "body", key: "prompt" },
             { in: "body", key: "comment" },
@@ -5825,6 +5839,7 @@ export class Agent extends HeyApiClient {
       workspace?: string
       path?: string
       jobID?: string | RemoteV1WorkspaceSsh
+      idempotencyKey?: string | RemoteV1WorkspaceSsh
       agent?: "codex-cli" | "opencode-cli" | "claude-code"
       prompt?: string
       config?:
@@ -5855,6 +5870,7 @@ export class Agent extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "query", key: "path" },
             { in: "body", key: "jobID" },
+            { in: "body", key: "idempotencyKey" },
             { in: "body", key: "agent" },
             { in: "body", key: "prompt" },
             { in: "body", key: "config" },
@@ -5889,6 +5905,169 @@ export class Remote3 extends HeyApiClient {
   private _agent?: Agent
   get agent(): Agent {
     return (this._agent ??= new Agent({ client: this.client }))
+  }
+}
+
+export class RemoteRuntime extends HeyApiClient {
+  public jobState<ThrowOnError extends boolean = false>(
+    parameters: {
+      jobID: string
+      directory?: string
+      workspace?: string
+      path?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "jobID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      RemoteRuntimeJobStateResponses,
+      RemoteRuntimeJobStateErrors,
+      ThrowOnError
+    >({
+      url: "/remote/agent/job/{jobID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  public jobArtifact<ThrowOnError extends boolean = false>(
+    parameters: {
+      jobID: string
+      directory?: string
+      workspace?: string
+      path?: string
+      id?: string
+      metadata?: {
+        [key: string]: unknown | unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "jobID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+            { in: "body", key: "id" },
+            { in: "body", key: "metadata" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RemoteRuntimeJobArtifactResponses,
+      RemoteRuntimeJobArtifactErrors,
+      ThrowOnError
+    >({
+      url: "/remote/agent/job/{jobID}/artifact",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public jobPlanPrepare<ThrowOnError extends boolean = false>(
+    parameters: {
+      jobID: string
+      directory?: string
+      workspace?: string
+      path?: string
+      planID?: string
+      digest?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "jobID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+            { in: "body", key: "planID" },
+            { in: "body", key: "digest" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RemoteRuntimeJobPlanPrepareResponses,
+      RemoteRuntimeJobPlanPrepareErrors,
+      ThrowOnError
+    >({
+      url: "/remote/agent/job/{jobID}/plan/prepare",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public jobPlanCommit<ThrowOnError extends boolean = false>(
+    parameters: {
+      jobID: string
+      directory?: string
+      workspace?: string
+      path?: string
+      token?: string
+      digest?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "jobID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+            { in: "body", key: "token" },
+            { in: "body", key: "digest" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RemoteRuntimeJobPlanCommitResponses,
+      RemoteRuntimeJobPlanCommitErrors,
+      ThrowOnError
+    >({
+      url: "/remote/agent/job/{jobID}/plan/commit",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -7733,6 +7912,11 @@ export class SlopcodeClient extends HeyApiClient {
   private _remote?: Remote3
   get remote(): Remote3 {
     return (this._remote ??= new Remote3({ client: this.client }))
+  }
+
+  private _remoteRuntime?: RemoteRuntime
+  get remoteRuntime(): RemoteRuntime {
+    return (this._remoteRuntime ??= new RemoteRuntime({ client: this.client }))
   }
 
   private _v2?: V2

@@ -162,7 +162,8 @@ function validUser(value: string) {
 }
 
 function validHost(value: string, ipv6 = false) {
-  if (!value || value.length > (ipv6 ? 45 : 253) || /[\u0000-\u001f\u007f\r\n;&|$`"'<>()[\]{}*?!~\\]/.test(value)) return
+  if (!value || value.length > (ipv6 ? 45 : 253) || /[\u0000-\u001f\u007f\r\n;&|$`"'<>()[\]{}*?!~\\]/.test(value))
+    return
   if (ipv6) {
     if (!/^[0-9A-Fa-f:.]+$/.test(value) || !value.includes(":")) return
     return value.toLowerCase()
@@ -226,7 +227,8 @@ export function validSshPath(value: string) {
     next.includes("//") ||
     /[\u0000-\u001f\u007f\r\n?#]/.test(next) ||
     next.split("/").some((part) => part === "." || part === "..")
-  ) return
+  )
+    return
   return next
 }
 
@@ -254,7 +256,8 @@ export function parseSshConnectResult(value: unknown): SshConnectResult | undefi
       typeof value.port !== "number" ||
       value.remoteTransport !== true ||
       !Number.isInteger(value.port)
-    ) return
+    )
+      return
     return { status: "connected", profile: value.profile, host: value.host, port: value.port, remoteTransport: true }
   }
   if (value.status === "trusted") {
@@ -268,7 +271,8 @@ export function parseSshConnectResult(value: unknown): SshConnectResult | undefi
     typeof value.type !== "string" ||
     typeof value.fingerprint !== "string" ||
     value.fingerprint.length > MAX_FINGERPRINT
-  ) return
+  )
+    return
   return {
     status: "host_key_required",
     profile: value.profile,
@@ -289,7 +293,8 @@ export function parseSshStatus(value: unknown) {
 }
 
 export function parseSshListing(value: unknown): SshFolderListing | undefined {
-  if (!object(value) || typeof value.path !== "string" || !validSshPath(value.path) || !Array.isArray(value.entries)) return
+  if (!object(value) || typeof value.path !== "string" || !validSshPath(value.path) || !Array.isArray(value.entries))
+    return
   const entries = value.entries.flatMap((item): SshFolderEntry[] => {
     if (!object(item) || typeof item.name !== "string" || typeof item.path !== "string") return []
     if (item.type !== "directory" && item.type !== "file") return []
@@ -323,7 +328,8 @@ export function parseSshPreflight(value: unknown): SshPreflight | undefined {
     typeof value.exitCode !== "number" ||
     typeof value.output !== "string" ||
     typeof value.ok !== "boolean"
-  ) return
+  )
+    return
   return {
     agent: value.agent,
     executable: value.executable,
@@ -352,7 +358,12 @@ export function parseSshOrchestratorStart(value: unknown): SshOrchestratorStart 
 }
 
 export function parseSshEventMessage(value: unknown, nonce: string): SshEvent | undefined {
-  if (!object(value) || value.type !== "slopcode.ssh" || value.channel !== "slopcode.android.ssh" || value.nonce !== nonce)
+  if (
+    !object(value) ||
+    value.type !== "slopcode.ssh" ||
+    value.channel !== "slopcode.android.ssh" ||
+    value.nonce !== nonce
+  )
     return
   const event = value.event
   if (!object(event) || typeof event.type !== "string" || !validSessionID(event.id)) return
@@ -380,7 +391,12 @@ export function parseSshEventMessage(value: unknown, nonce: string): SshEvent | 
 }
 
 export function parseSshOrchestratorEventMessage(value: unknown, nonce: string): SshOrchestratorEvent | undefined {
-  if (!object(value) || value.type !== "slopcode.ssh" || value.channel !== "slopcode.android.ssh" || value.nonce !== nonce)
+  if (
+    !object(value) ||
+    value.type !== "slopcode.ssh" ||
+    value.channel !== "slopcode.android.ssh" ||
+    value.nonce !== nonce
+  )
     return
   const event = value.event
   if (!object(event) || typeof event.type !== "string" || !validSessionID(event.id)) return

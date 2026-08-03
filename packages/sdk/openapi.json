@@ -11886,6 +11886,18 @@
                                 }
                               ]
                             },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000000
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
                             "title": {
                               "type": "string",
                               "minLength": 1,
@@ -11963,6 +11975,18 @@
                                   "minLength": 1,
                                   "maxLength": 256,
                                   "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000000
                                 },
                                 {
                                   "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
@@ -12233,6 +12257,19 @@
                 "type": "object",
                 "properties": {
                   "jobID": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      {
+                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                      }
+                    ]
+                  },
+                  "idempotencyKey": {
                     "anyOf": [
                       {
                         "type": "string",
@@ -12677,6 +12714,18 @@
                                 }
                               ]
                             },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000000
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
                             "title": {
                               "type": "string",
                               "minLength": 1,
@@ -12754,6 +12803,18 @@
                                   "minLength": 1,
                                   "maxLength": 256,
                                   "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000000
                                 },
                                 {
                                   "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
@@ -13027,6 +13088,44 @@
                     "type": "string",
                     "enum": ["approve", "reject", "answer", "steer", "comment", "stop", "retry"]
                   },
+                  "interactionID": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      {
+                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                      }
+                    ]
+                  },
+                  "expectedRevision": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1000000
+                      },
+                      {
+                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                      }
+                    ]
+                  },
+                  "idempotencyKey": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      {
+                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                      }
+                    ]
+                  },
                   "answer": {
                     "anyOf": [
                       {
@@ -13100,6 +13199,1025 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote.agent.job.action({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/remote/agent/job/{jobID}": {
+      "get": {
+        "tags": ["remote runtime"],
+        "operationId": "remote-runtime.jobState",
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Durable remote agent job state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "workspaceID": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "directory": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "pattern": "^[^\\u0000\\r\\n?#]+$"
+                    },
+                    "agent": {
+                      "type": "string",
+                      "enum": ["codex-cli", "opencode-cli", "claude-code"]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "running",
+                        "waiting_approval",
+                        "waiting_question",
+                        "retrying",
+                        "completed",
+                        "failed",
+                        "stopped"
+                      ]
+                    },
+                    "sessionID": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^pty"
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "cursor": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "output": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 65536
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "progress": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["NaN"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["Infinity"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["-Infinity"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["Infinity", "-Infinity", "NaN"]
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "commandPreview": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "executable": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000\\r\\n]+$"
+                            },
+                            "args": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 4096,
+                                "pattern": "^[^\\u0000]+$"
+                              },
+                              "maxItems": 64
+                            },
+                            "cwd": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096,
+                              "pattern": "^[^\\u0000\\r\\n?#]+$"
+                            }
+                          },
+                          "required": ["executable", "args", "cwd"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "approval": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000000
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "title": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096,
+                              "pattern": "^[^\\u0000]+$"
+                            },
+                            "command": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 4096,
+                                  "pattern": "^[^\\u0000]+$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "cwd": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 4096,
+                                  "pattern": "^[^\\u0000\\r\\n?#]+$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "reason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 4096,
+                                  "pattern": "^[^\\u0000]+$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "risk": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": ["low", "medium", "high"]
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["title"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "question": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 1000000
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096,
+                              "pattern": "^[^\\u0000]+$"
+                            },
+                            "options": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^[^\\u0000]+$"
+                                  },
+                                  "maxItems": 32
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            },
+                            "allowFreeform": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["prompt"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "review": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "files": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^[^\\u0000\\r\\n?#]+$"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["added", "modified", "deleted", "renamed", "untracked"]
+                                  },
+                                  "additions": {
+                                    "type": "integer"
+                                  },
+                                  "deletions": {
+                                    "type": "integer"
+                                  },
+                                  "diff": {
+                                    "type": "string",
+                                    "maxLength": 65536
+                                  }
+                                },
+                                "required": ["path", "status", "additions", "deletions", "diff"],
+                                "additionalProperties": false
+                              },
+                              "maxItems": 64
+                            },
+                            "tests": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000\\r\\n]+$"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["passed", "failed", "skipped"]
+                                  },
+                                  "durationMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                      }
+                                    ]
+                                  },
+                                  "output": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "maxLength": 65536
+                                      },
+                                      {
+                                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["name", "status"],
+                                "additionalProperties": false
+                              },
+                              "maxItems": 64
+                            },
+                            "screenshots": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000\\r\\n]+$"
+                                  },
+                                  "mime": {
+                                    "type": "string",
+                                    "pattern": "^image\\/[A-Za-z0-9.+-]+$"
+                                  },
+                                  "data": {
+                                    "type": "string",
+                                    "maxLength": 524288
+                                  }
+                                },
+                                "required": ["name", "mime", "data"],
+                                "additionalProperties": false
+                              },
+                              "maxItems": 16
+                            },
+                            "comments": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                  },
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^[^\\u0000\\r\\n?#]+$"
+                                  },
+                                  "line": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer"
+                                      },
+                                      {
+                                        "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                                      }
+                                    ]
+                                  },
+                                  "body": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^[^\\u0000]+$"
+                                  },
+                                  "createdAt": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": ["id", "path", "body", "createdAt"],
+                                "additionalProperties": false
+                              },
+                              "maxItems": 128
+                            }
+                          },
+                          "required": ["files", "tests", "screenshots", "comments"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "$ref": "#/components/schemas/RemoteV1WorkspaceSsh"
+                        }
+                      ]
+                    },
+                    "updatedAt": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["id", "workspaceID", "directory", "agent", "status", "updatedAt"],
+                  "additionalProperties": false,
+                  "description": "Durable remote agent job state"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError1"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote-runtime.jobState({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/remote/agent/job/{jobID}/artifact": {
+      "post": {
+        "tags": ["remote runtime"],
+        "operationId": "remote-runtime.jobArtifact",
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Persisted artifact metadata result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "enum": ["saved", "duplicate", "quota"],
+                  "description": "Persisted artifact metadata result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError1"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "patternProperties": {
+                      "^[A-Za-z0-9][A-Za-z0-9._:-]*$": {
+                        "type": "string",
+                        "allOf": [
+                          {
+                            "maxLength": 2048
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "required": ["id", "metadata"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote-runtime.jobArtifact({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/remote/agent/job/{jobID}/plan/prepare": {
+      "post": {
+        "tags": ["remote runtime"],
+        "operationId": "remote-runtime.jobPlanPrepare",
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prepared durable plan save",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["token", "expiresAt"],
+                  "additionalProperties": false,
+                  "description": "Prepared durable plan save"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError1"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "planID": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "digest": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  }
+                },
+                "required": ["planID", "digest"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote-runtime.jobPlanPrepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/remote/agent/job/{jobID}/plan/commit": {
+      "post": {
+        "tags": ["remote runtime"],
+        "operationId": "remote-runtime.jobPlanCommit",
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed durable plan save",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["consumed", "expired", "used", "conflict", "missing"]
+                    }
+                  },
+                  "required": ["status"],
+                  "additionalProperties": false,
+                  "description": "Committed durable plan save"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError1"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "digest": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  }
+                },
+                "required": ["token", "digest"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.remote-runtime.jobPlanCommit({\n  ...\n})"
           }
         ]
       }

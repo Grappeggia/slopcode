@@ -48,7 +48,9 @@ export async function mountAndroidApp() {
       emitDeepLinks(urls)
     })
   if (shell.ssh) {
-    const status = await shell.ssh.status().catch(() => ({ connected: false, remoteTransport: false, profile: undefined }))
+    const status = await shell.ssh
+      .status()
+      .catch(() => ({ connected: false, remoteTransport: false, profile: undefined }))
     if (!sshWorkspace || !status.connected || status.profile !== sshWorkspace.profile) {
       render(() => {
         const [workspace, setWorkspace] = createSignal<SshWorkspaceState>()
@@ -57,14 +59,18 @@ export async function mountAndroidApp() {
             when={workspace()}
             fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
           >
-            {(value) => <SshAgenticSession ssh={shell.ssh!} workspace={value()} onDisconnected={() => window.location.reload()} />}
+            {(value) => (
+              <SshAgenticSession ssh={shell.ssh!} workspace={value()} onDisconnected={() => window.location.reload()} />
+            )}
           </Show>
         )
       }, root)
       return
     }
     render(
-      () => <SshAgenticSession ssh={shell.ssh!} workspace={sshWorkspace} onDisconnected={() => window.location.reload()} />,
+      () => (
+        <SshAgenticSession ssh={shell.ssh!} workspace={sshWorkspace} onDisconnected={() => window.location.reload()} />
+      ),
       root,
     )
     return

@@ -16,7 +16,11 @@ import {
 
 describe("direct SSH boundary parsing", () => {
   test("accepts the supported one-field SSH target forms", () => {
-    expect(parseSshTarget("marcos@Mac.Example.com:2222")).toEqual({ user: "marcos", host: "mac.example.com", port: 2222 })
+    expect(parseSshTarget("marcos@Mac.Example.com:2222")).toEqual({
+      user: "marcos",
+      host: "mac.example.com",
+      port: 2222,
+    })
     expect(parseSshTarget("marcos@[2001:db8::1]:2200")).toEqual({ user: "marcos", host: "2001:db8::1", port: 2200 })
     expect(normalizeSshTarget("marcos@Mac.Example.com")).toBe("marcos@mac.example.com")
     expect(sshProfile("marcos@[2001:db8::1]", 22)).toBe("marcos@[2001:db8::1]:22")

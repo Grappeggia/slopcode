@@ -1,12 +1,5 @@
 import type { AndroidSecureStorage } from "./types"
-import {
-  SSH_AGENTS,
-  normalizeSshTarget,
-  parseSshTarget,
-  sshProfile,
-  validSshPath,
-  type SshAgent,
-} from "./ssh"
+import { SSH_AGENTS, normalizeSshTarget, parseSshTarget, sshProfile, validSshPath, type SshAgent } from "./ssh"
 
 export type SshWorkspaceState = {
   version: 1
@@ -36,14 +29,14 @@ function text(value: unknown) {
 }
 
 function agent(value: unknown): SshAgent | undefined {
-  return typeof value === "string" && SSH_AGENTS.includes(value as SshAgent) ? value as SshAgent : undefined
+  return typeof value === "string" && SSH_AGENTS.includes(value as SshAgent) ? (value as SshAgent) : undefined
 }
 
 export function normalizeSshWorkspace(value: unknown): SshWorkspaceState | undefined {
   if (!record(value)) return
   const target = normalizeSshTarget(text(value.target) ?? "")
   const parsed = target ? parseSshTarget(target) : undefined
-  const port = typeof value.port === "number" && Number.isInteger(value.port) ? value.port : parsed?.port ?? 22
+  const port = typeof value.port === "number" && Number.isInteger(value.port) ? value.port : (parsed?.port ?? 22)
   const profile = target ? sshProfile(target, port) : undefined
   const directory = validSshPath(text(value.directory) ?? "")
   const selected = agent(value.agent)
@@ -84,13 +77,19 @@ export function rememberSshTarget(state: SshWorkspaceState | undefined, target: 
   if (!next) return state
   const current = state ? normalizeSshWorkspace(state) : undefined
   if (!current) return undefined
-  return { ...current, recentTargets: [next, ...current.recentTargets.filter((item) => item !== next)].slice(0, MAX_TARGETS) }
+  return {
+    ...current,
+    recentTargets: [next, ...current.recentTargets.filter((item) => item !== next)].slice(0, MAX_TARGETS),
+  }
 }
 
 export function rememberSshFolder(state: SshWorkspaceState, folder: string) {
   const next = validSshPath(folder)
   if (!next) return state
-  return { ...state, recentFolders: [next, ...state.recentFolders.filter((item) => item !== next)].slice(0, MAX_FOLDERS) }
+  return {
+    ...state,
+    recentFolders: [next, ...state.recentFolders.filter((item) => item !== next)].slice(0, MAX_FOLDERS),
+  }
 }
 
 export async function readSshWorkspace(storage: AndroidSecureStorage) {

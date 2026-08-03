@@ -671,6 +671,7 @@
         "@silvia-odwyer/photon-node": "0.3.4",
         "@slopcode-ai/llm": "workspace:*",
         "@slopcode-ai/plugin": "workspace:*",
+        "@slopcode-ai/protocol": "workspace:*",
         "@slopcode-ai/script": "workspace:*",
         "@slopcode-ai/sdk": "workspace:*",
         "@slopcode-ai/server": "workspace:*",

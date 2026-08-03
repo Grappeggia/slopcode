@@ -45,7 +45,7 @@ export function SshShell(props: Props) {
     writeScheme(value)
   })
 
-  const toggle = () => setScheme((value) => value === "dark" ? "light" : "dark")
+  const toggle = () => setScheme((value) => (value === "dark" ? "light" : "dark"))
 
   return (
     <div data-ssh-shell data-ssh-theme={scheme()} class="min-h-screen">
@@ -78,40 +78,70 @@ export function SshShell(props: Props) {
             <p class="text-16-medium">Slopcode</p>
             <p class="text-12-regular text-text-weak">Remote workspace</p>
           </div>
-          <button type="button" aria-label="Close navigation" onClick={() => setOpen(false)} class="rounded-md px-3 py-2 text-16-medium">×</button>
+          <button
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => setOpen(false)}
+            class="rounded-md px-3 py-2 text-16-medium"
+          >
+            ×
+          </button>
         </div>
 
         <nav class="flex flex-1 flex-col gap-5 py-5" aria-label="Session navigation">
           <section class="flex flex-col gap-2" aria-labelledby="active-sessions-label">
-            <p id="active-sessions-label" class="text-12-regular uppercase tracking-wide text-text-weak">Active sessions</p>
+            <p id="active-sessions-label" class="text-12-regular uppercase tracking-wide text-text-weak">
+              Active sessions
+            </p>
             <Show
               when={props.sessionID}
-              fallback={<p class="rounded-lg border border-border-weak-base px-3 py-3 text-12-regular text-text-weak">No active sessions</p>}
+              fallback={
+                <p class="rounded-lg border border-border-weak-base px-3 py-3 text-12-regular text-text-weak">
+                  No active sessions
+                </p>
+              }
             >
-              <button type="button" onClick={() => setOpen(false)} class="rounded-lg border border-border-brand-base bg-surface-base px-3 py-3 text-left">
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                class="rounded-lg border border-border-brand-base bg-surface-base px-3 py-3 text-left"
+              >
                 <span class="block text-14-medium">{name(props.workspace?.agent)} session</span>
-                <span class="mt-1 block truncate text-12-regular text-text-weak">{props.workspace?.directory ?? "Remote workspace"}</span>
+                <span class="mt-1 block truncate text-12-regular text-text-weak">
+                  {props.workspace?.directory ?? "Remote workspace"}
+                </span>
                 <span class="mt-2 block text-12-regular text-text-weak">{props.sessionState ?? "Active"}</span>
               </button>
             </Show>
           </section>
 
           <section class="flex flex-col gap-2" aria-labelledby="computer-label">
-            <p id="computer-label" class="text-12-regular uppercase tracking-wide text-text-weak">Computer</p>
+            <p id="computer-label" class="text-12-regular uppercase tracking-wide text-text-weak">
+              Computer
+            </p>
             <div class="rounded-lg border border-border-weak-base px-3 py-3">
               <p class="truncate text-14-medium">{props.workspace?.target ?? "No computer selected"}</p>
-              <p class="mt-1 truncate text-12-regular text-text-weak">{props.workspace?.directory ?? "Choose a workspace"}</p>
+              <p class="mt-1 truncate text-12-regular text-text-weak">
+                {props.workspace?.directory ?? "Choose a workspace"}
+              </p>
             </div>
           </section>
         </nav>
 
         <div class="border-t border-border-weak-base pt-4">
-          <button type="button" aria-pressed={scheme() === "dark"} onClick={toggle} class="flex min-h-12 w-full items-center justify-between rounded-lg border border-border-weak-base px-3 py-3 text-left">
+          <button
+            type="button"
+            aria-pressed={scheme() === "dark"}
+            onClick={toggle}
+            class="flex min-h-12 w-full items-center justify-between rounded-lg border border-border-weak-base px-3 py-3 text-left"
+          >
             <span>
               <span class="block text-14-medium">{scheme() === "dark" ? "Dark mode" : "Light mode"}</span>
               <span class="block text-12-regular text-text-weak">Appearance is saved on this device</span>
             </span>
-            <span aria-hidden="true" class="text-16-medium">{scheme() === "dark" ? "☾" : "☀"}</span>
+            <span aria-hidden="true" class="text-16-medium">
+              {scheme() === "dark" ? "☾" : "☀"}
+            </span>
           </button>
         </div>
       </aside>

@@ -39,7 +39,11 @@ function output(value: unknown, depth = 0): string {
   if (depth > 5) return ""
   const direct = text(value)
   if (direct) return direct
-  if (Array.isArray(value)) return value.map((item) => output(item, depth + 1)).filter(Boolean).join("\n")
+  if (Array.isArray(value))
+    return value
+      .map((item) => output(item, depth + 1))
+      .filter(Boolean)
+      .join("\n")
   if (!record(value)) return ""
   for (const key of ["text", "result", "output", "delta", "content", "message", "item", "aggregated_output", "error"]) {
     const next = output(value[key], depth + 1)
@@ -128,7 +132,10 @@ export async function connect(input: {
         buffer += chunk.toString("utf8")
         const values = buffer.split(/\r?\n/)
         buffer = values.pop() ?? ""
-        values.map(line).filter(Boolean).forEach((value) => input.emit({ type: "output", text: value, nativeID }))
+        values
+          .map(line)
+          .filter(Boolean)
+          .forEach((value) => input.emit({ type: "output", text: value, nativeID }))
       })
       stderrStream.on("data", (chunk: Buffer) => {
         stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8 * 1024)
@@ -138,11 +145,18 @@ export async function connect(input: {
         flush()
         if (code === 0) return done({ code })
         const detail = clean(stderr, 2_048)
-        done({ code, error: detail || (signal ? `${input.agent} stopped with ${signal}` : `${input.agent} exited with code ${code}`) })
+        done({
+          code,
+          error:
+            detail || (signal ? `${input.agent} stopped with ${signal}` : `${input.agent} exited with code ${code}`),
+        })
       })
-      const timer = setTimeout(() => {
-        void stop(next).then(() => done({ code: null, error: `${input.agent} turn timed out` }))
-      }, 10 * 60 * 1_000)
+      const timer = setTimeout(
+        () => {
+          void stop(next).then(() => done({ code: null, error: `${input.agent} turn timed out` }))
+        },
+        10 * 60 * 1_000,
+      )
       stdin.end(`${prompt}\n`)
     })
     active = undefined

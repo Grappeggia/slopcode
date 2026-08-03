@@ -34,7 +34,8 @@ export function SshSession(props: Props) {
 
   const handle = (event: SshEvent) => {
     if (event.type === "started") {
-      if (event.agent !== props.workspace.agent || (event.operation !== "interactive" && event.operation !== "prompt")) return
+      if (event.agent !== props.workspace.agent || (event.operation !== "interactive" && event.operation !== "prompt"))
+        return
       setActiveID(event.id)
       return
     }
@@ -69,7 +70,8 @@ export function SshSession(props: Props) {
           directory: props.workspace.directory,
           saveCredentials: false,
         })
-        if (result.status === "host_key_required") throw new Error("The SSH host key is not trusted yet. Return to SSH setup to verify it.")
+        if (result.status === "host_key_required")
+          throw new Error("The SSH host key is not trusted yet. Return to SSH setup to verify it.")
       }
       setConnected(true)
       const result = await props.ssh.execVersion(props.workspace.agent, props.workspace.directory)
@@ -168,7 +170,9 @@ export function SshSession(props: Props) {
       <section class="w-full max-w-3xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4">
         <div class="flex flex-col gap-1">
           <h1 class="text-20-medium">{name(props.workspace.agent)} over SSH</h1>
-          <p class="text-14-regular text-text-weak">{props.workspace.username}@{props.workspace.host}:{props.workspace.port}</p>
+          <p class="text-14-regular text-text-weak">
+            {props.workspace.username}@{props.workspace.host}:{props.workspace.port}
+          </p>
           <p class="text-14-regular text-text-weak">Working directory: {props.workspace.directory}</p>
         </div>
 
@@ -188,13 +192,28 @@ export function SshSession(props: Props) {
           >
             Start interactive PTY
           </button>
-          <button type="button" disabled={busy() || !connected()} onClick={() => void interrupt()} class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50">
+          <button
+            type="button"
+            disabled={busy() || !connected()}
+            onClick={() => void interrupt()}
+            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+          >
             Ctrl-C
           </button>
-          <button type="button" disabled={busy() || !connected()} onClick={() => void resize()} class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50">
+          <button
+            type="button"
+            disabled={busy() || !connected()}
+            onClick={() => void resize()}
+            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+          >
             Resize PTY
           </button>
-          <button type="button" disabled={busy()} onClick={() => void disconnect()} class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50">
+          <button
+            type="button"
+            disabled={busy()}
+            onClick={() => void disconnect()}
+            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+          >
             Disconnect
           </button>
         </div>
@@ -202,19 +221,36 @@ export function SshSession(props: Props) {
         <div class="grid grid-cols-2 gap-3">
           <label class="flex flex-col gap-1 text-12-regular">
             Columns
-            <input value={cols()} onInput={(event) => setCols(event.currentTarget.value)} class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2" />
+            <input
+              value={cols()}
+              onInput={(event) => setCols(event.currentTarget.value)}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            />
           </label>
           <label class="flex flex-col gap-1 text-12-regular">
             Rows
-            <input value={rows()} onInput={(event) => setRows(event.currentTarget.value)} class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2" />
+            <input
+              value={rows()}
+              onInput={(event) => setRows(event.currentTarget.value)}
+              class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2"
+            />
           </label>
         </div>
 
         <div class="grid grid-cols-2 gap-2" role="tablist" aria-label="SSH agent input mode">
-          <button type="button" onClick={() => setMode("prompt")} class={`rounded-md border px-3 py-2 ${mode() === "prompt" ? "border-border-brand-base" : "border-border-weak-base"}`}>
+          <button
+            type="button"
+            onClick={() => setMode("prompt")}
+            class={`rounded-md border px-3 py-2 ${mode() === "prompt" ? "border-border-brand-base" : "border-border-weak-base"}`}
+          >
             One-shot prompt
           </button>
-          <button type="button" disabled={!activeID()} onClick={() => setMode("interactive")} class={`rounded-md border px-3 py-2 disabled:opacity-50 ${mode() === "interactive" ? "border-border-brand-base" : "border-border-weak-base"}`}>
+          <button
+            type="button"
+            disabled={!activeID()}
+            onClick={() => setMode("interactive")}
+            class={`rounded-md border px-3 py-2 disabled:opacity-50 ${mode() === "interactive" ? "border-border-brand-base" : "border-border-weak-base"}`}
+          >
             Interactive input
           </button>
         </div>
@@ -224,22 +260,42 @@ export function SshSession(props: Props) {
           value={prompt()}
           disabled={!connected() || busy()}
           onInput={(event) => setPrompt(event.currentTarget.value)}
-          placeholder={mode() === "interactive" ? "Input sent to the remote PTY" : "Prompt sent through the CLI's one-shot mode"}
+          placeholder={
+            mode() === "interactive" ? "Input sent to the remote PTY" : "Prompt sent through the CLI's one-shot mode"
+          }
           class="rounded-md border border-border-weak-base bg-surface-base px-3 py-2 disabled:opacity-50"
         />
-        <button type="button" disabled={!prompt() || busy() || !connected()} onClick={() => void send()} class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 disabled:opacity-50">
+        <button
+          type="button"
+          disabled={!prompt() || busy() || !connected()}
+          onClick={() => void send()}
+          class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 disabled:opacity-50"
+        >
           {busy() ? "Working…" : mode() === "interactive" ? "Send PTY input" : "Run one-shot prompt"}
         </button>
 
-        <pre aria-label="SSH agent output" class="min-h-48 max-h-96 overflow-auto rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular">{output() || (busy() ? "Connecting to SSH host…" : "No output yet.")}</pre>
+        <pre
+          aria-label="SSH agent output"
+          class="min-h-48 max-h-96 overflow-auto rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular"
+        >
+          {output() || (busy() ? "Connecting to SSH host…" : "No output yet.")}
+        </pre>
         <Show when={exitCode() !== undefined}>
           <p class="text-12-regular text-text-weak">Last exit code: {exitCode()}</p>
         </Show>
         <Show when={error()}>
           <div class="flex flex-col gap-2">
-            <p role="alert" class="text-14-regular text-text-on-critical-base">{error()}</p>
+            <p role="alert" class="text-14-regular text-text-on-critical-base">
+              {error()}
+            </p>
             <Show when={!connected()}>
-              <button type="button" onClick={() => props.onDisconnected()} class="rounded-md border border-border-weak-base px-3 py-2">Return to SSH setup</button>
+              <button
+                type="button"
+                onClick={() => props.onDisconnected()}
+                class="rounded-md border border-border-weak-base px-3 py-2"
+              >
+                Return to SSH setup
+              </button>
             </Show>
           </div>
         </Show>

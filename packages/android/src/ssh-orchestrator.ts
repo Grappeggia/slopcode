@@ -135,7 +135,9 @@ export function parseOrchestratorLine(line: string): RecordValue | undefined {
   }
 }
 
-export function parseOrchestratorEvent(value: RecordValue):
+export function parseOrchestratorEvent(
+  value: RecordValue,
+):
   | { kind: "response"; requestID: string; value: RecordValue }
   | { kind: "error"; requestID?: string; message: string }
   | { kind: "event"; value: RecordValue }
@@ -154,7 +156,10 @@ export function parseOrchestratorEvent(value: RecordValue):
   if (value.kind === "event" && id(value.sessionID)) return { kind: "event", value }
 }
 
-export function parseInteraction(value: unknown, kind: OrchestratorInteraction["kind"]): OrchestratorInteraction | undefined {
+export function parseInteraction(
+  value: unknown,
+  kind: OrchestratorInteraction["kind"],
+): OrchestratorInteraction | undefined {
   if (!record(value)) return
   const interactionID = id(value.id)
   const revision = value.revision
@@ -206,7 +211,11 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
       type: type === "turn.output" ? "output" : type === "turn.reasoning" ? "reasoning" : "retry",
       text: content,
     }
-    return { ...base, phase: type === "turn.retry" ? "running" : "running", items: [...state.items, item].slice(-MAX_ITEMS) }
+    return {
+      ...base,
+      phase: type === "turn.retry" ? "running" : "running",
+      items: [...state.items, item].slice(-MAX_ITEMS),
+    }
   }
   if (type === "tool.updated" && record(value.tool)) {
     const toolID = id(value.tool.id)

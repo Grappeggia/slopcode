@@ -232,7 +232,8 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
     !bridge.sshCredentialSet ||
     !bridge.sshCredentialClear ||
     !bridge.sshEventsReady
-  ) return
+  )
+    return
 
   let nonce = ""
   let ready: Promise<boolean> | undefined
@@ -248,7 +249,11 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
   }
   return {
     connect: (input: SshConnectionInput) =>
-      result(bridge.sshConnect!(JSON.stringify(input)), parseSshConnectResult, "Android returned an invalid SSH connection result."),
+      result(
+        bridge.sshConnect!(JSON.stringify(input)),
+        parseSshConnectResult,
+        "Android returned an invalid SSH connection result.",
+      ),
     trustHostKey: (profile, fingerprint) =>
       result(
         bridge.sshTrustHostKey!(JSON.stringify({ profile, fingerprint })),
@@ -295,7 +300,8 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
     resize: (cols, rows, width = 0, height = 0) => bridge.sshResize!(cols, rows, width, height),
     interrupt: () => bridge.sshInterrupt!(),
     credentialGet: async (profile) => parseSshCredential(await bridge.sshCredentialGet!(profile)),
-    credentialSet: (profile, credential: SshCredential) => bridge.sshCredentialSet!(profile, JSON.stringify(credential)),
+    credentialSet: (profile, credential: SshCredential) =>
+      bridge.sshCredentialSet!(profile, JSON.stringify(credential)),
     credentialClear: (profile) => bridge.sshCredentialClear!(profile),
     subscribe(listener: (event: SshEvent) => void) {
       nonce = crypto.randomUUID().replaceAll("-", "")
@@ -311,7 +317,8 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
       return () => window.removeEventListener("message", handler)
     },
     subscribeOrchestrator(listener: (event: SshOrchestratorEvent) => void) {
-      if (!bridge.sshOrchestratorStart || !bridge.sshOrchestratorInput || !bridge.sshOrchestratorStop) return () => undefined
+      if (!bridge.sshOrchestratorStart || !bridge.sshOrchestratorInput || !bridge.sshOrchestratorStop)
+        return () => undefined
       nonce = crypto.randomUUID().replaceAll("-", "")
       ready = undefined
       const handler = (event: Event) => {

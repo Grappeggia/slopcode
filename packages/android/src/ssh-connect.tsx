@@ -57,10 +57,13 @@ function breadcrumbs(path: string) {
   let current = ""
   return [
     { label: "/", path: "/" },
-    ...next.split("/").filter(Boolean).map((label) => {
-      current += `/${label}`
-      return { label, path: current }
-    }),
+    ...next
+      .split("/")
+      .filter(Boolean)
+      .map((label) => {
+        current += `/${label}`
+        return { label, path: current }
+      }),
   ]
 }
 
@@ -167,7 +170,11 @@ export function SshConnect(props: Props) {
         setBusy(false)
         return
       }
-      setSetup({ ...current, state: "failed", output: appendOutput(current.output, `\nExited with code ${event.exitCode}.\n`) })
+      setSetup({
+        ...current,
+        state: "failed",
+        output: appendOutput(current.output, `\nExited with code ${event.exitCode}.\n`),
+      })
       setError(`${agentName(agent())} ${current.action} failed with exit code ${event.exitCode}.`)
       setBusy(false)
       return
@@ -533,496 +540,665 @@ export function SshConnect(props: Props) {
   }
 
   return (
-    <SshShell
-      workspace={{ target: target(), directory: directory() || "Choose a workspace", agent: agent() }}
-    >
+    <SshShell workspace={{ target: target(), directory: directory() || "Choose a workspace", agent: agent() }}>
       <main class="min-h-screen bg-surface-base text-text-strong flex items-start justify-center p-3 pt-20 sm:p-6 sm:pt-20">
-      <form
-        class="w-full max-w-3xl rounded-2xl border border-border-weak-base bg-surface-raised-base p-4 sm:p-6 flex flex-col gap-5"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (!started()) {
-            start()
-            return
-          }
-          if (!connected()) {
-            void connect()
-            return
-          }
-          if (step() === "agent") void finish()
-        }}
-      >
-        <header class="flex items-start justify-between gap-4">
-          <div class="flex flex-col gap-1">
-            <p class="text-12-regular text-text-weak uppercase tracking-wide">Remote workspace</p>
-            <h1 class="text-20-medium">
-              {!started() ? "Choose a computer" : !connected() ? "Verify and sign in" : step() === "folder" ? "Choose a workspace" : "Choose an agent"}
-            </h1>
-            <p class="text-14-regular text-text-weak">
-              {!started()
-                ? "Choose where your agent should work. You can connect directly from Android."
-                : !connected()
-                  ? `Confirm this is your computer, then sign in securely.`
-                  : step() === "folder"
-                    ? "Pick the directory the selected agent will use."
-                    : `Run the agent in ${directory()}.`}
-            </p>
-          </div>
-          <Show when={connected()}>
-            <button type="button" onClick={() => void leave()} class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular">
-              Disconnect
-            </button>
-          </Show>
-        </header>
+        <form
+          class="w-full max-w-3xl rounded-2xl border border-border-weak-base bg-surface-raised-base p-4 sm:p-6 flex flex-col gap-5"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!started()) {
+              start()
+              return
+            }
+            if (!connected()) {
+              void connect()
+              return
+            }
+            if (step() === "agent") void finish()
+          }}
+        >
+          <header class="flex items-start justify-between gap-4">
+            <div class="flex flex-col gap-1">
+              <p class="text-12-regular text-text-weak uppercase tracking-wide">Remote workspace</p>
+              <h1 class="text-20-medium">
+                {!started()
+                  ? "Choose a computer"
+                  : !connected()
+                    ? "Verify and sign in"
+                    : step() === "folder"
+                      ? "Choose a workspace"
+                      : "Choose an agent"}
+              </h1>
+              <p class="text-14-regular text-text-weak">
+                {!started()
+                  ? "Choose where your agent should work. You can connect directly from Android."
+                  : !connected()
+                    ? `Confirm this is your computer, then sign in securely.`
+                    : step() === "folder"
+                      ? "Pick the directory the selected agent will use."
+                      : `Run the agent in ${directory()}.`}
+              </p>
+            </div>
+            <Show when={connected()}>
+              <button
+                type="button"
+                onClick={() => void leave()}
+                class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular"
+              >
+                Disconnect
+              </button>
+            </Show>
+          </header>
 
-        <Show when={started()}>
-          <nav class="grid grid-cols-3 gap-2" aria-label="Workspace setup progress">
-            <For each={[{ id: "auth", label: "Computer" }, { id: "folder", label: "Workspace" }, { id: "agent", label: "Agent" }] as const}>
-              {(item, index) => {
-                const active = () => index() <= ({ auth: 0, folder: 1, agent: 2 }[step()] ?? 0)
-                return (
-                  <div class="flex flex-col gap-2" aria-current={step() === item.id ? "step" : undefined}>
-                    <div class={`h-2 rounded-full ${active() ? "bg-surface-brand-base" : "bg-surface-weak-base"}`} />
-                    <span class={`text-12-regular ${step() === item.id ? "text-text-strong" : "text-text-weak"}`}>{item.label}</span>
-                  </div>
-                )
-              }}
-            </For>
-          </nav>
-        </Show>
-
-        <Show when={!started()}>
-          <Show when={recentTargets().length > 0 && !addingComputer()}>
-            <section class="flex flex-col gap-3" aria-label="Saved computers">
-              <div>
-                <h2 class="text-16-medium">Your computers</h2>
-                <p class="text-12-regular text-text-weak">Choose a saved computer and its last workspace.</p>
-              </div>
-              <For each={recentTargets()}>
-                {(value) => {
-                  const parsed = parseSshTarget(value)
-                  const folder = value === props.initial?.target ? props.initial?.directory : undefined
+          <Show when={started()}>
+            <nav class="grid grid-cols-3 gap-2" aria-label="Workspace setup progress">
+              <For
+                each={
+                  [
+                    { id: "auth", label: "Computer" },
+                    { id: "folder", label: "Workspace" },
+                    { id: "agent", label: "Agent" },
+                  ] as const
+                }
+              >
+                {(item, index) => {
+                  const active = () => index() <= ({ auth: 0, folder: 1, agent: 2 }[step()] ?? 0)
                   return (
-                    <button type="button" class="flex min-h-12 items-center gap-3 rounded-xl border border-border-weak-base bg-surface-base px-3 py-2 text-left" onClick={() => chooseComputer(value)}>
-                      <span aria-hidden="true" class="text-20-medium">⌂</span>
-                      <span class="min-w-0 flex-1">
-                        <span class="block truncate text-14-medium">{parsed?.host ?? value}</span>
-                        <span class="block truncate text-12-regular text-text-weak">{parsed?.user ?? "SSH user"}{folder ? ` · ${folder}` : " · Workspace saved"}</span>
+                    <div class="flex flex-col gap-2" aria-current={step() === item.id ? "step" : undefined}>
+                      <div class={`h-2 rounded-full ${active() ? "bg-surface-brand-base" : "bg-surface-weak-base"}`} />
+                      <span class={`text-12-regular ${step() === item.id ? "text-text-strong" : "text-text-weak"}`}>
+                        {item.label}
                       </span>
-                      <span class="shrink-0 rounded-full bg-surface-success-weak px-2 py-1 text-12-regular text-text-success">Saved</span>
-                    </button>
+                    </div>
                   )
                 }}
               </For>
-              <button type="button" onClick={() => { setTarget(""); setAddingComputer(true) }} class="min-h-12 rounded-xl border border-border-brand-base px-4 py-3 text-14-medium">
-                Add computer
-              </button>
-            </section>
+            </nav>
           </Show>
-          <Show when={recentTargets().length === 0 || addingComputer()}>
-            <div class="flex items-center justify-between gap-3">
-              <label class="flex min-w-0 flex-1 flex-col gap-2 text-14-medium">
-                Computer address
-                <span class="text-12-regular text-text-weak">Use the simple SSH address from your computer, for example user@macbook.local.</span>
+
+          <Show when={!started()}>
+            <Show when={recentTargets().length > 0 && !addingComputer()}>
+              <section class="flex flex-col gap-3" aria-label="Saved computers">
+                <div>
+                  <h2 class="text-16-medium">Your computers</h2>
+                  <p class="text-12-regular text-text-weak">Choose a saved computer and its last workspace.</p>
+                </div>
+                <For each={recentTargets()}>
+                  {(value) => {
+                    const parsed = parseSshTarget(value)
+                    const folder = value === props.initial?.target ? props.initial?.directory : undefined
+                    return (
+                      <button
+                        type="button"
+                        class="flex min-h-12 items-center gap-3 rounded-xl border border-border-weak-base bg-surface-base px-3 py-2 text-left"
+                        onClick={() => chooseComputer(value)}
+                      >
+                        <span aria-hidden="true" class="text-20-medium">
+                          ⌂
+                        </span>
+                        <span class="min-w-0 flex-1">
+                          <span class="block truncate text-14-medium">{parsed?.host ?? value}</span>
+                          <span class="block truncate text-12-regular text-text-weak">
+                            {parsed?.user ?? "SSH user"}
+                            {folder ? ` · ${folder}` : " · Workspace saved"}
+                          </span>
+                        </span>
+                        <span class="shrink-0 rounded-full bg-surface-success-weak px-2 py-1 text-12-regular text-text-success">
+                          Saved
+                        </span>
+                      </button>
+                    )
+                  }}
+                </For>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTarget("")
+                    setAddingComputer(true)
+                  }}
+                  class="min-h-12 rounded-xl border border-border-brand-base px-4 py-3 text-14-medium"
+                >
+                  Add computer
+                </button>
+              </section>
+            </Show>
+            <Show when={recentTargets().length === 0 || addingComputer()}>
+              <div class="flex items-center justify-between gap-3">
+                <label class="flex min-w-0 flex-1 flex-col gap-2 text-14-medium">
+                  Computer address
+                  <span class="text-12-regular text-text-weak">
+                    Use the simple SSH address from your computer, for example user@macbook.local.
+                  </span>
+                  <input
+                    required
+                    type="text"
+                    autocomplete="off"
+                    placeholder="user@mac.example.com"
+                    value={target()}
+                    onInput={(event) => setTarget(event.currentTarget.value)}
+                    class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
+                  />
+                </label>
+                <Show when={recentTargets().length > 0}>
+                  <button
+                    type="button"
+                    onClick={() => setAddingComputer(false)}
+                    class="self-end shrink-0 text-12-regular underline"
+                  >
+                    Saved computers
+                  </button>
+                </Show>
+              </div>
+              <details class="rounded-xl border border-border-weak-base bg-surface-base p-3">
+                <summary class="cursor-pointer text-12-medium">Advanced connection details</summary>
+                <p class="mt-2 text-12-regular text-text-weak">
+                  Port can be appended as user@host:port. SSH keys and host verification are handled in the next step.
+                </p>
+              </details>
+            </Show>
+          </Show>
+
+          <Show when={started() && !connected()}>
+            <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
+              <span class="text-14-regular">{target()}</span>
+              <button type="button" onClick={() => setStarted(false)} class="text-12-regular underline">
+                Change
+              </button>
+            </div>
+            <div class="grid grid-cols-2 gap-2" role="tablist" aria-label="SSH authentication">
+              <button
+                type="button"
+                class={`rounded-lg border px-3 py-3 text-14-medium ${auth() === "password" ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
+                aria-selected={auth() === "password"}
+                onClick={() => setAuth("password")}
+              >
+                Password
+              </button>
+              <button
+                type="button"
+                class={`rounded-lg border px-3 py-3 text-14-medium ${auth() === "privateKey" ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
+                aria-selected={auth() === "privateKey"}
+                onClick={() => setAuth("privateKey")}
+              >
+                Private key
+              </button>
+            </div>
+            <Show when={auth() === "password"}>
+              <label class="flex flex-col gap-2 text-14-medium">
+                SSH password
                 <input
                   required
-                  type="text"
-                  autocomplete="off"
-                  placeholder="user@mac.example.com"
-                  value={target()}
-                  onInput={(event) => setTarget(event.currentTarget.value)}
+                  type="password"
+                  autocomplete="current-password"
+                  value={password()}
+                  onInput={(event) => setPassword(event.currentTarget.value)}
                   class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
                 />
               </label>
-              <Show when={recentTargets().length > 0}>
-                <button type="button" onClick={() => setAddingComputer(false)} class="self-end shrink-0 text-12-regular underline">Saved computers</button>
-              </Show>
-            </div>
-            <details class="rounded-xl border border-border-weak-base bg-surface-base p-3">
-              <summary class="cursor-pointer text-12-medium">Advanced connection details</summary>
-              <p class="mt-2 text-12-regular text-text-weak">Port can be appended as user@host:port. SSH keys and host verification are handled in the next step.</p>
-            </details>
-          </Show>
-        </Show>
-
-        <Show when={started() && !connected()}>
-          <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
-            <span class="text-14-regular">{target()}</span>
-            <button type="button" onClick={() => setStarted(false)} class="text-12-regular underline">
-              Change
-            </button>
-          </div>
-          <div class="grid grid-cols-2 gap-2" role="tablist" aria-label="SSH authentication">
-            <button
-              type="button"
-              class={`rounded-lg border px-3 py-3 text-14-medium ${auth() === "password" ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
-              aria-selected={auth() === "password"}
-              onClick={() => setAuth("password")}
-            >
-              Password
-            </button>
-            <button
-              type="button"
-              class={`rounded-lg border px-3 py-3 text-14-medium ${auth() === "privateKey" ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
-              aria-selected={auth() === "privateKey"}
-              onClick={() => setAuth("privateKey")}
-            >
-              Private key
-            </button>
-          </div>
-          <Show when={auth() === "password"}>
-            <label class="flex flex-col gap-2 text-14-medium">
-              SSH password
-              <input
-                required
-                type="password"
-                autocomplete="current-password"
-                value={password()}
-                onInput={(event) => setPassword(event.currentTarget.value)}
-                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
-              />
-            </label>
-          </Show>
-          <Show when={auth() === "privateKey"}>
-            <section class="rounded-xl border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3">
-              <div>
-                <h2 class="text-14-medium">Choose a private-key file</h2>
-                <p class="text-12-regular text-text-weak">Android reads the file locally and stores the credential only in protected device storage.</p>
-              </div>
-              <div class="flex items-center gap-3">
-                <button type="button" onClick={() => void pickPrivateKey()} class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 text-12-medium">
-                  Choose private key
-                </button>
-                <span class="text-12-regular text-text-weak" aria-live="polite">{privateKeyLabel() || "No key selected"}</span>
-              </div>
-            </section>
-            <label class="flex flex-col gap-2 text-14-medium">
-              Key passphrase <span class="text-12-regular text-text-weak">Optional · kept on this device</span>
-              <input
-                type="password"
-                autocomplete="current-password"
-                value={passphrase()}
-                onInput={(event) => setPassphrase(event.currentTarget.value)}
-                class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
-              />
-            </label>
-          </Show>
-          <Show when={pendingKey()}>
-            {(key) => (
-              <section class="rounded-xl border border-border-brand-base bg-surface-base p-4 flex flex-col gap-3" role="alert">
-                <div class="flex items-start gap-3">
-                  <span aria-hidden="true" class="text-20-medium">🛡</span>
-                  <div>
-                    <h2 class="text-16-medium">Confirm this is your computer</h2>
-                    <p class="text-12-regular text-text-weak mt-1">We found a new SSH identity for {target()}. Never trust a changed identity without checking it.</p>
-                  </div>
-                </div>
-                <details class="rounded-lg border border-border-weak-base p-3">
-                  <summary class="cursor-pointer text-12-medium">Technical details</summary>
-                  <div class="mt-2 flex flex-col gap-2">
-                    <span class="text-12-regular text-text-weak">{key().type}</span>
-                    <code class="break-all text-12-regular">{key().fingerprint}</code>
-                    <p class="text-12-regular text-text-weak">Compare this fingerprint with a trusted copy on the remote machine.</p>
-                  </div>
-                </details>
-                <button type="button" disabled={busy()} onClick={() => void trust()} class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50">
-                  Confirm computer
-                </button>
-              </section>
-            )}
-          </Show>
-        </Show>
-
-        <Show when={connected() && step() === "folder"}>
-          <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
-            <div class="min-w-0">
-              <p class="text-12-regular text-text-weak">Connected as</p>
-              <p class="truncate text-14-medium">{target()}</p>
-            </div>
-            <span class="shrink-0 text-12-regular text-text-weak">SFTP ready</span>
-          </div>
-          <Show when={recentFolders().length > 0}>
-            <section class="flex flex-col gap-2" aria-label="Recently used remote folders">
-              <div>
-                <h2 class="text-14-medium">Recent folders</h2>
-                <p class="text-12-regular text-text-weak">Use one of your last three workspaces.</p>
-              </div>
-              <For each={recentFolders()}>
-                {(folder) => (
-                  <div class="flex items-center gap-3 rounded-lg border border-border-weak-base px-3 py-3">
-                    <button type="button" onClick={() => selectFolder(folder)} class="min-w-0 flex-1 text-left">
-                      <span class="block truncate text-14-medium">{folder}</span>
-                      <span class="block text-12-regular text-text-weak">Remote folder</span>
-                    </button>
-                    <button type="button" onClick={() => selectFolder(folder)} class="shrink-0 rounded-md bg-surface-brand-base px-3 py-2 text-12-regular text-text-on-brand-base">
-                      Use
-                    </button>
-                  </div>
-                )}
-              </For>
-            </section>
-          </Show>
-          <button type="button" onClick={() => setBrowseOpen(!browseOpen())} class="flex items-center justify-between rounded-lg border border-border-weak-base px-3 py-3 text-left">
-            <span>
-              <span class="block text-14-medium">{browseOpen() ? "Browse remote folders" : "Browse all folders"}</span>
-              <span class="block text-12-regular text-text-weak">Start from Home and navigate with breadcrumbs.</span>
-            </span>
-            <span aria-hidden="true">{browseOpen() ? "⌃" : "⌄"}</span>
-          </button>
-          <Show when={browseOpen()}>
-            <section class="rounded-lg border border-border-weak-base bg-surface-base p-3 flex flex-col gap-3" aria-label="Remote folder browser">
-              <div class="flex items-center gap-2 overflow-x-auto pb-1">
-                <button type="button" aria-label="Go to parent folder" disabled={!listing()?.parent || browseBusy()} onClick={() => { const parent = listing()?.parent; if (parent) void browse(parent) }} class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular disabled:opacity-50">
-                  ← Up
-                </button>
-                <button type="button" onClick={() => void browse(homePath())} class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular">
-                  Home
-                </button>
-                <For each={breadcrumbs(browsePath())}>
-                  {(crumb) => (
-                    <button type="button" onClick={() => void browse(crumb.path)} class="shrink-0 rounded-md px-2 py-2 text-12-regular text-text-weak hover:text-text-strong">
-                      {crumb.label}
-                    </button>
-                  )}
-                </For>
-              </div>
-              <div class="rounded-md border border-border-weak-base px-3 py-2 text-12-regular text-text-weak truncate" aria-label="Current remote path">
-                {browsePath()}
-              </div>
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <input
-                  type="search"
-                  value={query()}
-                  onInput={(event) => setQuery(event.currentTarget.value)}
-                  placeholder="Filter this folder"
-                  aria-label="Filter current remote folder"
-                  class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
-                />
-                <details class="relative shrink-0">
-                  <summary class="cursor-pointer rounded-md border border-border-weak-base px-3 py-2 text-12-regular">More</summary>
-                  <label class="absolute right-0 z-10 mt-2 flex w-48 items-center gap-2 rounded-lg border border-border-weak-base bg-surface-raised-base p-3 text-12-regular shadow-lg">
-                    <input
-                      type="checkbox"
-                      checked={showHidden()}
-                      onChange={(event) => {
-                        const value = event.currentTarget.checked
-                        setShowHidden(value)
-                        void browse(browsePath(), value)
-                      }}
-                    />
-                    Show hidden files
-                  </label>
-                </details>
-              </div>
-              <Show when={!listing()}>
-                <p class="px-2 py-4 text-12-regular text-text-weak">Loading remote folders…</p>
-              </Show>
-              <Show when={listing() && entries().length === 0}>
-                <p class="px-2 py-4 text-12-regular text-text-weak">No matching files or folders.</p>
-              </Show>
-              <div class="flex max-h-[46vh] flex-col gap-0 overflow-y-auto" role="list" aria-label="Remote files and folders">
-                <For each={entries()}>
-                  {(entry) => (
-                    <Show
-                      when={entry.type === "directory"}
-                      fallback={
-                        <div role="listitem" class="flex min-h-8 items-center gap-2 rounded-md px-2 py-1 text-text-weak">
-                          <span aria-hidden="true" class="w-5 text-center">•</span>
-                          <span class="min-w-0 flex-1 truncate text-14-regular">{entry.name}</span>
-                          <span class="shrink-0 text-12-regular">{entryMeta(entry)}</span>
-                        </div>
-                      }
-                    >
-                      <button type="button" role="listitem" onClick={() => void browse(entry.path)} class="flex min-h-12 items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-surface-raised-base-hover">
-                        <span aria-hidden="true" class="w-5 text-center text-text-weak">▸</span>
-                        <span class="min-w-0 flex-1 truncate text-14-medium">{entry.name}</span>
-                        <span class="shrink-0 text-12-regular text-text-weak">{entryMeta(entry)}</span>
-                      </button>
-                    </Show>
-                  )}
-                </For>
-              </div>
-              <div class="sticky bottom-0 flex items-center gap-3 border-t border-border-weak-base bg-surface-base pt-3">
-                <div class="min-w-0 flex-1">
-                  <p class="text-12-regular text-text-weak">Selected folder</p>
-                  <p class="truncate text-14-medium">{browsePath()}</p>
-                </div>
-                <button type="button" onClick={() => selectFolder(browsePath())} class="shrink-0 rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base">
-                  Use this folder
-                </button>
-              </div>
-            </section>
-          </Show>
-        </Show>
-
-        <Show when={connected() && step() === "agent"}>
-          <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
-            <div class="min-w-0">
-              <p class="text-12-regular text-text-weak">Remote workspace</p>
-              <p class="truncate text-14-medium">{directory()}</p>
-            </div>
-            <button type="button" onClick={() => { setStep("folder"); setBrowseOpen(true) }} class="shrink-0 text-12-regular underline">
-              Change
-            </button>
-          </div>
-          <section class="flex flex-col gap-2" aria-label="Remote agent selection">
-            <div>
-              <h2 class="text-14-medium">Choose the backend agent</h2>
-              <p class="text-12-regular text-text-weak">Slopcode Android orchestrates the session; the selected CLI runs on the host.</p>
-            </div>
-            <For each={SSH_AGENTS}>
-              {(value) => (
-                <button
-                  type="button"
-                  aria-pressed={agent() === value}
-                  onClick={() => {
-                    setAgent(value)
-                    setSetup()
-                    setPreflight()
-                    setError("")
-                  }}
-                  class={`flex items-center gap-3 rounded-lg border px-3 py-3 text-left ${agent() === value ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
-                >
-                  <span aria-hidden="true" class={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${agent() === value ? "border-border-brand-base" : "border-border-weak-base"}`}>
-                    {agent() === value ? "●" : ""}
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="flex items-center gap-2">
-                      <span class="text-14-medium">{agentName(value)}</span>
-                      <span class={`rounded-full px-2 py-1 text-12-regular ${agentStatuses()[value] === "Ready" ? "bg-surface-success-weak text-text-success" : agentStatuses()[value] === "Not installed" ? "bg-surface-critical-weak text-text-critical" : "bg-surface-weak-base text-text-weak"}`}>
-                        {agentStatuses()[value] ?? (value === "slopcode-cli" ? "Recommended" : "Checking")}
-                      </span>
-                    </span>
-                    <span class="block text-12-regular text-text-weak">{agentDescription(value)}</span>
-                  </span>
-                </button>
-              )}
-            </For>
-          </section>
-          <Show when={preflight()}>
-            <pre class="rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular">{preflight()}</pre>
-          </Show>
-          <Show when={setup()}>
-            {(current) => (
-              <section class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3" aria-live="polite">
+            </Show>
+            <Show when={auth() === "privateKey"}>
+              <section class="rounded-xl border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3">
                 <div>
-                  <h2 class="text-14-medium">
-                    {current().action === "install" ? `${agentName(agent())} is not installed` : `Sign in to ${agentName(agent())}`}
-                  </h2>
+                  <h2 class="text-14-medium">Choose a private-key file</h2>
                   <p class="text-12-regular text-text-weak">
-                    {current().action === "install"
-                      ? "We will prepare the selected agent on your computer, then verify that it is ready."
-                      : "Complete sign-in on your computer. Slopcode will verify the agent before opening the session."}
+                    Android reads the file locally and stores the credential only in protected device storage.
                   </p>
                 </div>
-                <ol class="grid grid-cols-3 gap-2" aria-label="Agent setup progress">
-                  <li class={`rounded-lg border p-3 text-12-regular ${current().action === "install" && current().state === "complete" ? "border-border-brand-base" : "border-border-weak-base"}`}>
-                    <span class="block text-text-weak">1</span>
-                    <span class="block mt-1">Installing</span>
-                  </li>
-                  <li class={`rounded-lg border p-3 text-12-regular ${current().action === "login" && current().state === "complete" ? "border-border-brand-base" : "border-border-weak-base"}`}>
-                    <span class="block text-text-weak">2</span>
-                    <span class="block mt-1">Signing in</span>
-                  </li>
-                  <li class="rounded-lg border border-border-weak-base p-3 text-12-regular">
-                    <span class="block text-text-weak">3</span>
-                    <span class="block mt-1">Verifying</span>
-                  </li>
-                </ol>
-                <details>
-                  <summary class="cursor-pointer text-12-regular text-text-weak">Technical details</summary>
-                  <code class="mt-2 block rounded-md border border-border-weak-base px-3 py-2 break-all text-12-regular">
-                    {sshSetupRecipe(agent(), current().action)}
-                  </code>
-                </details>
-                <Show when={current().output}>
-                  <pre class="max-h-52 overflow-y-auto rounded-md border border-border-weak-base p-3 whitespace-pre-wrap text-12-regular">
-                    {current().output}
-                  </pre>
-                </Show>
-                <Show when={current().action === "login" && current().state === "running"}>
-                  <div class="flex flex-col gap-2">
-                    <div class="flex gap-2">
-                      <input
-                        type="text"
-                        autocomplete="off"
-                        value={setupInput()}
-                        onInput={(event) => setSetupInput(event.currentTarget.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault()
-                            void sendSetupInput()
-                          }
-                        }}
-                        placeholder="Reply to the login prompt"
-                        aria-label="Login prompt input"
-                        class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
-                      />
-                      <button type="button" onClick={() => void sendSetupInput()} disabled={!setupInput() || checkingLogin()} class="rounded-md border border-border-weak-base px-3 py-2 text-12-regular disabled:opacity-50">
-                        Send
-                      </button>
-                    </div>
-                    <button type="button" onClick={() => void checkLogin()} disabled={checkingLogin()} class="w-fit text-12-regular underline disabled:opacity-50">
-                      {checkingLogin() ? "Checking sign-in…" : "I completed sign-in — check again"}
-                    </button>
-                  </div>
-                </Show>
-                <For each={setupUrls(current().output)}>
-                  {(url) => (
-                    <div class="flex flex-col gap-1">
-                      <code class="break-all text-12-regular text-text-weak">{url}</code>
-                      <button type="button" onClick={() => void getAndroidBridge()?.openLink(url)} class="w-fit text-left text-12-regular underline">
-                        Open sign-in link in browser
-                      </button>
-                    </div>
-                  )}
-                </For>
-                <Show when={current().state === "running"}>
-                  <button type="button" onClick={() => void cancelSetup()} class="w-fit text-12-regular underline">
-                    Cancel {current().action}
+                <div class="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void pickPrivateKey()}
+                    class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 text-12-medium"
+                  >
+                    Choose private key
                   </button>
-                </Show>
-                <Show when={current().state !== "running"}>
+                  <span class="text-12-regular text-text-weak" aria-live="polite">
+                    {privateKeyLabel() || "No key selected"}
+                  </span>
+                </div>
+              </section>
+              <label class="flex flex-col gap-2 text-14-medium">
+                Key passphrase <span class="text-12-regular text-text-weak">Optional · kept on this device</span>
+                <input
+                  type="password"
+                  autocomplete="current-password"
+                  value={passphrase()}
+                  onInput={(event) => setPassphrase(event.currentTarget.value)}
+                  class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
+                />
+              </label>
+            </Show>
+            <Show when={pendingKey()}>
+              {(key) => (
+                <section
+                  class="rounded-xl border border-border-brand-base bg-surface-base p-4 flex flex-col gap-3"
+                  role="alert"
+                >
+                  <div class="flex items-start gap-3">
+                    <span aria-hidden="true" class="text-20-medium">
+                      🛡
+                    </span>
+                    <div>
+                      <h2 class="text-16-medium">Confirm this is your computer</h2>
+                      <p class="text-12-regular text-text-weak mt-1">
+                        We found a new SSH identity for {target()}. Never trust a changed identity without checking it.
+                      </p>
+                    </div>
+                  </div>
+                  <details class="rounded-lg border border-border-weak-base p-3">
+                    <summary class="cursor-pointer text-12-medium">Technical details</summary>
+                    <div class="mt-2 flex flex-col gap-2">
+                      <span class="text-12-regular text-text-weak">{key().type}</span>
+                      <code class="break-all text-12-regular">{key().fingerprint}</code>
+                      <p class="text-12-regular text-text-weak">
+                        Compare this fingerprint with a trusted copy on the remote machine.
+                      </p>
+                    </div>
+                  </details>
                   <button
                     type="button"
                     disabled={busy()}
-                    onClick={() => void startSetup(current().action)}
-                    class="rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base disabled:opacity-50"
+                    onClick={() => void trust()}
+                    class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50"
                   >
-                    {current().state === "failed"
-                      ? `Retry ${current().action}`
-                      : current().action === "install"
-                        ? `Install ${agentName(agent())} on host`
-                        : `Start ${agentName(agent())} sign-in`}
+                    Confirm computer
                   </button>
-                </Show>
-              </section>
-            )}
+                </section>
+              )}
+            </Show>
           </Show>
-        </Show>
 
-        <Show when={error()}>
-          <p role="alert" class="rounded-md bg-surface-critical-base px-3 py-2 text-14-regular text-text-on-critical-base">{error()}</p>
-        </Show>
+          <Show when={connected() && step() === "folder"}>
+            <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
+              <div class="min-w-0">
+                <p class="text-12-regular text-text-weak">Connected as</p>
+                <p class="truncate text-14-medium">{target()}</p>
+              </div>
+              <span class="shrink-0 text-12-regular text-text-weak">SFTP ready</span>
+            </div>
+            <Show when={recentFolders().length > 0}>
+              <section class="flex flex-col gap-2" aria-label="Recently used remote folders">
+                <div>
+                  <h2 class="text-14-medium">Recent folders</h2>
+                  <p class="text-12-regular text-text-weak">Use one of your last three workspaces.</p>
+                </div>
+                <For each={recentFolders()}>
+                  {(folder) => (
+                    <div class="flex items-center gap-3 rounded-lg border border-border-weak-base px-3 py-3">
+                      <button type="button" onClick={() => selectFolder(folder)} class="min-w-0 flex-1 text-left">
+                        <span class="block truncate text-14-medium">{folder}</span>
+                        <span class="block text-12-regular text-text-weak">Remote folder</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => selectFolder(folder)}
+                        class="shrink-0 rounded-md bg-surface-brand-base px-3 py-2 text-12-regular text-text-on-brand-base"
+                      >
+                        Use
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </section>
+            </Show>
+            <button
+              type="button"
+              onClick={() => setBrowseOpen(!browseOpen())}
+              class="flex items-center justify-between rounded-lg border border-border-weak-base px-3 py-3 text-left"
+            >
+              <span>
+                <span class="block text-14-medium">
+                  {browseOpen() ? "Browse remote folders" : "Browse all folders"}
+                </span>
+                <span class="block text-12-regular text-text-weak">Start from Home and navigate with breadcrumbs.</span>
+              </span>
+              <span aria-hidden="true">{browseOpen() ? "⌃" : "⌄"}</span>
+            </button>
+            <Show when={browseOpen()}>
+              <section
+                class="rounded-lg border border-border-weak-base bg-surface-base p-3 flex flex-col gap-3"
+                aria-label="Remote folder browser"
+              >
+                <div class="flex items-center gap-2 overflow-x-auto pb-1">
+                  <button
+                    type="button"
+                    aria-label="Go to parent folder"
+                    disabled={!listing()?.parent || browseBusy()}
+                    onClick={() => {
+                      const parent = listing()?.parent
+                      if (parent) void browse(parent)
+                    }}
+                    class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular disabled:opacity-50"
+                  >
+                    ← Up
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void browse(homePath())}
+                    class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular"
+                  >
+                    Home
+                  </button>
+                  <For each={breadcrumbs(browsePath())}>
+                    {(crumb) => (
+                      <button
+                        type="button"
+                        onClick={() => void browse(crumb.path)}
+                        class="shrink-0 rounded-md px-2 py-2 text-12-regular text-text-weak hover:text-text-strong"
+                      >
+                        {crumb.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <div
+                  class="rounded-md border border-border-weak-base px-3 py-2 text-12-regular text-text-weak truncate"
+                  aria-label="Current remote path"
+                >
+                  {browsePath()}
+                </div>
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <input
+                    type="search"
+                    value={query()}
+                    onInput={(event) => setQuery(event.currentTarget.value)}
+                    placeholder="Filter this folder"
+                    aria-label="Filter current remote folder"
+                    class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
+                  />
+                  <details class="relative shrink-0">
+                    <summary class="cursor-pointer rounded-md border border-border-weak-base px-3 py-2 text-12-regular">
+                      More
+                    </summary>
+                    <label class="absolute right-0 z-10 mt-2 flex w-48 items-center gap-2 rounded-lg border border-border-weak-base bg-surface-raised-base p-3 text-12-regular shadow-lg">
+                      <input
+                        type="checkbox"
+                        checked={showHidden()}
+                        onChange={(event) => {
+                          const value = event.currentTarget.checked
+                          setShowHidden(value)
+                          void browse(browsePath(), value)
+                        }}
+                      />
+                      Show hidden files
+                    </label>
+                  </details>
+                </div>
+                <Show when={!listing()}>
+                  <p class="px-2 py-4 text-12-regular text-text-weak">Loading remote folders…</p>
+                </Show>
+                <Show when={listing() && entries().length === 0}>
+                  <p class="px-2 py-4 text-12-regular text-text-weak">No matching files or folders.</p>
+                </Show>
+                <div
+                  class="flex max-h-[46vh] flex-col gap-0 overflow-y-auto"
+                  role="list"
+                  aria-label="Remote files and folders"
+                >
+                  <For each={entries()}>
+                    {(entry) => (
+                      <Show
+                        when={entry.type === "directory"}
+                        fallback={
+                          <div
+                            role="listitem"
+                            class="flex min-h-8 items-center gap-2 rounded-md px-2 py-1 text-text-weak"
+                          >
+                            <span aria-hidden="true" class="w-5 text-center">
+                              •
+                            </span>
+                            <span class="min-w-0 flex-1 truncate text-14-regular">{entry.name}</span>
+                            <span class="shrink-0 text-12-regular">{entryMeta(entry)}</span>
+                          </div>
+                        }
+                      >
+                        <button
+                          type="button"
+                          role="listitem"
+                          onClick={() => void browse(entry.path)}
+                          class="flex min-h-12 items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-surface-raised-base-hover"
+                        >
+                          <span aria-hidden="true" class="w-5 text-center text-text-weak">
+                            ▸
+                          </span>
+                          <span class="min-w-0 flex-1 truncate text-14-medium">{entry.name}</span>
+                          <span class="shrink-0 text-12-regular text-text-weak">{entryMeta(entry)}</span>
+                        </button>
+                      </Show>
+                    )}
+                  </For>
+                </div>
+                <div class="sticky bottom-0 flex items-center gap-3 border-t border-border-weak-base bg-surface-base pt-3">
+                  <div class="min-w-0 flex-1">
+                    <p class="text-12-regular text-text-weak">Selected folder</p>
+                    <p class="truncate text-14-medium">{browsePath()}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => selectFolder(browsePath())}
+                    class="shrink-0 rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base"
+                  >
+                    Use this folder
+                  </button>
+                </div>
+              </section>
+            </Show>
+          </Show>
 
-        <Show when={!started() || (started() && !connected()) || (connected() && step() === "agent")}>
-          <button type="submit" disabled={busy()} class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50">
-            {!started()
-              ? "Continue"
-              : !connected()
-                ? busy()
-                  ? "Connecting…"
-                  : "Connect to SSH host"
-                : busy()
-                  ? "Checking CLI…"
-                  : setup()
-                    ? setup()!.action === "install"
-                      ? "Install the agent above"
-                      : "Complete sign-in above"
-                    : "Run preflight and open agent"}
-          </button>
-        </Show>
-      </form>
+          <Show when={connected() && step() === "agent"}>
+            <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
+              <div class="min-w-0">
+                <p class="text-12-regular text-text-weak">Remote workspace</p>
+                <p class="truncate text-14-medium">{directory()}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep("folder")
+                  setBrowseOpen(true)
+                }}
+                class="shrink-0 text-12-regular underline"
+              >
+                Change
+              </button>
+            </div>
+            <section class="flex flex-col gap-2" aria-label="Remote agent selection">
+              <div>
+                <h2 class="text-14-medium">Choose the backend agent</h2>
+                <p class="text-12-regular text-text-weak">
+                  Slopcode Android orchestrates the session; the selected CLI runs on the host.
+                </p>
+              </div>
+              <For each={SSH_AGENTS}>
+                {(value) => (
+                  <button
+                    type="button"
+                    aria-pressed={agent() === value}
+                    onClick={() => {
+                      setAgent(value)
+                      setSetup()
+                      setPreflight()
+                      setError("")
+                    }}
+                    class={`flex items-center gap-3 rounded-lg border px-3 py-3 text-left ${agent() === value ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${agent() === value ? "border-border-brand-base" : "border-border-weak-base"}`}
+                    >
+                      {agent() === value ? "●" : ""}
+                    </span>
+                    <span class="min-w-0 flex-1">
+                      <span class="flex items-center gap-2">
+                        <span class="text-14-medium">{agentName(value)}</span>
+                        <span
+                          class={`rounded-full px-2 py-1 text-12-regular ${agentStatuses()[value] === "Ready" ? "bg-surface-success-weak text-text-success" : agentStatuses()[value] === "Not installed" ? "bg-surface-critical-weak text-text-critical" : "bg-surface-weak-base text-text-weak"}`}
+                        >
+                          {agentStatuses()[value] ?? (value === "slopcode-cli" ? "Recommended" : "Checking")}
+                        </span>
+                      </span>
+                      <span class="block text-12-regular text-text-weak">{agentDescription(value)}</span>
+                    </span>
+                  </button>
+                )}
+              </For>
+            </section>
+            <Show when={preflight()}>
+              <pre class="rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular">{preflight()}</pre>
+            </Show>
+            <Show when={setup()}>
+              {(current) => (
+                <section
+                  class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3"
+                  aria-live="polite"
+                >
+                  <div>
+                    <h2 class="text-14-medium">
+                      {current().action === "install"
+                        ? `${agentName(agent())} is not installed`
+                        : `Sign in to ${agentName(agent())}`}
+                    </h2>
+                    <p class="text-12-regular text-text-weak">
+                      {current().action === "install"
+                        ? "We will prepare the selected agent on your computer, then verify that it is ready."
+                        : "Complete sign-in on your computer. Slopcode will verify the agent before opening the session."}
+                    </p>
+                  </div>
+                  <ol class="grid grid-cols-3 gap-2" aria-label="Agent setup progress">
+                    <li
+                      class={`rounded-lg border p-3 text-12-regular ${current().action === "install" && current().state === "complete" ? "border-border-brand-base" : "border-border-weak-base"}`}
+                    >
+                      <span class="block text-text-weak">1</span>
+                      <span class="block mt-1">Installing</span>
+                    </li>
+                    <li
+                      class={`rounded-lg border p-3 text-12-regular ${current().action === "login" && current().state === "complete" ? "border-border-brand-base" : "border-border-weak-base"}`}
+                    >
+                      <span class="block text-text-weak">2</span>
+                      <span class="block mt-1">Signing in</span>
+                    </li>
+                    <li class="rounded-lg border border-border-weak-base p-3 text-12-regular">
+                      <span class="block text-text-weak">3</span>
+                      <span class="block mt-1">Verifying</span>
+                    </li>
+                  </ol>
+                  <details>
+                    <summary class="cursor-pointer text-12-regular text-text-weak">Technical details</summary>
+                    <code class="mt-2 block rounded-md border border-border-weak-base px-3 py-2 break-all text-12-regular">
+                      {sshSetupRecipe(agent(), current().action)}
+                    </code>
+                  </details>
+                  <Show when={current().output}>
+                    <pre class="max-h-52 overflow-y-auto rounded-md border border-border-weak-base p-3 whitespace-pre-wrap text-12-regular">
+                      {current().output}
+                    </pre>
+                  </Show>
+                  <Show when={current().action === "login" && current().state === "running"}>
+                    <div class="flex flex-col gap-2">
+                      <div class="flex gap-2">
+                        <input
+                          type="text"
+                          autocomplete="off"
+                          value={setupInput()}
+                          onInput={(event) => setSetupInput(event.currentTarget.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault()
+                              void sendSetupInput()
+                            }
+                          }}
+                          placeholder="Reply to the login prompt"
+                          aria-label="Login prompt input"
+                          class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void sendSetupInput()}
+                          disabled={!setupInput() || checkingLogin()}
+                          class="rounded-md border border-border-weak-base px-3 py-2 text-12-regular disabled:opacity-50"
+                        >
+                          Send
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void checkLogin()}
+                        disabled={checkingLogin()}
+                        class="w-fit text-12-regular underline disabled:opacity-50"
+                      >
+                        {checkingLogin() ? "Checking sign-in…" : "I completed sign-in — check again"}
+                      </button>
+                    </div>
+                  </Show>
+                  <For each={setupUrls(current().output)}>
+                    {(url) => (
+                      <div class="flex flex-col gap-1">
+                        <code class="break-all text-12-regular text-text-weak">{url}</code>
+                        <button
+                          type="button"
+                          onClick={() => void getAndroidBridge()?.openLink(url)}
+                          class="w-fit text-left text-12-regular underline"
+                        >
+                          Open sign-in link in browser
+                        </button>
+                      </div>
+                    )}
+                  </For>
+                  <Show when={current().state === "running"}>
+                    <button type="button" onClick={() => void cancelSetup()} class="w-fit text-12-regular underline">
+                      Cancel {current().action}
+                    </button>
+                  </Show>
+                  <Show when={current().state !== "running"}>
+                    <button
+                      type="button"
+                      disabled={busy()}
+                      onClick={() => void startSetup(current().action)}
+                      class="rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base disabled:opacity-50"
+                    >
+                      {current().state === "failed"
+                        ? `Retry ${current().action}`
+                        : current().action === "install"
+                          ? `Install ${agentName(agent())} on host`
+                          : `Start ${agentName(agent())} sign-in`}
+                    </button>
+                  </Show>
+                </section>
+              )}
+            </Show>
+          </Show>
+
+          <Show when={error()}>
+            <p
+              role="alert"
+              class="rounded-md bg-surface-critical-base px-3 py-2 text-14-regular text-text-on-critical-base"
+            >
+              {error()}
+            </p>
+          </Show>
+
+          <Show when={!started() || (started() && !connected()) || (connected() && step() === "agent")}>
+            <button
+              type="submit"
+              disabled={busy()}
+              class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50"
+            >
+              {!started()
+                ? "Continue"
+                : !connected()
+                  ? busy()
+                    ? "Connecting…"
+                    : "Connect to SSH host"
+                  : busy()
+                    ? "Checking CLI…"
+                    : setup()
+                      ? setup()!.action === "install"
+                        ? "Install the agent above"
+                        : "Complete sign-in above"
+                      : "Run preflight and open agent"}
+            </button>
+          </Show>
+        </form>
       </main>
     </SshShell>
   )

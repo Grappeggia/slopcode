@@ -10321,6 +10321,7 @@ export type RemoteAgentCatalogResponse = RemoteAgentCatalogResponses[keyof Remot
 export type RemoteAgentJobData = {
   body?: {
     jobID?: string | RemoteV1WorkspaceSsh
+    idempotencyKey?: string | RemoteV1WorkspaceSsh
     agent: "codex-cli" | "opencode-cli" | "claude-code"
     prompt: string
     config?:
@@ -10403,6 +10404,7 @@ export type RemoteAgentJobResponses = {
     approval?:
       | {
           id?: string | RemoteV1WorkspaceSsh
+          revision?: number | RemoteV1WorkspaceSsh
           title: string
           command?: string | RemoteV1WorkspaceSsh
           cwd?: string | RemoteV1WorkspaceSsh
@@ -10413,6 +10415,7 @@ export type RemoteAgentJobResponses = {
     question?:
       | {
           id?: string | RemoteV1WorkspaceSsh
+          revision?: number | RemoteV1WorkspaceSsh
           prompt: string
           options?: Array<string> | RemoteV1WorkspaceSsh
           allowFreeform?: boolean | RemoteV1WorkspaceSsh
@@ -10499,6 +10502,9 @@ export type RemoteAgentJobEventsResponse = RemoteAgentJobEventsResponses[keyof R
 export type RemoteAgentJobActionData = {
   body?: {
     action: "approve" | "reject" | "answer" | "steer" | "comment" | "stop" | "retry"
+    interactionID?: string | RemoteV1WorkspaceSsh
+    expectedRevision?: number | RemoteV1WorkspaceSsh
+    idempotencyKey?: string | RemoteV1WorkspaceSsh
     answer?: string | RemoteV1WorkspaceSsh
     prompt?: string | RemoteV1WorkspaceSsh
     comment?:
@@ -10574,6 +10580,7 @@ export type RemoteAgentJobActionResponses = {
     approval?:
       | {
           id?: string | RemoteV1WorkspaceSsh
+          revision?: number | RemoteV1WorkspaceSsh
           title: string
           command?: string | RemoteV1WorkspaceSsh
           cwd?: string | RemoteV1WorkspaceSsh
@@ -10584,6 +10591,7 @@ export type RemoteAgentJobActionResponses = {
     question?:
       | {
           id?: string | RemoteV1WorkspaceSsh
+          revision?: number | RemoteV1WorkspaceSsh
           prompt: string
           options?: Array<string> | RemoteV1WorkspaceSsh
           allowFreeform?: boolean | RemoteV1WorkspaceSsh
@@ -10623,6 +10631,274 @@ export type RemoteAgentJobActionResponses = {
 }
 
 export type RemoteAgentJobActionResponse = RemoteAgentJobActionResponses[keyof RemoteAgentJobActionResponses]
+
+export type RemoteRuntimeJobStateData = {
+  body?: never
+  path: {
+    jobID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/remote/agent/job/{jobID}"
+}
+
+export type RemoteRuntimeJobStateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteRuntimeJobStateError = RemoteRuntimeJobStateErrors[keyof RemoteRuntimeJobStateErrors]
+
+export type RemoteRuntimeJobStateResponses = {
+  /**
+   * Durable remote agent job state
+   */
+  200: {
+    id: string
+    workspaceID: string
+    directory: string
+    agent: "codex-cli" | "opencode-cli" | "claude-code"
+    status:
+      | "queued"
+      | "running"
+      | "waiting_approval"
+      | "waiting_question"
+      | "retrying"
+      | "completed"
+      | "failed"
+      | "stopped"
+    sessionID?: string | RemoteV1WorkspaceSsh
+    cursor?: string | RemoteV1WorkspaceSsh
+    output?: string | RemoteV1WorkspaceSsh
+    error?: string | RemoteV1WorkspaceSsh
+    progress?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | RemoteV1WorkspaceSsh
+    commandPreview?:
+      | {
+          executable: string
+          args: Array<string>
+          cwd: string
+        }
+      | RemoteV1WorkspaceSsh
+    approval?:
+      | {
+          id?: string | RemoteV1WorkspaceSsh
+          revision?: number | RemoteV1WorkspaceSsh
+          title: string
+          command?: string | RemoteV1WorkspaceSsh
+          cwd?: string | RemoteV1WorkspaceSsh
+          reason?: string | RemoteV1WorkspaceSsh
+          risk?: "low" | "medium" | "high" | RemoteV1WorkspaceSsh
+        }
+      | RemoteV1WorkspaceSsh
+    question?:
+      | {
+          id?: string | RemoteV1WorkspaceSsh
+          revision?: number | RemoteV1WorkspaceSsh
+          prompt: string
+          options?: Array<string> | RemoteV1WorkspaceSsh
+          allowFreeform?: boolean | RemoteV1WorkspaceSsh
+        }
+      | RemoteV1WorkspaceSsh
+    review?:
+      | {
+          files: Array<{
+            path: string
+            status: "added" | "modified" | "deleted" | "renamed" | "untracked"
+            additions: number
+            deletions: number
+            diff: string
+          }>
+          tests: Array<{
+            name: string
+            status: "passed" | "failed" | "skipped"
+            durationMs?: number | RemoteV1WorkspaceSsh
+            output?: string | RemoteV1WorkspaceSsh
+          }>
+          screenshots: Array<{
+            name: string
+            mime: string
+            data: string
+          }>
+          comments: Array<{
+            id: string
+            path: string
+            line?: number | RemoteV1WorkspaceSsh
+            body: string
+            createdAt: number
+          }>
+        }
+      | RemoteV1WorkspaceSsh
+    updatedAt: number
+  }
+}
+
+export type RemoteRuntimeJobStateResponse = RemoteRuntimeJobStateResponses[keyof RemoteRuntimeJobStateResponses]
+
+export type RemoteRuntimeJobArtifactData = {
+  body?: {
+    id: string
+    metadata: {
+      [key: string]: unknown | unknown
+    }
+  }
+  path: {
+    jobID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/remote/agent/job/{jobID}/artifact"
+}
+
+export type RemoteRuntimeJobArtifactErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteRuntimeJobArtifactError = RemoteRuntimeJobArtifactErrors[keyof RemoteRuntimeJobArtifactErrors]
+
+export type RemoteRuntimeJobArtifactResponses = {
+  /**
+   * Persisted artifact metadata result
+   */
+  200: "saved" | "duplicate" | "quota"
+}
+
+export type RemoteRuntimeJobArtifactResponse =
+  RemoteRuntimeJobArtifactResponses[keyof RemoteRuntimeJobArtifactResponses]
+
+export type RemoteRuntimeJobPlanPrepareData = {
+  body?: {
+    planID: string
+    digest: string
+  }
+  path: {
+    jobID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/remote/agent/job/{jobID}/plan/prepare"
+}
+
+export type RemoteRuntimeJobPlanPrepareErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteRuntimeJobPlanPrepareError =
+  RemoteRuntimeJobPlanPrepareErrors[keyof RemoteRuntimeJobPlanPrepareErrors]
+
+export type RemoteRuntimeJobPlanPrepareResponses = {
+  /**
+   * Prepared durable plan save
+   */
+  200: {
+    token: string
+    expiresAt: number
+  }
+}
+
+export type RemoteRuntimeJobPlanPrepareResponse =
+  RemoteRuntimeJobPlanPrepareResponses[keyof RemoteRuntimeJobPlanPrepareResponses]
+
+export type RemoteRuntimeJobPlanCommitData = {
+  body?: {
+    token: string
+    digest: string
+  }
+  path: {
+    jobID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/remote/agent/job/{jobID}/plan/commit"
+}
+
+export type RemoteRuntimeJobPlanCommitErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError1 | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type RemoteRuntimeJobPlanCommitError = RemoteRuntimeJobPlanCommitErrors[keyof RemoteRuntimeJobPlanCommitErrors]
+
+export type RemoteRuntimeJobPlanCommitResponses = {
+  /**
+   * Committed durable plan save
+   */
+  200: {
+    status: "consumed" | "expired" | "used" | "conflict" | "missing"
+  }
+}
+
+export type RemoteRuntimeJobPlanCommitResponse =
+  RemoteRuntimeJobPlanCommitResponses[keyof RemoteRuntimeJobPlanCommitResponses]
 
 export type V2HealthGetData = {
   body?: never

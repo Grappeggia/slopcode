@@ -181,17 +181,57 @@
       <section class="toolbar" aria-label="Agent evidence selector">
         <span id="agent-label">Backend agent</span>
         <div id="agent-tabs" class="tabs" role="tablist" aria-labelledby="agent-label">
-          <button class="tab" id="tab-slopcode" role="tab" aria-controls="agent-flow" aria-selected="true" tabindex="0" data-agent="slopcode-cli">Slopcode</button>
-          <button class="tab" id="tab-codex" role="tab" aria-controls="agent-flow" aria-selected="false" tabindex="-1" data-agent="codex-cli">Codex</button>
-          <button class="tab" id="tab-opencode" role="tab" aria-controls="agent-flow" aria-selected="false" tabindex="-1" data-agent="opencode-cli">OpenCode</button>
-          <button class="tab" id="tab-claude" role="tab" aria-controls="agent-flow" aria-selected="false" tabindex="-1" data-agent="claude-code">Claude Code</button>
+          <button
+            class="tab"
+            id="tab-slopcode"
+            role="tab"
+            aria-controls="agent-flow"
+            aria-selected="true"
+            tabindex="0"
+            data-agent="slopcode-cli"
+          >
+            Slopcode
+          </button>
+          <button
+            class="tab"
+            id="tab-codex"
+            role="tab"
+            aria-controls="agent-flow"
+            aria-selected="false"
+            tabindex="-1"
+            data-agent="codex-cli"
+          >
+            Codex
+          </button>
+          <button
+            class="tab"
+            id="tab-opencode"
+            role="tab"
+            aria-controls="agent-flow"
+            aria-selected="false"
+            tabindex="-1"
+            data-agent="opencode-cli"
+          >
+            OpenCode
+          </button>
+          <button
+            class="tab"
+            id="tab-claude"
+            role="tab"
+            aria-controls="agent-flow"
+            aria-selected="false"
+            tabindex="-1"
+            data-agent="claude-code"
+          >
+            Claude Code
+          </button>
         </div>
         <div id="status" class="status" aria-live="polite"></div>
       </section>
 
       <div class="notice">
-        Release gate: every upgrade must produce a fresh complete run for all four agents. The selector changes both
-        the agent status and the agent-specific evidence below; shared onboarding evidence is shown for context.
+        Release gate: every upgrade must produce a fresh complete run for all four agents. The selector changes both the
+        agent status and the agent-specific evidence below; shared onboarding evidence is shown for context.
       </div>
 
       <section aria-labelledby="shared-heading">
@@ -241,7 +281,14 @@
       function badge(value) {
         const next = document.createElement("span")
         next.className = `badge ${value === "passed" ? "passed" : value === "running" ? "running" : value === "blocked" ? "blocked" : value === "setup-required" ? "setup-required" : ""}`
-        next.textContent = value === "passed" ? "Fresh run passed" : value === "needs-run" ? "Fresh run required" : value === "setup-required" ? "Setup required" : value
+        next.textContent =
+          value === "passed"
+            ? "Fresh run passed"
+            : value === "needs-run"
+              ? "Fresh run required"
+              : value === "setup-required"
+                ? "Setup required"
+                : value
         return next
       }
 
@@ -252,7 +299,11 @@
         flow.replaceChildren(
           ...(selected.screenshots.length
             ? selected.screenshots.map(item)
-            : [empty(`No fresh ${selected.label} evidence is published yet. Run the all-agents SSH gallery job before treating this build as release-ready.`)]),
+            : [
+                empty(
+                  `No fresh ${selected.label} evidence is published yet. Run the all-agents SSH gallery job before treating this build as release-ready.`,
+                ),
+              ]),
         )
         status.replaceChildren(badge(selected.status))
         if (selected.runId) status.append(document.createTextNode(` run ${selected.runId}`))
