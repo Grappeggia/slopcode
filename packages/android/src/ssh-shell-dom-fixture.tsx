@@ -16,12 +16,32 @@ render(
 
 installAndroidBack(() => false)
 
-requestAnimationFrame(() => {
-  document.querySelector<HTMLButtonElement>("[data-ssh-menu-toggle]")?.click()
-  const drawer = document.querySelector<HTMLElement>("[data-ssh-drawer]")
-  document.body.dataset.drawerOpen = drawer?.getAttribute("data-ssh-drawer-open") ?? ""
-  document.body.dataset.ariaHidden = drawer?.getAttribute("aria-hidden") ?? ""
-  document.body.dataset.inert = drawer?.hasAttribute("inert") ? "true" : "false"
-  document.body.dataset.back = window.__slopcodeAndroidBack?.() ? "handled" : "unhandled"
-  document.body.dataset.closed = drawer?.getAttribute("aria-hidden") ?? ""
+queueMicrotask(() => {
+  const menu = document.querySelector<HTMLButtonElement>("[data-ssh-menu-toggle]")
+  const content = document.querySelector<HTMLElement>("[data-ssh-shell-content]")
+  menu?.focus()
+  menu?.click()
+  queueMicrotask(() => {
+    const drawer = document.querySelector<HTMLElement>("[data-ssh-drawer]")
+    const close = drawer?.querySelector<HTMLButtonElement>('[aria-label="Close navigation"]')
+    document.body.dataset.drawerOpen = drawer?.getAttribute("data-ssh-drawer-open") ?? ""
+    document.body.dataset.ariaHidden = drawer?.getAttribute("aria-hidden") ?? ""
+    document.body.dataset.ariaModal = drawer?.getAttribute("aria-modal") ?? ""
+    document.body.dataset.inert = drawer?.hasAttribute("inert") ? "true" : "false"
+    document.body.dataset.contentHidden = content?.getAttribute("aria-hidden") ?? ""
+    document.body.dataset.contentInert = content?.hasAttribute("inert") ? "true" : "false"
+    document.body.dataset.openFocus = document.activeElement?.getAttribute("aria-label") ?? ""
+    close?.focus()
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }))
+    document.body.dataset.trapFocus = document.activeElement?.getAttribute("data-ssh-theme-toggle") === "" ? "theme" : ""
+    document.body.dataset.back = window.__slopcodeAndroidBack?.() ? "handled" : "unhandled"
+    queueMicrotask(() => {
+      document.body.dataset.closedOpen = drawer?.getAttribute("data-ssh-drawer-open") ?? ""
+      document.body.dataset.closedHidden = drawer?.getAttribute("aria-hidden") ?? ""
+      document.body.dataset.closedInert = drawer?.hasAttribute("inert") ? "true" : "false"
+      document.body.dataset.closedContentHidden = content?.getAttribute("aria-hidden") ?? ""
+      document.body.dataset.closedContentInert = content?.hasAttribute("inert") ? "true" : "false"
+      document.body.dataset.closedFocus = document.activeElement?.getAttribute("aria-label") ?? ""
+    })
+  })
 })

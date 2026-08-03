@@ -56,11 +56,22 @@ internal class SshTransport(
 
   fun isConnected(): Boolean = synchronized(lock) { session?.isConnected == true }
 
-  fun connect(raw: String): JSONObject {
+  fun reserveConnect(): Long = synchronized(lock) { connectAttempt.reserve() }
+
+  fun connect(raw: String): JSONObject = connect(raw, reserveConnect())
+
+  fun connect(raw: String, attempt: Long): JSONObject = try {
+    connectAttempt(raw, attempt)
+  } finally {
+    synchronized(lock) { connectAttempt.finish(attempt) }
+  }
+
+  private fun connectAttempt(raw: String, attempt: Long): JSONObject {
     val request = SshConnectionRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "SSH configuration is invalid.")
     synchronized(lock) {
       check(!closed) { "SSH transport is unavailable." }
+      if (!connectAttempt.begin(attempt)) throw SshTransportException("connect_cancelled", "SSH connection cancelled.")
     }
     if (!online()) throw SshTransportException("offline", "You appear offline. Connect to a network and retry.")
     val stored = credentials.get(request.profile)
@@ -77,8 +88,7 @@ internal class SshTransport(
     if (auth == null || (password.isNullOrEmpty() && privateKey.isNullOrEmpty())) {
       throw SshTransportException("credentials_required", "Enter an SSH password or private key.")
     }
-    disconnect()
-    val attempt = synchronized(lock) { connectAttempt.start() }
+    disconnect(attempt)
     val jsch = JSch()
     val repository = keys
     val next = try {
@@ -100,7 +110,7 @@ internal class SshTransport(
       session.setServerAliveInterval(15_000)
       session.setServerAliveCountMax(3)
       val cancelled = synchronized(lock) {
-        if (!connectAttempt.active(attempt)) true
+        if (!connectAttempt.begin(attempt)) true
         else {
           connecting = session
           false
@@ -117,13 +127,13 @@ internal class SshTransport(
           if (connecting === session) connecting = null
         }
       }
-      if (!synchronized(lock) { connectAttempt.active(attempt) }) {
+      if (!synchronized(lock) { connectAttempt.begin(attempt) }) {
         session.disconnect()
         throw SshTransportException("connect_cancelled", "SSH connection cancelled.")
       }
       session
     } catch (cause: Throwable) {
-      if (!synchronized(lock) { connectAttempt.active(attempt) }) {
+      if (!synchronized(lock) { connectAttempt.begin(attempt) }) {
         throw SshTransportException("connect_cancelled", "SSH connection cancelled.", cause)
       }
       val candidate = hostCandidate(request, jsch)
@@ -147,12 +157,13 @@ internal class SshTransport(
       throw classify(cause)
     }
     val cancelled = synchronized(lock) {
-      if (!connectAttempt.active(attempt)) true
+      if (!connectAttempt.begin(attempt)) true
       else {
         this.session = next
         this.profile = request.profile
         connectionEpoch += 1
         folderCache.clear()
+        connectAttempt.finish(attempt)
         false
       }
     }
@@ -489,7 +500,9 @@ internal class SshTransport(
     }
   }
 
-  fun disconnect() {
+  fun disconnect() = disconnect(null)
+
+  private fun disconnect(attempt: Long?) {
     val next: ChannelExec?
     val remote: ChannelExec?
     val current: Session?
@@ -507,7 +520,7 @@ internal class SshTransport(
       orchestratorID = null
       session = null
       connecting = null
-      connectAttempt.cancel()
+      if (attempt == null) connectAttempt.cancel()
       profile = null
       workspace.reset()
       connectionEpoch += 1

@@ -503,7 +503,8 @@ class AndroidBridge(
         "sshConnect" -> {
           arity(args, 1)
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH configuration")
-          sshAsync(id, replyProxy) { ssh.connect(raw) }
+          val attempt = ssh.reserveConnect()
+          sshAsync(id, replyProxy) { ssh.connect(raw, attempt) }
         }
         "sshCancelConnect" -> {
           arity(args, 0)

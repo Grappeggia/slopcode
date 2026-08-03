@@ -46,8 +46,8 @@ export function auditSshShellLayout(input: {
   }
 }
 
-// Stable names for emulator screenshot baselines. Keep this matrix device-agnostic:
-// the native test runner supplies its actual inset pixels and viewport dimensions.
+// Stable names for emulator runs. This is the requested coverage matrix only;
+// rendered coverage is reported by verify-ssh-shell-emulator.ts.
 export const SSH_SHELL_VISUAL_FIXTURES = [
   { id: "portrait-light-system", scheme: "light", orientation: "portrait", fontScale: 1, keyboard: false, insets: "system", primaryAction: "sticky" },
   { id: "portrait-dark-system", scheme: "dark", orientation: "portrait", fontScale: 1, keyboard: false, insets: "system", primaryAction: "sticky" },

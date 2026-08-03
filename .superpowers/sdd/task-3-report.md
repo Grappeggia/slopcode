@@ -76,3 +76,15 @@ No protected SSH fixture credentials were available, so this follow-up does not 
 ### Remaining blocker
 
 No protected SSH fixture credentials are available. These fixes do not claim a live SSH connection, setup action, or agent run; the credential-gated emulator harness remains required for that validation.
+
+## Re-review follow-up
+
+- Exact persisted job/session deep links on the native SSH route now open a dedicated durable-job recovery view. The view exposes the saved status, session, workspace, output/error, and an explicit “Choose SSH workspace” action; it does not claim to resume a native PTY without a backend resume contract. Stale or job-only links remain an inline recovery error.
+- Connect attempts are reserved before the Android bridge queues the SSH work. Cancelling a queued request invalidates that reservation, so the worker cannot reset the generation and connect after the user has cancelled.
+- The SSH drawer now hides and inerts the underlying shell content while open, enters and traps focus, handles Escape, and returns focus to the menu after Back. The headless DOM fixture checks both open and closed markers, aria, inert, and focus state.
+
+### Verification
+
+- `bun test src` — 114 passed; `bun run typecheck`; `bun run build:web` — passed.
+- Focused modal/deep-link/replay tests — 14 passed; headless Chrome drawer check — passed.
+- Native reservation/cancellation checks and Android unit/build checks passed. The final emulator gate passed `bun run test:android-ui` (3/3 instrumented tests) and `bun scripts/verify-ssh-shell-emulator.ts` (8/8 visual fixtures with cleanup verification). The fixture intentionally does not claim live SSH success; protected SSH credentials and a live authenticated PTY fixture remain unavailable.

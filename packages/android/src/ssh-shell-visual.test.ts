@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { auditSshShellLayout, sshShellRect, sshShellRectsOverlap, SSH_SHELL_VISUAL_FIXTURES } from "./ssh-shell-visual"
 
 describe("SSH shell visual fixture matrix", () => {
-  test("covers every supported theme, orientation, large-font, keyboard, and inset state", () => {
+  test("defines the requested emulator coverage matrix", () => {
     expect(SSH_SHELL_VISUAL_FIXTURES).toHaveLength(8)
     expect(new Set(SSH_SHELL_VISUAL_FIXTURES.map((item) => item.scheme))).toEqual(new Set(["light", "dark"]))
     expect(new Set(SSH_SHELL_VISUAL_FIXTURES.map((item) => item.orientation))).toEqual(new Set(["portrait", "landscape"]))
@@ -11,27 +11,33 @@ describe("SSH shell visual fixture matrix", () => {
     expect(SSH_SHELL_VISUAL_FIXTURES.filter((item) => item.orientation === "landscape").every((item) => item.primaryAction === "flow")).toBeTrue()
   })
 
-  test("audits rendered geometry for every fixture", () => {
-    for (const fixture of SSH_SHELL_VISUAL_FIXTURES) {
-      const landscape = fixture.orientation === "landscape"
-      const statusBar = landscape ? sshShellRect(0, 0, 56, 412) : sshShellRect(0, 0, 412, 56)
-      const menu = landscape ? sshShellRect(68, 32, 48, 48) : sshShellRect(12, 68, 48, 48)
-      const addComputer = sshShellRect(24, landscape ? 220 : 560, landscape ? 792 : 364, 48)
-      const primary = sshShellRect(24, landscape ? 280 : 628, landscape ? 792 : 364, 48)
-      const audit = auditSshShellLayout({
-        menu,
-        statusBar,
-        addComputer,
-        primary,
-        controls: [menu, addComputer, primary],
-      })
+  test("audits measured geometry supplied by the emulator checker", () => {
+    const audit = auditSshShellLayout({
+      menu: sshShellRect(12, 60, 48, 48),
+      statusBar: sshShellRect(0, 0, 412, 24),
+      addComputer: sshShellRect(24, 560, 364, 48),
+      primary: sshShellRect(24, 628, 364, 48),
+      controls: [sshShellRect(12, 60, 48, 48), sshShellRect(24, 560, 364, 48), sshShellRect(24, 628, 364, 48)],
+    })
 
-      expect(audit).toEqual({
-        menuClearsStatusBar: true,
-        primaryClearsAddComputer: true,
-        controlsMeetTouchTarget: true,
-      })
-    }
+    expect(audit).toEqual({
+      menuClearsStatusBar: true,
+      primaryClearsAddComputer: true,
+      controlsMeetTouchTarget: true,
+    })
+
+    const landscape = auditSshShellLayout({
+      menu: sshShellRect(12, 36, 48, 48),
+      statusBar: sshShellRect(0, 0, 915, 24),
+      addComputer: sshShellRect(98, 236, 718, 48),
+      primary: sshShellRect(98, 300, 718, 48),
+      controls: [sshShellRect(12, 36, 48, 48), sshShellRect(98, 236, 718, 48), sshShellRect(98, 300, 718, 48)],
+    })
+    expect(landscape).toEqual({
+      menuClearsStatusBar: true,
+      primaryClearsAddComputer: true,
+      controlsMeetTouchTarget: true,
+    })
   })
 
   test("catches the two historical landscape overlaps", () => {

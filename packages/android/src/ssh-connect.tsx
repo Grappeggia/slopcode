@@ -19,8 +19,8 @@ import { persistSshWorkspace } from "./platform"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { SshShell } from "./ssh-shell"
 import {
-  abandonSshSetup,
   connectedSshWorkspace,
+  abandonSshSetup,
   createSshConnectionGate,
   createSshCredentialLoader,
   createSshOnboardingGeneration,
@@ -1066,7 +1066,7 @@ export function SshConnect(props: Props) {
                       <button
                         type="button"
                         onClick={() => void selectFolder(folder)}
-                        class="shrink-0 rounded-md bg-surface-brand-base px-3 py-2 text-12-regular text-text-on-brand-base"
+                        class="shrink-0 min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-regular text-text-on-brand-base"
                       >
                         Use
                       </button>
@@ -1141,12 +1141,13 @@ export function SshConnect(props: Props) {
                     class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
                   />
                   <details class="relative shrink-0">
-                    <summary class="cursor-pointer rounded-md border border-border-weak-base px-3 py-2 text-12-regular">
+                    <summary class="flex min-h-12 cursor-pointer items-center rounded-md border border-border-weak-base px-3 py-2 text-12-regular">
                       More
                     </summary>
-                    <label class="absolute right-0 z-10 mt-2 flex w-48 items-center gap-2 rounded-lg border border-border-weak-base bg-surface-raised-base p-3 text-12-regular shadow-lg">
+                    <label class="absolute right-0 z-10 mt-2 flex min-h-12 w-48 items-center gap-2 rounded-lg border border-border-weak-base bg-surface-raised-base p-3 text-12-regular shadow-lg">
                       <input
                         type="checkbox"
+                        aria-label="Show hidden files"
                         checked={showHidden()}
                         onChange={(event) => {
                           const value = event.currentTarget.checked
@@ -1251,7 +1252,7 @@ export function SshConnect(props: Props) {
                     type="button"
                     aria-pressed={agent() === value}
                     onClick={() => chooseAgent(value)}
-                    class={`flex items-center gap-3 rounded-lg border px-3 py-3 text-left ${agent() === value ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
+                    class={`flex min-h-12 items-center gap-3 rounded-lg border px-3 py-3 text-left ${agent() === value ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
                   >
                     <span
                       aria-hidden="true"
@@ -1413,7 +1414,7 @@ export function SshConnect(props: Props) {
               <button
                 type="submit"
                 disabled={busy()}
-                class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50"
+                class="sticky bottom-0 z-20 rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50 sm:static"
               >
                 {!started()
                   ? "Continue"

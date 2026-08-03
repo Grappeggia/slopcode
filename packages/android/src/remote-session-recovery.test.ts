@@ -17,7 +17,7 @@ const job = {
 describe("remote session deep-link recovery", () => {
   test("keeps an exact stopped session actionable after process relaunch", () => {
     expect(resolveRemoteSession({ jobID: "job_1", sessionID: "ses_1" }, [job])).toEqual({
-      session: { jobID: "job_1", sessionID: "ses_1" },
+      job,
     })
   })
 

@@ -1,7 +1,7 @@
 import type { RemoteJob, RemoteSessionDeepLink } from "./remote-jobs"
 
 export type RemoteSessionResolution =
-  | { session: RemoteSessionDeepLink }
+  | { job: RemoteJob }
   | { error: "Session unavailable or expired. Choose a workspace or start a new session." }
 
 export function resolveRemoteSession(link: RemoteSessionDeepLink, jobs: RemoteJob[]): RemoteSessionResolution {
@@ -9,6 +9,6 @@ export function resolveRemoteSession(link: RemoteSessionDeepLink, jobs: RemoteJo
   const job = jobs.find(
     (item) => item.id === link.jobID && item.sessionID === link.sessionID,
   )
-  if (job) return { session: { jobID: job.id, ...(job.sessionID ? { sessionID: job.sessionID } : {}) } }
+  if (job) return { job }
   return { error: "Session unavailable or expired. Choose a workspace or start a new session." }
 }

@@ -16,12 +16,13 @@ import { RemoteAgentSession } from "./codex-cli"
 import type { RemoteCommandCatalog } from "./remote-workspace-state"
 import { RemoteConnect } from "./remote-connect"
 import { remoteCapabilityEnabled } from "./remote-workspace-state"
-import { parseRemoteSessionDeepLink, type RemoteSessionDeepLink } from "./remote-jobs"
+import { parseRemoteSessionDeepLink, type RemoteJob, type RemoteSessionDeepLink } from "./remote-jobs"
 import { SshConnect } from "./ssh-connect"
+import { SshDurableJob } from "./ssh-durable-job"
 import { SshAgenticSession } from "./ssh-agentic-session"
 import { SshSession } from "./ssh-session"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
-import { resolveRemoteSession } from "./remote-session-recovery"
+import { sshRemoteSessionRoute } from "./ssh-remote-session"
 
 function emitDeepLinks(urls: string[]) {
   if (urls.length === 0) return
@@ -46,6 +47,7 @@ export async function mountAndroidApp() {
   if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
 
   const [remoteSession, setRemoteSession] = createSignal<RemoteSessionDeepLink>()
+  const [remoteJob, setRemoteJob] = createSignal<RemoteJob>()
   const [remoteSessionError, setRemoteSessionError] = createSignal("")
   const [shell, initial, sshWorkspace] = await Promise.all([
     shellBridge(),
@@ -59,15 +61,22 @@ export async function mountAndroidApp() {
       if (request === deepLinkRequest) setRemoteSessionError("Session unavailable or expired. Choose a workspace or start a new session.")
       return
     }
-    const resolution = resolveRemoteSession(session, await shell.remoteJobs.list())
+    const resolution = sshRemoteSessionRoute(session, await shell.remoteJobs.list())
     if (request !== deepLinkRequest) return
-    if ("error" in resolution) {
+    if (resolution.kind === "recovery") {
       setRemoteSession()
-      setRemoteSessionError(resolution.error)
+      setRemoteJob()
+      setRemoteSessionError(resolution.message)
       return
     }
+    if (resolution.kind === "agentic") return
     setRemoteSessionError("")
-    setRemoteSession(resolution.session)
+    setRemoteSession({ jobID: resolution.job.id, sessionID: resolution.job.sessionID })
+    setRemoteJob(resolution.job)
+  }
+  const continueSsh = () => {
+    setRemoteSession()
+    setRemoteJob()
   }
   if (shell.capabilities.deepLinks)
     shell.subscribeDeepLinks((urls) => {
@@ -86,34 +95,38 @@ export async function mountAndroidApp() {
         const [workspace, setWorkspace] = createSignal<SshWorkspaceState>()
         const [view, setView] = createSignal<"agentic" | "interactive">("agentic")
         return (
-          <>
-            <RemoteSessionNotice message={remoteSessionError()} />
-            <Show
-              when={workspace()}
-              fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
-            >
-              {(value) => (
-                <Show
-                  when={view() === "agentic"}
-                  fallback={
-                    <SshSession
+          <Show when={remoteJob()} fallback={
+            <>
+              <RemoteSessionNotice message={remoteSessionError()} />
+              <Show
+                when={workspace()}
+                fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
+              >
+                {(value) => (
+                  <Show
+                    when={view() === "agentic"}
+                    fallback={
+                      <SshSession
+                        ssh={shell.ssh!}
+                        workspace={value()}
+                        onAgentic={() => setView("agentic")}
+                        onDisconnected={() => window.location.reload()}
+                      />
+                    }
+                  >
+                    <SshAgenticSession
                       ssh={shell.ssh!}
                       workspace={value()}
-                      onAgentic={() => setView("agentic")}
+                      onInteractive={() => setView("interactive")}
                       onDisconnected={() => window.location.reload()}
                     />
-                  }
-                >
-                  <SshAgenticSession
-                    ssh={shell.ssh!}
-                    workspace={value()}
-                    onInteractive={() => setView("interactive")}
-                    onDisconnected={() => window.location.reload()}
-                  />
-                </Show>
-              )}
-            </Show>
-          </>
+                  </Show>
+                )}
+              </Show>
+            </>
+          }>
+            {(job) => <SshDurableJob job={job()} onContinue={continueSsh} />}
+          </Show>
         )
       }, root)
       return
@@ -121,27 +134,31 @@ export async function mountAndroidApp() {
     render(() => {
       const [view, setView] = createSignal<"agentic" | "interactive">("agentic")
       return (
-        <>
-          <RemoteSessionNotice message={remoteSessionError()} />
-          <Show
-            when={view() === "agentic"}
-            fallback={
-              <SshSession
+        <Show when={remoteJob()} fallback={
+          <>
+            <RemoteSessionNotice message={remoteSessionError()} />
+            <Show
+              when={view() === "agentic"}
+              fallback={
+                <SshSession
+                  ssh={shell.ssh!}
+                  workspace={sshWorkspace}
+                  onAgentic={() => setView("agentic")}
+                  onDisconnected={() => window.location.reload()}
+                />
+              }
+            >
+              <SshAgenticSession
                 ssh={shell.ssh!}
                 workspace={sshWorkspace}
-                onAgentic={() => setView("agentic")}
+                onInteractive={() => setView("interactive")}
                 onDisconnected={() => window.location.reload()}
               />
-            }
-          >
-            <SshAgenticSession
-              ssh={shell.ssh!}
-              workspace={sshWorkspace}
-              onInteractive={() => setView("interactive")}
-              onDisconnected={() => window.location.reload()}
-            />
-          </Show>
-        </>
+            </Show>
+          </>
+        }>
+          {(job) => <SshDurableJob job={job()} onContinue={continueSsh} />}
+        </Show>
       )
     }, root)
     return

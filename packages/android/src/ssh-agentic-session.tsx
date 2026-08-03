@@ -264,7 +264,7 @@ export function SshAgenticSession(props: Props) {
             <button
               type="button"
               onClick={() => void disconnect()}
-              class="shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular"
+              class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular"
             >
               Disconnect
             </button>
@@ -329,7 +329,7 @@ export function SshAgenticSession(props: Props) {
                 <button
                   type="button"
                   onClick={() => void reconnect()}
-                  class="rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium"
+                      class="min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium"
                 >
                   Reconnect
                 </button>
@@ -337,7 +337,7 @@ export function SshAgenticSession(props: Props) {
                   <button
                     type="button"
                     onClick={retry}
-                    class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
+                    class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
                   >
                     Retry last request
                   </button>
@@ -447,7 +447,7 @@ export function SshAgenticSession(props: Props) {
                             type="button"
                             disabled={busy()}
                             onClick={() => choose(option)}
-                            class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+                      class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
                           >
                             {option}
                           </button>
@@ -467,7 +467,7 @@ export function SshAgenticSession(props: Props) {
                         type="button"
                         disabled={busy() || !answer().trim()}
                         onClick={() => void respond(interaction())}
-                        class="rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium disabled:opacity-50"
+                        class="min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium disabled:opacity-50"
                       >
                         Send
                       </button>
@@ -493,7 +493,8 @@ export function SshAgenticSession(props: Props) {
                 id="agent-prompt"
                 rows="3"
                 value={prompt()}
-                onInput={(event) => setPrompt(event.currentTarget.value)}
+                on:input={(event) => setPrompt(event.currentTarget.value)}
+                on:change={(event) => setPrompt(event.currentTarget.value)}
                 placeholder="e.g. Review the latest changes and summarize any risks"
                 disabled={busy() || !canSubmit(state().phase)}
                 class="min-w-0 flex-1 resize-y rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50"
@@ -501,7 +502,7 @@ export function SshAgenticSession(props: Props) {
               <button
                 type="submit"
                 disabled={busy() || !prompt().trim() || !state().sessionID || !canSubmit(state().phase)}
-                class="self-end rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 text-12-medium disabled:opacity-50"
+                class="self-end min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 text-12-medium disabled:opacity-50"
               >
                 Send
               </button>
@@ -513,7 +514,7 @@ export function SshAgenticSession(props: Props) {
               type="button"
               disabled={busy() || state().phase !== "running"}
               onClick={() => void stop()}
-              class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+              class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
             >
               Stop
             </button>
@@ -542,7 +543,7 @@ export function SshAgenticSession(props: Props) {
                 <button
                   type="button"
                   onClick={() => void reconnect()}
-                  class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
+                class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
                 >
                   Reconnect
                 </button>
@@ -551,7 +552,7 @@ export function SshAgenticSession(props: Props) {
           </div>
 
           <details class="rounded-xl border border-border-weak-base bg-surface-base p-3">
-            <summary class="cursor-pointer text-12-medium">Diagnostics</summary>
+            <summary class="flex min-h-12 cursor-pointer items-center text-12-medium">Diagnostics</summary>
             <div class="mt-3 flex flex-col gap-2 text-12-regular text-text-weak">
               <p>Transport: native SSH · backend: {agentID(props.workspace.agent)}</p>
               <p>Session: {state().sessionID ?? "starting"}</p>
@@ -564,7 +565,7 @@ export function SshAgenticSession(props: Props) {
                 type="button"
                 disabled={busy()}
                 onClick={() => void interactive()}
-                class="w-fit rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+                class="min-h-12 w-fit rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
               >
                 Open Interactive CLI
               </button>

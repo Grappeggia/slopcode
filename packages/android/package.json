@@ -8,6 +8,7 @@
     "test": "bun test src",
     "build:web": "vite build",
     "build:android": "./gradlew :app:assembleDebug",
+    "test:android-ui": "bun run build:web && ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.slopcode.android.AndroidUiInstrumentedTest",
     "build": "bun run build:web && bun run build:android"
   },
   "dependencies": {

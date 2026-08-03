@@ -180,6 +180,15 @@ export function SshSession(props: Props) {
     props.onDisconnected()
   }
 
+  const sessionState = () => {
+    if (error()) return "Needs attention"
+    if (busy()) return connected() ? (activeID() ? "Working" : "Connecting") : "Connecting"
+    if (!connected()) return "Disconnected"
+    if (activeID() && mode() === "interactive") return "Interactive PTY"
+    if (activeID()) return "Active"
+    return "Ready"
+  }
+
   const agentic = async () => {
     if (busy()) return
     setBusy(true)
@@ -193,7 +202,7 @@ export function SshSession(props: Props) {
   }
 
   return (
-    <SshShell workspace={props.workspace}>
+    <SshShell workspace={props.workspace} sessionID={activeID()} sessionState={sessionState()}>
       <main data-ssh-interactive class="ssh-shell-page min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6">
         <section
           data-ssh-interactive-panel
@@ -279,6 +288,11 @@ export function SshSession(props: Props) {
         <div class="grid grid-cols-2 gap-2" role="tablist" aria-label="SSH agent input mode">
           <button
             type="button"
+            id="ssh-mode-prompt"
+            role="tab"
+            aria-selected={mode() === "prompt"}
+            aria-controls="ssh-session-input"
+            tabIndex={mode() === "prompt" ? 0 : -1}
             onClick={() => setMode("prompt")}
             class={`rounded-md border px-3 py-2 ${mode() === "prompt" ? "border-border-brand-base" : "border-border-weak-base"}`}
           >
@@ -287,6 +301,11 @@ export function SshSession(props: Props) {
           <button
             type="button"
             disabled={!activeID()}
+            id="ssh-mode-interactive"
+            role="tab"
+            aria-selected={mode() === "interactive"}
+            aria-controls="ssh-session-input"
+            tabIndex={mode() === "interactive" ? 0 : -1}
             onClick={() => setMode("interactive")}
             class={`rounded-md border px-3 py-2 disabled:opacity-50 ${mode() === "interactive" ? "border-border-brand-base" : "border-border-weak-base"}`}
           >
@@ -295,6 +314,8 @@ export function SshSession(props: Props) {
         </div>
 
         <textarea
+          id="ssh-session-input"
+          aria-label="Prompt or interactive PTY input"
           rows="4"
           value={prompt()}
           disabled={!connected() || busy()}
