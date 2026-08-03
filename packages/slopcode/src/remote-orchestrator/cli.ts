@@ -16,7 +16,7 @@ const programs: Record<Agent, readonly string[]> = {
 }
 
 export const argv = (agent: Agent, prompt: string) =>
-  agent === "antigravity" ? [...programs[agent], prompt] : programs[agent]
+  agent === "antigravity" ? [...programs[agent], "--", prompt] : programs[agent]
 
 export const launch: Launch = (agent, cwd, prompt) => {
   const args = argv(agent, prompt)
@@ -29,8 +29,6 @@ export const launch: Launch = (agent, cwd, prompt) => {
 }
 
 const bytes = (value: string) => Buffer.byteLength(value)
-const clip = (value: string, size: number) =>
-  bytes(value) <= size ? value : Buffer.from(value).subarray(0, size).toString("utf8")
 const clean = (value: string, size = AgentOrchestrationLimits.maxTextBytes) => {
   const normalized = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
   return [...normalized].reduce(
@@ -122,9 +120,10 @@ export async function connect(input: {
     }
     active = next
     const result = await new Promise<{ code: number | null; error?: string }>((resolve) => {
-      let buffer = ""
+      let buffer = Buffer.alloc(0)
       let stderr = ""
       let settled = false
+      let dropped = false
       const done = (value: { code: number | null; error?: string }) => {
         if (settled) return
         settled = true
@@ -132,18 +131,41 @@ export async function connect(input: {
         resolve(value)
       }
       const flush = () => {
-        const value = line(buffer)
+        if (dropped) return
+        const value = line(buffer.toString("utf8"))
         if (value) input.emit({ type: "output", text: value, nativeID })
-        buffer = ""
+        buffer = Buffer.alloc(0)
       }
       stdout.on("data", (chunk: Buffer) => {
-        buffer = clip(`${buffer}${chunk.toString("utf8")}`, AgentOrchestrationLimits.maxTextBytes)
-        const values = buffer.split(/\r?\n/)
-        buffer = values.pop() ?? ""
-        values
-          .map(line)
-          .filter(Boolean)
-          .forEach((value) => input.emit({ type: "output", text: value, nativeID }))
+        let rest = chunk
+        while (rest.byteLength) {
+          if (dropped) {
+            const index = rest.indexOf(10)
+            if (index < 0) return
+            rest = rest.subarray(index + 1)
+            dropped = false
+            continue
+          }
+          const index = rest.indexOf(10)
+          if (index < 0) {
+            if (buffer.byteLength + rest.byteLength > AgentOrchestrationLimits.maxTextBytes) {
+              buffer = Buffer.alloc(0)
+              dropped = true
+              return
+            }
+            buffer = Buffer.concat([buffer, rest])
+            return
+          }
+          const value = rest.subarray(0, index)
+          rest = rest.subarray(index + 1)
+          if (buffer.byteLength + value.byteLength > AgentOrchestrationLimits.maxTextBytes) {
+            buffer = Buffer.alloc(0)
+            continue
+          }
+          const output = line(Buffer.concat([buffer, value]).toString("utf8").replace(/\r$/, ""))
+          buffer = Buffer.alloc(0)
+          if (output) input.emit({ type: "output", text: output, nativeID })
+        }
       })
       stderrStream.on("data", (chunk: Buffer) => {
         stderr = clean(`${stderr}${chunk.toString("utf8")}`, 8 * 1024)

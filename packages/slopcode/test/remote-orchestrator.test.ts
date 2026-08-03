@@ -4,7 +4,7 @@ import path from "node:path"
 import { PassThrough } from "node:stream"
 import { spawn } from "node:child_process"
 import { Schema } from "effect"
-import { AgentOrchestrationFrame } from "@slopcode-ai/protocol"
+import { AgentOrchestrationFrame, AgentOrchestrationLimits } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
 import { argv, connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
@@ -122,10 +122,37 @@ describe("remote orchestrator", () => {
       },
     })
     await session.turn(prompt)
-    expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", prompt])
+    expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", "--", prompt])
     expect(events).toContainEqual(
       expect.objectContaining({ type: "output", text: `antigravity:${prompt.replaceAll("\n", " ")}` }),
     )
+    await session.close()
+  })
+
+  test("keeps option-shaped Antigravity prompts after the end-of-options delimiter", () => {
+    for (const prompt of ["--help", "--dangerously-skip-permissions"]) {
+      const value = argv("antigravity", prompt)
+      expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", "--", prompt])
+      expect(value.slice(value.indexOf("--") + 1)).toEqual([prompt])
+    }
+  })
+
+  test("drops an oversized partial output record and parses the following record", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const record = JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "recovered output" }] },
+    })
+    const script = `process.stdout.write(${JSON.stringify("x".repeat(AgentOrchestrationLimits.maxTextBytes + 1))}); setTimeout(() => process.stdout.write(${JSON.stringify(`\n${record}\n`)}), 10)`
+    const session = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: (event) => events.push(event),
+      start: () => spawn(process.execPath, ["-e", script], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+    })
+    await session.turn("ignored")
+    expect(events.filter((event) => event.type === "output").map((event) => event.text)).toEqual(["recovered output"])
     await session.close()
   })
 
