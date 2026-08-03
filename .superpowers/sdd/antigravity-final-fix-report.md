@@ -91,7 +91,7 @@ The web build emitted its existing dynamic/static import, duplicate source-map o
 ## Self-review
 
 - Confirmed all native command construction receives only the exact canonical bound workspace; no containment fallback, parent, child, sibling, root, or symlink alias is accepted.
-- Confirmed selecting an invalid workspace clears the previous binding, and disconnect clears binding state before any later execution can proceed.
+- Confirmed selecting an invalid workspace preserves the previous valid binding, and disconnect clears binding state before any later execution can proceed.
 - Confirmed the orchestrator event subscription exists before native start, channel scope is assigned before protocol frames, and all native event variants are filtered by ID.
 - Confirmed failed startup cleanup order is wire-state clear, wire close/pending rejection, native stop, then user-visible error.
 - Confirmed fallback is Antigravity-only, at most once, stderr-gated, and never shell-interpolates the prompt.
