@@ -204,6 +204,7 @@ export async function connect(input: {
       return result
     }
     const first = await run("stream")
+    if (closed) throw new Error(`${input.agent} session is closed`)
     const result = input.agent === "antigravity" && first.error && unsupported(first.stderr) ? await run("text") : first
     if (result.error) throw new Error(result.error)
   }

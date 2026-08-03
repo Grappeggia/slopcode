@@ -153,12 +153,16 @@ class SshModelsTest {
   }
 
   @Test
-  fun `workspace scope requires one exact non-root canonical selection and resets`() {
+  fun `workspace scope preserves the binding across failed reselection and resets`() {
     val scope = SshWorkspaceScope()
     assertEquals("workspace_selection_required", failure { scope.require("/srv/project") })
     assertEquals("invalid_workspace", failure { scope.bind("/") })
     assertEquals("invalid_workspace", failure { scope.bind("/srv/../etc") })
     scope.bind("/srv/project")
+    assertEquals("/srv/project", scope.require("/srv/project"))
+    assertEquals("invalid_workspace", failure { scope.bind("/") })
+    assertEquals("/srv/project", scope.require("/srv/project"))
+    assertEquals("invalid_workspace", failure { scope.bind("/srv/../etc") })
     assertEquals("/srv/project", scope.require("/srv/project"))
     assertEquals("workspace_mismatch", failure { scope.require("/srv/project-sibling") })
     assertEquals("workspace_mismatch", failure { scope.require("/srv/project/child") })

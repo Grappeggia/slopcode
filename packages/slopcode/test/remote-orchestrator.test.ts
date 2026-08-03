@@ -168,6 +168,31 @@ describe("remote orchestrator", () => {
     await session.close()
   })
 
+  test("does not launch text fallback after the session closes at the transition", async () => {
+    const cwd = await temp()
+    let launches = 0
+    let session: Session | undefined
+    const current = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: () => undefined,
+      start: (_agent, dir) => {
+        launches += 1
+        const next = spawn(
+          process.execPath,
+          ["-e", "process.stderr.write(\"Error: unknown option '--output-format'\\n\"); process.exit(2)"],
+          { cwd: dir, shell: false, stdio: ["pipe", "pipe", "pipe"] },
+        )
+        if (launches === 1) next.once("close", () => void session?.close())
+        return next
+      },
+    })
+    session = current
+    await expect(current.turn("safe prompt")).rejects.toThrow("antigravity session is closed")
+    expect(launches).toBe(1)
+    await current.close()
+  })
+
   test("does not retry arbitrary Antigravity failures", async () => {
     const cwd = await temp()
     let launches = 0

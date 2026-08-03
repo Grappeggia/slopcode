@@ -195,7 +195,6 @@ internal class SshTransport(
   }
 
   fun selectWorkspace(rawPath: String): JSONObject {
-    workspace.reset()
     val path = SshPath.normalize(rawPath)
       ?: throw SshTransportException("invalid_workspace", "Remote workspace path is invalid.")
     if (path == "/") {

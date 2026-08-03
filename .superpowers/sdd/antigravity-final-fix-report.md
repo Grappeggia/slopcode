@@ -104,3 +104,33 @@ The web build emitted its existing dynamic/static import, duplicate source-map o
 - The live connected Android SSH instrumentation run was not executed because no disposable host/device credentials were supplied. Its source compiles successfully, and native scope behavior has deterministic Kotlin coverage.
 - No real Antigravity model turn was made. Compatibility behavior is covered by the deterministic fake child; the authenticated/signed-out `agy models` observations are non-generative evidence.
 - Existing Vite warnings remain as noted above. There are no remaining fix-wave blockers.
+
+## Second independent-review fix wave
+
+The independent final review identified exactly two Important issues; only those issues were changed.
+
+### 1. Do not relaunch after a closed Antigravity session
+
+Root cause: `run("stream")` clears `active` before returning. If `session.close()` runs at that transition, `closed` becomes true, but the fallback condition previously checked only the first error and unsupported-option stderr, so it launched `run("text")` anyway.
+
+Fix: immediately after the stream attempt returns, `connect()` now rejects with the closed-session error before evaluating or launching the explicit unsupported-option fallback. The existing stderr pattern gate, fixed `agy --print -- <prompt>` argv, and `shell: false` behavior are unchanged.
+
+Regression coverage closes the session from the first child’s `close` event and asserts exactly one launch. The pre-fix reproduction failed with the original unsupported-option error (showing the fallback had launched); after the fix it passes with one launch and the closed-session error.
+
+### 2. Preserve a valid workspace across failed reselection
+
+Root cause: `SshTransport.selectWorkspace()` called `workspace.reset()` before path, root, busy, SFTP realpath/stat, or stale-session validation. Any failed replacement therefore discarded an otherwise valid binding.
+
+Fix: validation now completes before `workspace.bind(canonical)` replaces the current value. Disconnect still resets the binding. The deterministic Kotlin scope test now verifies that root and traversal replacement failures leave `/srv/project` bound, while sibling/child/symlink-alias requests remain mismatches and an explicit reset still unbinds.
+
+### Narrow validation
+
+| Command | Result |
+| --- | --- |
+| `bun test test/remote-orchestrator.test.ts` in `packages/slopcode` | Pass: 19 tests, 110 expectations |
+| `./gradlew :app:testDebugUnitTest` in `packages/android` | `BUILD SUCCESSFUL`; Kotlin unit coverage passes |
+| `bun run typecheck` in `packages/slopcode` | Pass: `tsgo --noEmit` |
+| `bunx prettier --check` on the changed CLI/test files | Pass |
+| `git diff --check` on the fix-wave paths | Pass |
+
+The protected `artifacts/android-ssh-flow/index.html` change remains untouched and unstaged. No release, QR/desktop relay, or gallery scope was added.
