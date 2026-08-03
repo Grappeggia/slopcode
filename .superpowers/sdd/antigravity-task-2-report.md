@@ -20,7 +20,7 @@ Implemented and verified on top of Task 1 commit `c132e917b4`.
   - Added Antigravity names to native SSH session displays.
 - `packages/android/app/src/main/java/dev/slopcode/android/SshModels.kt`
   - Added the allowlisted native `ANTIGRAVITY` enum entry using binary `agy`.
-  - Uses a bounded, non-prompting OAuth token-presence probe. It reports Ready only for an exact authenticated marker; otherwise it reports Needs setup.
+  - Uses bounded, non-prompting `agy models` output. It reports Ready only for a valid listed model ID and otherwise reports Needs setup.
   - Runs the official fixed install script only for this enum entry; normal fixed argv commands now quote every argument.
   - Rejects SSH start requests carrying a user-provided `command` field.
 - `packages/android/src/ssh.test.ts`
@@ -50,23 +50,11 @@ The first attempt to select only the Kotlin class with `./gradlew test --tests d
 
 ## Concerns
 
-- Antigravity exposes no documented dedicated auth-status command. The review fix below uses the bounded credential-presence probe instead.
+- Antigravity exposes no documented dedicated auth-status command. The current review fix uses bounded `agy models` output instead.
 
-## Review fix — credential-presence auth probe
+## Superseded review fix — credential-presence auth probe
 
-Replaced the unsupported prior auth probe with the fixed enum-selected script below:
-
-```sh
-if [ -s "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ]; then
-  printf '%s\n' authenticated
-else
-  printf '%s\n' not-authenticated
-fi
-```
-
-The probe checks only non-empty file presence, never reads or prints token data, exits immediately, and submits no model prompt. `agy` remains the fixed interactive PTY login action. Antigravity is Ready only for exact `authenticated` output with exit code 0; `not-authenticated`, empty, unexpected output, and nonzero exits are all Needs setup.
-
-Updated `SshModelsTest` to assert the fixed path/markers and exact marker/exit-code behavior, removing the synthetic prior success case. No gallery or legacy relay files were changed.
+The credential-presence approach was removed in the subsequent review fix below. It is not used by the application.
 
 ### Fix validation commands and output
 
@@ -75,6 +63,26 @@ Updated `SshModelsTest` to assert the fixed path/markers and exact marker/exit-c
 - `cd packages/android && bun run typecheck` — passed.
 - `cd packages/android && bun run build:web` — passed. Vite emitted existing dynamic-import/chunk-size warnings.
 - `cd packages/android && ./gradlew :app:testDebugUnitTest` — passed: 24 tasks, with existing deprecation warnings from `MainActivity.kt` and `SshTransport.kt`.
+- `bunx prettier --check ...` — passed: all checked TypeScript/TSX/Markdown files match Prettier.
+- `git diff --check` — passed.
 - `bunx prettier --write packages/android/src/ssh.ts` — formatted the existing Task 2 TypeScript ternary.
+- `bunx prettier --check ...` — passed: all checked TypeScript/TSX/Markdown files match Prettier.
+- `git diff --check` — passed.
+
+## Review fix — `agy models` auth probe
+
+Replaced the credential-presence approach with the installed CLI's fixed non-generative `agy models` argv probe. `authScript` and all token-path logic were removed; the enum now uses `authArgs = listOf("models")`, so the existing bounded `runExec` path invokes only `agy models` and its existing timeout applies.
+
+`SshAgent.ANTIGRAVITY.loggedIn` now requires exit code 0, rejects explicit auth/login/error/not-authenticated output, and requires at least one complete `gemini-*`, `claude-*`, or `gpt-*` model-ID line. Empty, unknown, failure-text, and nonzero results remain Needs setup. `agy` remains the interactive login command.
+
+Local verification: `timeout 10 /home/marcos/.local/bin/agy models` exited 0 without opening a prompt or TUI and listed IDs including `gemini-3.6-flash-high`, `claude-sonnet-4-6`, and `gpt-oss-120b-medium`.
+
+### Final validation commands and output
+
+- `cd packages/android && bun test src/ssh.test.ts src/ssh-orchestrator.test.ts` — passed: 11 tests, 60 expectations.
+- `cd packages/android && bun test src` — passed: 76 tests, 372 expectations.
+- `cd packages/android && bun run typecheck` — passed.
+- `cd packages/android && bun run build:web` — passed. Vite emitted existing dynamic-import/chunk-size warnings.
+- `cd packages/android && ./gradlew :app:testDebugUnitTest` — passed: 24 tasks, with existing deprecation warnings from `MainActivity.kt` and `SshTransport.kt`.
 - `bunx prettier --check ...` — passed: all checked TypeScript/TSX/Markdown files match Prettier.
 - `git diff --check` — passed.

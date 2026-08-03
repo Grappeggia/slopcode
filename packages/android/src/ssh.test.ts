@@ -145,7 +145,7 @@ describe("direct SSH boundary parsing", () => {
         agent: "antigravity-cli",
         executable: "agy",
         exitCode: 0,
-        output: "authenticated",
+        output: "gemini-3.6-flash-high",
         ok: true,
         loggedIn: true,
       }),

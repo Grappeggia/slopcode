@@ -59,7 +59,6 @@ internal enum class SshAgent(
   val installArgs: List<String>,
   val loginArgs: List<String>,
   val installScript: String? = null,
-  val authScript: String? = null,
 ) {
   SLOPCODE("slopcode-cli", "slopcode", listOf("run"), listOf("auth", "list"), listOf("npm", "install", "-g", "slopcode@latest"), listOf("slopcode", "auth", "login")),
   CODEX("codex-cli", "codex", listOf("exec"), listOf("login", "status"), listOf("npm", "install", "-g", "@openai/codex"), listOf("codex", "login")),
@@ -69,11 +68,10 @@ internal enum class SshAgent(
     "antigravity-cli",
     "agy",
     emptyList(),
-    listOf("agents"),
+    listOf("models"),
     emptyList(),
     listOf("agy"),
     "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-    "if [ -s \"\u0024HOME/.gemini/antigravity-cli/antigravity-oauth-token\" ]; then printf '%s\\n' authenticated; else printf '%s\\n' not-authenticated; fi",
   );
 
   companion object {
@@ -97,8 +95,7 @@ internal object SshCommand {
 
   fun version(agent: SshAgent, directory: String) = command(directory, agent.binary, "--version")
 
-  fun authStatus(agent: SshAgent, directory: String) = agent.authScript?.let { script(directory, it) }
-    ?: command(directory, agent.binary, *agent.authArgs.toTypedArray())
+  fun authStatus(agent: SshAgent, directory: String) = command(directory, agent.binary, *agent.authArgs.toTypedArray())
 
   fun install(agent: SshAgent, directory: String) = agent.installScript?.let { script(directory, it) }
     ?: command(directory, *agent.installArgs.toTypedArray())
@@ -254,7 +251,8 @@ internal fun SshAgent.loggedIn(output: String, exitCode: Int): Boolean {
   if (exitCode != 0) return false
   val value = output.trim()
   if (this == SshAgent.ANTIGRAVITY) {
-    return value == "authenticated"
+    if (Regex("\\b(?:auth(?:entication)?|login|error|not-authenticated)\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
+    return Regex("(?m)^(?:gemini|claude|gpt)(?:[-_][a-z0-9.]+)+$", RegexOption.IGNORE_CASE).containsMatchIn(value)
   }
   if (value.isEmpty()) return true
   if (Regex("\\\"loggedIn\\\"\\s*:\\s*false", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
