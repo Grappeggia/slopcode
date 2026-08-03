@@ -27,7 +27,7 @@
 
 Follow-up race-fix commit: `9bb2c7599142c4ac1548902c4e2f70e68b1bc320` (`test(android): gate live SSH E2E fixture`; shared-index commit containing the reviewed Task 1 race fix).
 
-Cleanup follow-up commit: pending.
+Cleanup follow-up commit: `b8011da164507fb6c885d9d6f31675e91952f019` (`fix(android): clean stale SSH connections safely`).
 
 ## Blockers
 
