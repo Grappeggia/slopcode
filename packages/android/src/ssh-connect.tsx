@@ -17,6 +17,12 @@ import { canOpenExternalUrl, getAndroidBridge } from "./bridge"
 import { persistSshWorkspace } from "./platform"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { SshShell } from "./ssh-shell"
+import {
+  connectedSshWorkspace,
+  createSshCredentialLoader,
+  resetSshOnboarding,
+  type SshConnectAuth,
+} from "./ssh-connect-state"
 
 type Props = {
   ssh: SshTransport
@@ -24,7 +30,7 @@ type Props = {
   onConnected: (workspace: SshWorkspaceState) => void
 }
 
-type Auth = "password" | "privateKey"
+type Auth = SshConnectAuth
 type Step = "auth" | "folder" | "agent"
 type Setup = {
   action: SshSetupAction
@@ -122,6 +128,8 @@ export function SshConnect(props: Props) {
   const [addingComputer, setAddingComputer] = createSignal((props.initial?.recentTargets ?? []).length === 0)
   const [pendingKey, setPendingKey] = createSignal<{ profile: string; fingerprint: string; type: string }>()
   const [connected, setConnected] = createSignal(false)
+  const [connectedProfile, setConnectedProfile] = createSignal<string>()
+  const [connectedDirectory, setConnectedDirectory] = createSignal<string>()
   const [busy, setBusy] = createSignal(false)
   const [browseBusy, setBrowseBusy] = createSignal(false)
   const [error, setError] = createSignal("")
@@ -130,6 +138,24 @@ export function SshConnect(props: Props) {
   const [setupInput, setSetupInput] = createSignal("")
   const [checkingLogin, setCheckingLogin] = createSignal(false)
   const [agentStatuses, setAgentStatuses] = createSignal<Partial<Record<SshAgent, AgentStatus>>>({})
+  const credentials = createSshCredentialLoader(props.ssh)
+  let browsing = 0
+  let connecting = 0
+  const selectedProfile = createMemo(() => {
+    const normalized = normalizeSshTarget(target())
+    const parsed = normalized ? parseSshTarget(normalized) : undefined
+    return normalized && parsed ? sshProfile(normalized, parsed.port ?? 22) : undefined
+  })
+  const workspace = createMemo(() =>
+    connectedSshWorkspace({
+      connected: connected(),
+      connectedProfile: connectedProfile(),
+      connectedDirectory: connectedDirectory(),
+      target: target(),
+      directory: directory(),
+      agent: agent(),
+    }),
+  )
   const entries = createMemo(() => {
     const term = query().trim().toLowerCase()
     return (listing()?.entries ?? []).filter((entry) => !term || entry.name.toLowerCase().includes(term))
@@ -194,16 +220,47 @@ export function SshConnect(props: Props) {
     setBusy(false)
   }
 
-  async function loadCredentials(profile: string) {
-    const credential = await props.ssh.credentialGet(profile).catch(() => undefined)
-    if (!credential) return
-    setAuth(credential.auth)
-    if (credential.auth === "password") setPassword(credential.password)
-    if (credential.auth === "privateKey") {
-      setPrivateKey(credential.privateKey)
-      setPrivateKeyLabel("Saved private key")
-      setPassphrase(credential.passphrase ?? "")
-    }
+  async function loadCredentials(value: string) {
+    await credentials.load(value, selectedProfile, (credential) => {
+      setAuth(credential.auth)
+      setPassword(credential.auth === "password" ? credential.password : "")
+      setPrivateKey(credential.auth === "privateKey" ? credential.privateKey : "")
+      setPrivateKeyLabel(credential.auth === "privateKey" ? "Saved private key" : "")
+      setPassphrase(credential.auth === "privateKey" ? (credential.passphrase ?? "") : "")
+      setError("")
+    })
+  }
+
+  function clearOnboarding(nextAuth: Auth = "password") {
+    credentials.invalidate()
+    browsing += 1
+    connecting += 1
+    const next = resetSshOnboarding(nextAuth)
+    setAuth(next.auth)
+    setPassword(next.password)
+    setPrivateKey(next.privateKey)
+    setPrivateKeyLabel(next.privateKeyLabel)
+    setPassphrase(next.passphrase)
+    setPendingKey(next.pendingKey)
+    setConnected(next.connected)
+    setConnectedProfile(next.connectedProfile)
+    setConnectedDirectory(next.connectedDirectory)
+    setBusy(next.busy)
+    setBrowseBusy(next.browseBusy)
+    setStep(next.step)
+    setDirectory(next.directory)
+    setHomePath(next.homePath)
+    setListing(next.listing)
+    setBrowsePath(next.browsePath)
+    setBrowseOpen(next.browseOpen)
+    setQuery(next.query)
+    setShowHidden(next.showHidden)
+    setError(next.error)
+    setPreflight(next.preflight)
+    setSetup(next.setup)
+    setSetupInput(next.setupInput)
+    setCheckingLogin(next.checkingLogin)
+    setAgentStatuses(next.agentStatuses)
   }
 
   const pickPrivateKey = async () => {
@@ -214,6 +271,10 @@ export function SshConnect(props: Props) {
     }
     try {
       const value = await bridge.sshPickPrivateKey()
+      if (value === null || value === undefined) {
+        setError("")
+        return
+      }
       if (typeof value !== "string" || !value.startsWith("-----BEGIN ")) {
         setError("Choose an OpenSSH private-key file to continue.")
         return
@@ -233,10 +294,8 @@ export function SshConnect(props: Props) {
       setError("Enter an SSH target such as user@mac.example.com or user@[::1]:2222.")
       return
     }
+    clearOnboarding()
     setTarget(normalized)
-    setError("")
-    setStep("auth")
-    setShowHidden(false)
     setStarted(true)
     setAddingComputer(false)
     void loadCredentials(sshProfile(normalized, parsed.port ?? 22) ?? "")
@@ -246,27 +305,40 @@ export function SshConnect(props: Props) {
     const normalized = normalizeSshTarget(value)
     const parsed = normalized ? parseSshTarget(normalized) : undefined
     if (!normalized || !parsed) return
+    clearOnboarding()
     setTarget(normalized)
     setAddingComputer(false)
     setStarted(true)
-    setStep("auth")
-    setError("")
     void loadCredentials(sshProfile(normalized, parsed.port ?? 22) ?? "")
+  }
+
+  const chooseAuth = (value: Auth) => {
+    if (auth() === value) return
+    clearOnboarding(value)
+    setStarted(true)
+  }
+
+  const changeTarget = (value: string) => {
+    clearOnboarding()
+    setTarget(value)
   }
 
   const browse = async (path = browsePath(), hidden = showHidden()) => {
     const next = validSshPath(path)
     if (!next || browseBusy()) return
+    const request = ++browsing
     setBrowseBusy(true)
     setError("")
     try {
       const result = await props.ssh.list(next, hidden)
+      if (request !== browsing) return
       setBrowsePath(result.path)
       setListing(result)
     } catch (cause) {
+      if (request !== browsing) return
       setError(cause instanceof Error ? cause.message : "Could not browse the remote machine.")
     } finally {
-      setBrowseBusy(false)
+      if (request === browsing) setBrowseBusy(false)
     }
   }
 
@@ -314,6 +386,7 @@ export function SshConnect(props: Props) {
       setError("Paste the SSH private key, or choose password authentication.")
       return
     }
+    const request = ++connecting
     setBusy(true)
     setError("")
     setPreflight()
@@ -329,30 +402,41 @@ export function SshConnect(props: Props) {
         saveCredentials: true,
       })
       if (result.status === "host_key_required") {
+        if (request !== connecting || profile !== selectedProfile()) return
         setPendingKey({ profile, fingerprint: result.fingerprint, type: result.type })
         setError("Verify the SSH host-key fingerprint below before trusting this host.")
         return
       }
+      if (request !== connecting || profile !== selectedProfile()) {
+        await props.ssh.disconnect().catch(() => undefined)
+        return
+      }
       setPendingKey()
       setConnected(true)
+      setConnectedProfile(result.profile)
       setStep("folder")
       setBrowseOpen(true)
       setQuery("")
       setShowHidden(false)
       const home = await props.ssh.home()
+      if (request !== connecting || profile !== selectedProfile()) {
+        await props.ssh.disconnect().catch(() => undefined)
+        return
+      }
       setHomePath(home)
       setDirectory(home)
+      setConnectedDirectory(home)
       await browse(home, false)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "SSH connection failed.")
+      if (request === connecting) setError(cause instanceof Error ? cause.message : "SSH connection failed.")
     } finally {
-      setBusy(false)
+      if (request === connecting) setBusy(false)
     }
   }
 
   const trust = async () => {
     const pending = pendingKey()
-    if (!pending || busy()) return
+    if (!pending || pending.profile !== selectedProfile() || busy()) return
     setBusy(true)
     setError("")
     try {
@@ -375,6 +459,7 @@ export function SshConnect(props: Props) {
     try {
       const canonical = await props.ssh.selectWorkspace(next)
       setDirectory(canonical)
+      setConnectedDirectory(canonical)
       setStep("agent")
       setBrowseOpen(false)
       setQuery("")
@@ -388,15 +473,8 @@ export function SshConnect(props: Props) {
 
   const leave = async () => {
     await props.ssh.disconnect().catch(() => undefined)
-    setConnected(false)
+    clearOnboarding()
     setStarted(false)
-    setStep("auth")
-    setShowHidden(false)
-    setListing()
-    setError("")
-    setSetup()
-    setSetupInput("")
-    setCheckingLogin(false)
   }
 
   const checkPreflight = async (offerLogin = true) => {
@@ -449,11 +527,12 @@ export function SshConnect(props: Props) {
   }
 
   const saveWorkspace = async () => {
-    const normalized = normalizeSshTarget(target())
+    const current = workspace()
+    const normalized = current?.target
     const parsed = normalized ? parseSshTarget(normalized) : undefined
-    const profile = normalized && parsed ? sshProfile(normalized, parsed.port ?? 22) : undefined
-    const folder = validSshPath(directory())
-    if (!normalized || !parsed || !profile || !folder) {
+    const currentProfile = normalized && parsed ? sshProfile(normalized, parsed.port ?? 22) : undefined
+    const folder = current?.directory
+    if (!normalized || !parsed || !currentProfile || !folder) {
       setError("Choose a valid remote folder before continuing.")
       return false
     }
@@ -461,7 +540,7 @@ export function SshConnect(props: Props) {
       const state: SshWorkspaceState = {
         version: 1,
         target: normalized,
-        profile,
+        profile: currentProfile,
         host: parsed.host,
         port: parsed.port ?? 22,
         username: parsed.user,
@@ -532,7 +611,7 @@ export function SshConnect(props: Props) {
     try {
       await props.ssh.interrupt()
       setSetup({ ...current, state: "failed", output: appendOutput(current.output, "\nCancelled.\n") })
-      setError(`${agentName(agent())} ${current.action} was cancelled.`)
+      setError("")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Could not cancel ${current.action}.`)
     } finally {
@@ -550,7 +629,7 @@ export function SshConnect(props: Props) {
   }
 
   return (
-    <SshShell workspace={{ target: target(), directory: directory() || "Choose a workspace", agent: agent() }}>
+    <SshShell workspace={workspace()}>
       <main class="min-h-screen bg-surface-base text-text-strong flex items-start justify-center p-3 pt-20 sm:p-6 sm:pt-20">
         <form
           class="w-full max-w-3xl rounded-2xl border border-border-weak-base bg-surface-raised-base p-4 sm:p-6 flex flex-col gap-5"
@@ -663,6 +742,7 @@ export function SshConnect(props: Props) {
                 <button
                   type="button"
                   onClick={() => {
+                    clearOnboarding()
                     setTarget("")
                     setAddingComputer(true)
                   }}
@@ -685,14 +765,17 @@ export function SshConnect(props: Props) {
                     autocomplete="off"
                     placeholder="user@mac.example.com"
                     value={target()}
-                    onInput={(event) => setTarget(event.currentTarget.value)}
+                    onInput={(event) => changeTarget(event.currentTarget.value)}
                     class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
                   />
                 </label>
                 <Show when={recentTargets().length > 0}>
                   <button
                     type="button"
-                    onClick={() => setAddingComputer(false)}
+                    onClick={() => {
+                      clearOnboarding()
+                      setAddingComputer(false)
+                    }}
                     class="self-end shrink-0 text-12-regular underline"
                   >
                     Saved computers
@@ -711,7 +794,14 @@ export function SshConnect(props: Props) {
           <Show when={started() && !connected()}>
             <div class="flex items-center justify-between gap-3 rounded-lg border border-border-weak-base bg-surface-base px-3 py-3">
               <span class="text-14-regular">{target()}</span>
-              <button type="button" onClick={() => setStarted(false)} class="text-12-regular underline">
+              <button
+                type="button"
+                onClick={() => {
+                  clearOnboarding()
+                  setStarted(false)
+                }}
+                class="text-12-regular underline"
+              >
                 Change
               </button>
             </div>
@@ -720,7 +810,7 @@ export function SshConnect(props: Props) {
                 type="button"
                 class={`rounded-lg border px-3 py-3 text-14-medium ${auth() === "password" ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
                 aria-selected={auth() === "password"}
-                onClick={() => setAuth("password")}
+                onClick={() => chooseAuth("password")}
               >
                 Password
               </button>
@@ -728,7 +818,7 @@ export function SshConnect(props: Props) {
                 type="button"
                 class={`rounded-lg border px-3 py-3 text-14-medium ${auth() === "privateKey" ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
                 aria-selected={auth() === "privateKey"}
-                onClick={() => setAuth("privateKey")}
+                onClick={() => chooseAuth("privateKey")}
               >
                 Private key
               </button>
@@ -1007,6 +1097,7 @@ export function SshConnect(props: Props) {
                 onClick={() => {
                   setStep("folder")
                   setBrowseOpen(true)
+                  setError("")
                 }}
                 class="shrink-0 text-12-regular underline"
               >
