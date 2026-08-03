@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { handoffToInteractive, reconnectAgentic, returnToAgentic, stopAgentic } from "./ssh-session-flow"
+import {
+  canRetry,
+  canSubmit,
+  handoffToInteractive,
+  reconnectAgentic,
+  returnToAgentic,
+  stopAgentic,
+} from "./ssh-session-flow"
 
 describe("SSH session handoff", () => {
   test("stops and closes the agentic bridge before opening the interactive CLI", async () => {
@@ -33,5 +40,12 @@ describe("SSH session handoff", () => {
     )
     await returnToAgentic({ cleanup: async () => void calls.push("cleanup") }, (view) => void calls.push(view))
     expect(calls).toEqual(["stop", "close", "start", "cleanup", "agentic"])
+  })
+
+  test("requires reconnect before stopped sessions can submit or retry", () => {
+    expect(canSubmit("stopped")).toBe(false)
+    expect(canRetry("stopped")).toBe(false)
+    expect(canSubmit("ready")).toBe(true)
+    expect(canRetry("error")).toBe(true)
   })
 })

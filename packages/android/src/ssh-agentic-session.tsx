@@ -16,7 +16,7 @@ import {
   type OrchestratorWire,
 } from "./ssh-orchestrator"
 import { SshShell } from "./ssh-shell"
-import { handoffToInteractive, reconnectAgentic, stopAgentic } from "./ssh-session-flow"
+import { canRetry, canSubmit, handoffToInteractive, reconnectAgentic, stopAgentic } from "./ssh-session-flow"
 
 type Props = {
   ssh: SshTransport
@@ -129,9 +129,10 @@ export function SshAgenticSession(props: Props) {
 
   const send = async () => {
     const value = prompt().trim()
-    const sessionID = state().sessionID
+    const currentState = state()
+    const sessionID = currentState.sessionID
     const current = wireState()
-    if (!value || !sessionID || !current || busy() || state().phase === "waiting") return
+    if (!value || !sessionID || !current || busy() || !canSubmit(currentState.phase)) return
     setPrompt("")
     setError("")
     setBusy(true)
@@ -171,7 +172,8 @@ export function SshAgenticSession(props: Props) {
     setBusy(true)
     try {
       await stopAgentic(props.ssh, closeWire)
-      setState((previous) => ({ ...previous, phase: "stopped", interaction: undefined }))
+      setWireState()
+      setState({ ...initialOrchestratorState(), phase: "stopped", lastPrompt: state().lastPrompt })
     } catch (cause) {
       showError(cause, "Could not stop the remote agent.")
     }
@@ -189,7 +191,7 @@ export function SshAgenticSession(props: Props) {
 
   const retry = () => {
     const value = state().lastPrompt
-    if (!value || busy()) return
+    if (!value || busy() || !canRetry(state().phase)) return
     setPrompt(value)
     queueMicrotask(() => void send())
   }
@@ -471,12 +473,12 @@ export function SshAgenticSession(props: Props) {
                 value={prompt()}
                 onInput={(event) => setPrompt(event.currentTarget.value)}
                 placeholder="e.g. Review the latest changes and summarize any risks"
-                disabled={busy() || state().phase === "waiting"}
+                disabled={busy() || !canSubmit(state().phase)}
                 class="min-w-0 flex-1 resize-y rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={busy() || !prompt().trim() || !state().sessionID || state().phase === "waiting"}
+                disabled={busy() || !prompt().trim() || !state().sessionID || !canSubmit(state().phase)}
                 class="self-end rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 text-12-medium disabled:opacity-50"
               >
                 Send

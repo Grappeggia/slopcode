@@ -48,3 +48,53 @@ The web build reports pre-existing Vite chunk-size/dynamic-import warnings but e
 ## Concerns
 
 - Live Android SSH E2E was not run: `SSH_KEY_FILE`, `SSH_HOST`, and `SSH_USER` for the disposable fixture were not configured. The harness remains explicitly real-agent and does not claim a fake or successful live model turn.
+
+## Review blocker fix
+
+### Root cause and fix
+
+The successful Stop transition previously changed only the phase. It left the old bridge wire, session ID, and turn ID available, and neither submission nor retry treated `stopped` as terminal. This could send a stale frame after Stop.
+
+- Stop now clears `wireState` and resets orchestrator state to `stopped`, retaining only `lastPrompt`.
+- `canSubmit()` and `canRetry()` now reject `stopped`; `send()`, `retry()`, and the prompt controls use these guards.
+- Reconnect still starts a new wire/session, after which normal submission and retry are available.
+- `ssh-session-flow.test.ts` now deterministically verifies that stopped sessions cannot submit or retry.
+
+### Exact validation output
+
+```text
+$ bun test src/ssh-session-flow.test.ts
+4 pass
+0 fail
+8 expect() calls
+Ran 4 tests across 1 file.
+
+$ bun test src && bun run typecheck
+80 pass
+0 fail
+386 expect() calls
+Ran 80 tests across 12 files.
+$ tsgo --noEmit
+
+$ ./gradlew :app:testDebugUnitTest
+BUILD SUCCESSFUL in 469ms
+24 actionable tasks: 24 up-to-date
+
+$ bun test test/remote-orchestrator.test.ts && bun run typecheck
+16 pass
+0 fail
+102 expect() calls
+Ran 16 tests across 1 file.
+$ tsgo --noEmit
+
+$ bunx prettier --write src/ssh-session-flow.ts src/ssh-session-flow.test.ts src/ssh-agentic-session.tsx
+src/ssh-session-flow.ts 31ms (unchanged)
+src/ssh-session-flow.test.ts 10ms
+src/ssh-agentic-session.tsx 62ms (unchanged)
+
+$ bun run build:web
+✓ built in 14.45s
+
+$ git diff --check && git diff --cached --check
+(no output; pass)
+```
