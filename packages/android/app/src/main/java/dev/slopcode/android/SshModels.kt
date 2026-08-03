@@ -58,11 +58,21 @@ internal enum class SshAgent(
   val authArgs: List<String>,
   val installArgs: List<String>,
   val loginArgs: List<String>,
+  val installScript: String? = null,
 ) {
   SLOPCODE("slopcode-cli", "slopcode", listOf("run"), listOf("auth", "list"), listOf("npm", "install", "-g", "slopcode@latest"), listOf("slopcode", "auth", "login")),
   CODEX("codex-cli", "codex", listOf("exec"), listOf("login", "status"), listOf("npm", "install", "-g", "@openai/codex"), listOf("codex", "login")),
   OPENCODE("opencode-cli", "opencode", listOf("run"), listOf("auth", "list"), listOf("npm", "install", "-g", "opencode-ai"), listOf("opencode", "auth", "login")),
-  CLAUDE("claude-code", "claude", listOf("-p"), listOf("auth", "status"), listOf("npm", "install", "-g", "@anthropic-ai/claude-code"), listOf("claude"));
+  CLAUDE("claude-code", "claude", listOf("-p"), listOf("auth", "status"), listOf("npm", "install", "-g", "@anthropic-ai/claude-code"), listOf("claude")),
+  ANTIGRAVITY(
+    "antigravity-cli",
+    "agy",
+    emptyList(),
+    listOf("agents"),
+    emptyList(),
+    listOf("agy"),
+    "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+  );
 
   companion object {
     fun parse(value: String?): SshAgent? = entries.firstOrNull { it.id == value }
@@ -87,13 +97,16 @@ internal object SshCommand {
 
   fun authStatus(agent: SshAgent, directory: String) = command(directory, agent.binary, *agent.authArgs.toTypedArray())
 
-  fun install(agent: SshAgent, directory: String) = command(directory, *agent.installArgs.toTypedArray())
+  fun install(agent: SshAgent, directory: String) = agent.installScript?.let { script(directory, it) }
+    ?: command(directory, *agent.installArgs.toTypedArray())
 
   fun login(agent: SshAgent, directory: String) = command(directory, *agent.loginArgs.toTypedArray())
 
   fun orchestrator(directory: String) = command(directory, "slopcode", "remote-orchestrator", "--stdio")
 
-  private fun command(directory: String, vararg args: String) =
+  private fun command(directory: String, vararg args: String) = script(directory, "exec ${args.joinToString(" ") { argument(it) }}")
+
+  private fun script(directory: String, value: String) =
     buildString {
       append("cd ")
       append(quote(directory))
@@ -102,10 +115,12 @@ internal object SshCommand {
         quote(
           "export PATH=\"\u0024HOME/.local/bin:\u0024HOME/.opencode/bin:\u0024HOME/.bun/bin:\u0024HOME/.local/share/pnpm:\u0024PATH\"; " +
             "for dir in \"\u0024HOME\"/.local/share/pnpm/nodejs/*/bin; do [ -d \"\u0024dir\" ] && PATH=\"\u0024PATH:\u0024dir\"; done; " +
-            "export PATH; exec ${args.joinToString(" ")}",
+            "export PATH; $value",
         ),
       )
     }
+
+  private fun argument(value: String) = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\u0024", "\\\u0024").replace("`", "\\`")}\""
 
   private fun quote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
 }
@@ -182,6 +197,7 @@ internal data class SshStartRequest(
       val height = value.optInt("height", 0).coerceIn(0, 8_000)
       if (operation == "prompt" && prompt.isNullOrBlank()) return null
       if (setup != null && prompt != null) return null
+      if (value.has("command")) return null
       return SshStartRequest(operation, agent, directory, prompt, setup, cols, rows, width, height)
     }
   }
@@ -234,6 +250,10 @@ internal fun canonicalProfile(username: String, host: String, port: Int): String
 internal fun SshAgent.loggedIn(output: String, exitCode: Int): Boolean {
   if (exitCode != 0) return false
   val value = output.trim()
+  if (this == SshAgent.ANTIGRAVITY) {
+    if (Regex("\\b(not|no|none|未)\\b.{0,32}\\b(logged|auth|credential)", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
+    return Regex("(?m)^\\s*(?:[-*]|[0-9]+[.)])\\s+\\S|^\\s{2,}\\S").containsMatchIn(value)
+  }
   if (value.isEmpty()) return true
   if (Regex("\\\"loggedIn\\\"\\s*:\\s*false", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
   if (Regex("\\b(not|no|none|未)\\b.{0,32}\\b(logged|auth|credential)", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false

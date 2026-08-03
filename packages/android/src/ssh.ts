@@ -1,4 +1,4 @@
-export const SSH_AGENTS = ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code"] as const
+export const SSH_AGENTS = ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code", "antigravity-cli"] as const
 export type SshAgent = (typeof SSH_AGENTS)[number]
 export const SSH_SETUP_ACTIONS = ["install", "login"] as const
 export type SshSetupAction = (typeof SSH_SETUP_ACTIONS)[number]
@@ -10,12 +10,15 @@ export function sshSetupRecipe(agent: SshAgent, action: SshSetupAction) {
       : agent === "codex-cli"
         ? "npm install -g @openai/codex"
         : agent === "opencode-cli"
-          ? "npm install -g opencode-ai"
-          : "npm install -g @anthropic-ai/claude-code"
+        ? "npm install -g opencode-ai"
+          : agent === "claude-code"
+            ? "npm install -g @anthropic-ai/claude-code"
+            : "curl -fsSL https://antigravity.google/cli/install.sh | bash"
   if (action === "install") return install
   if (agent === "slopcode-cli") return "slopcode auth login"
   if (agent === "codex-cli") return "codex login"
   if (agent === "opencode-cli") return "opencode auth login"
+  if (agent === "antigravity-cli") return "agy"
   return "claude"
 }
 

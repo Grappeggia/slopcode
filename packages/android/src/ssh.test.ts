@@ -108,6 +108,9 @@ describe("direct SSH boundary parsing", () => {
       parseSshPreflight({ agent: "codex-cli", executable: "codex", exitCode: 0, output: "codex 1", ok: true }),
     ).toEqual({ agent: "codex-cli", executable: "codex", exitCode: 0, output: "codex 1", ok: true })
     expect(
+      parseSshPreflight({ agent: "antigravity-cli", executable: "agy", exitCode: 0, output: "1.1.9", ok: true }),
+    ).toEqual({ agent: "antigravity-cli", executable: "agy", exitCode: 0, output: "1.1.9", ok: true })
+    expect(
       parseSshPreflight({
         agent: "codex-cli",
         executable: "codex",
@@ -137,6 +140,16 @@ describe("direct SSH boundary parsing", () => {
         loggedIn: false,
       }),
     ).toMatchObject({ loggedIn: false, exitCode: 1 })
+    expect(
+      parseSshAuthStatus({
+        agent: "antigravity-cli",
+        executable: "agy",
+        exitCode: 0,
+        output: "Available agents:\n  gemini-3-pro",
+        ok: true,
+        loggedIn: true,
+      }),
+    ).toMatchObject({ agent: "antigravity-cli", loggedIn: true })
   })
 
   test("uses only fixed setup recipes and accepts only bounded setup events", () => {
@@ -145,6 +158,10 @@ describe("direct SSH boundary parsing", () => {
     expect(sshSetupRecipe("codex-cli", "login")).toBe("codex login")
     expect(sshSetupRecipe("opencode-cli", "login")).toBe("opencode auth login")
     expect(sshSetupRecipe("claude-code", "login")).toBe("claude")
+    expect(sshSetupRecipe("antigravity-cli", "install")).toBe(
+      "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    )
+    expect(sshSetupRecipe("antigravity-cli", "login")).toBe("agy")
     expect(parseSshStart({ id: "ssh_setup1", status: "started", operation: "install" })).toEqual({
       id: "ssh_setup1",
       status: "started",

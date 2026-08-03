@@ -31,6 +31,7 @@ function name(value: SshWorkspaceState["agent"] | undefined) {
   if (value === "slopcode-cli") return "Slopcode"
   if (value === "codex-cli") return "Codex"
   if (value === "opencode-cli") return "OpenCode"
+  if (value === "antigravity-cli") return "Antigravity"
   return "Claude Code"
 }
 

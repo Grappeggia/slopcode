@@ -20,7 +20,7 @@ class SshModelsTest {
   @Test
   fun `connector commands are fixed and shell quote the selected folder`() {
     val command = SshCommand.prompt(SshAgent.CODEX, "/Users/marcos/Project's code")
-    assertTrue(command.startsWith("cd '") && command.contains("exec codex exec"))
+    assertTrue(command.startsWith("cd '") && command.contains("exec \"codex\" \"exec\""))
     assertTrue(command.contains("nodejs/*/bin"))
     assertTrue(command.contains("PATH=\"\u0024PATH:\u0024dir\""))
     assertTrue(command.contains("'\"'\"'"))
@@ -30,29 +30,32 @@ class SshModelsTest {
   @Test
   fun `orchestrator runs from the validated workspace with fixed arguments`() {
     val command = SshCommand.orchestrator("/Users/marcos/Project's code")
-    assertTrue(command.startsWith("cd '") && command.contains("exec slopcode remote-orchestrator --stdio"))
+    assertTrue(command.startsWith("cd '") && command.contains("exec \"slopcode\" \"remote-orchestrator\" \"--stdio\""))
     assertTrue(command.contains("'\"'\"'"))
   }
 
   @Test
-  fun `only the four allowlisted agents parse`() {
+  fun `only allowlisted agents parse`() {
     assertEquals(SshAgent.SLOPCODE, SshAgent.parse("slopcode-cli"))
     assertEquals(SshAgent.CODEX, SshAgent.parse("codex-cli"))
     assertEquals(SshAgent.OPENCODE, SshAgent.parse("opencode-cli"))
     assertEquals(SshAgent.CLAUDE, SshAgent.parse("claude-code"))
+    assertEquals(SshAgent.ANTIGRAVITY, SshAgent.parse("antigravity-cli"))
     assertNull(SshAgent.parse("bash"))
   }
 
   @Test
   fun `setup recipes are fixed and do not accept a command from the request`() {
-    assertTrue(SshCommand.install(SshAgent.SLOPCODE, "/tmp/project").contains("exec npm install -g slopcode@latest"))
-    assertTrue(SshCommand.install(SshAgent.CODEX, "/tmp/project").contains("exec npm install -g @openai/codex"))
-    assertTrue(SshCommand.install(SshAgent.OPENCODE, "/tmp/project").contains("exec npm install -g opencode-ai"))
-    assertTrue(SshCommand.install(SshAgent.CLAUDE, "/tmp/project").contains("exec npm install -g @anthropic-ai/claude-code"))
-    assertTrue(SshCommand.login(SshAgent.SLOPCODE, "/tmp/project").contains("exec slopcode auth login"))
-    assertTrue(SshCommand.login(SshAgent.CODEX, "/tmp/project").contains("exec codex login"))
-    assertTrue(SshCommand.login(SshAgent.OPENCODE, "/tmp/project").contains("exec opencode auth login"))
-    assertTrue(SshCommand.login(SshAgent.CLAUDE, "/tmp/project").contains("exec claude"))
+    assertTrue(SshCommand.install(SshAgent.SLOPCODE, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"slopcode@latest\""))
+    assertTrue(SshCommand.install(SshAgent.CODEX, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"@openai/codex\""))
+    assertTrue(SshCommand.install(SshAgent.OPENCODE, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"opencode-ai\""))
+    assertTrue(SshCommand.install(SshAgent.CLAUDE, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"@anthropic-ai/claude-code\""))
+    assertTrue(SshCommand.install(SshAgent.ANTIGRAVITY, "/tmp/project").contains("curl -fsSL https://antigravity.google/cli/install.sh | bash"))
+    assertTrue(SshCommand.login(SshAgent.SLOPCODE, "/tmp/project").contains("exec \"slopcode\" \"auth\" \"login\""))
+    assertTrue(SshCommand.login(SshAgent.CODEX, "/tmp/project").contains("exec \"codex\" \"login\""))
+    assertTrue(SshCommand.login(SshAgent.OPENCODE, "/tmp/project").contains("exec \"opencode\" \"auth\" \"login\""))
+    assertTrue(SshCommand.login(SshAgent.CLAUDE, "/tmp/project").contains("exec \"claude\""))
+    assertTrue(SshCommand.login(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\""))
     assertNull(SshStartRequest.parse(JSONObject("""{"operation":"bash","agent":"codex-cli","directory":"/tmp/project"}""")))
   }
 
@@ -67,13 +70,36 @@ class SshModelsTest {
 
   @Test
   fun `authentication checks use fixed agent commands and skip known logged in states`() {
-    assertTrue(SshCommand.authStatus(SshAgent.CODEX, "/tmp/project").contains("exec codex login status"))
-    assertTrue(SshCommand.authStatus(SshAgent.CLAUDE, "/tmp/project").contains("exec claude auth status"))
+    assertTrue(SshCommand.authStatus(SshAgent.CODEX, "/tmp/project").contains("exec \"codex\" \"login\" \"status\""))
+    assertTrue(SshCommand.authStatus(SshAgent.CLAUDE, "/tmp/project").contains("exec \"claude\" \"auth\" \"status\""))
+    assertTrue(SshCommand.version(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\" \"--version\""))
+    assertTrue(SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\" \"agents\""))
     assertTrue(SshAgent.CODEX.loggedIn("Logged in using ChatGPT", 0))
     assertTrue(SshAgent.OPENCODE.loggedIn("4 credentials", 0))
     assertFalse(SshAgent.CLAUDE.loggedIn("{\"loggedIn\":false}", 0))
     assertFalse(SshAgent.SLOPCODE.loggedIn("0 credentials", 0))
     assertFalse(SshAgent.CODEX.loggedIn("Logged in using ChatGPT", 1))
+    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("Available agents:", 0))
+    assertTrue(SshAgent.ANTIGRAVITY.loggedIn("Available agents:\n  gemini-3-pro", 0))
+    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("Available agents:\n  gemini-3-pro", 1))
+  }
+
+  @Test
+  fun `Antigravity bridge requests use the allowlisted enum`() {
+    assertEquals(
+      SshAgent.ANTIGRAVITY,
+      SshVersionRequest.parse(JSONObject("""{"agent":"antigravity-cli","directory":"/tmp/project"}"""))?.agent,
+    )
+    assertEquals(
+      SshAgent.ANTIGRAVITY,
+      SshStartRequest.parse(JSONObject("""{"operation":"login","agent":"antigravity-cli","directory":"/tmp/project"}"""))?.agent,
+    )
+    assertNull(SshStartRequest.parse(JSONObject("""{"operation":"login","agent":"antigravity-cli;curl bad","directory":"/tmp/project"}""")))
+    assertNull(
+      SshStartRequest.parse(
+        JSONObject("""{"operation":"install","agent":"antigravity-cli","directory":"/tmp/project","command":"curl --user-provided https://invalid.example/install.sh"}"""),
+      ),
+    )
   }
 
   @Test

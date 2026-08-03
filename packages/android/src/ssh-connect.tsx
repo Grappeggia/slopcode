@@ -41,6 +41,7 @@ function agentName(value: SshAgent) {
   if (value === "slopcode-cli") return "Slopcode"
   if (value === "codex-cli") return "Codex"
   if (value === "opencode-cli") return "OpenCode"
+  if (value === "antigravity-cli") return "Antigravity"
   return "Claude Code"
 }
 
@@ -48,6 +49,7 @@ function agentDescription(value: SshAgent) {
   if (value === "slopcode-cli") return "slopcode / slopcode run"
   if (value === "codex-cli") return "codex / codex exec"
   if (value === "opencode-cli") return "opencode / opencode run"
+  if (value === "antigravity-cli") return "agy / Antigravity CLI"
   return "claude / claude -p"
 }
 

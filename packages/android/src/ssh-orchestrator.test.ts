@@ -16,6 +16,7 @@ describe("SSH agent orchestration frames", () => {
     expect(agentID("codex-cli")).toBe("codex")
     expect(agentID("opencode-cli")).toBe("opencode")
     expect(agentID("claude-code")).toBe("claude")
+    expect(agentID("antigravity-cli")).toBe("antigravity")
     const approval = replyFrame(
       "ses_1",
       { id: "int_1", revision: 1, kind: "approval", title: "Run command" },
@@ -25,6 +26,7 @@ describe("SSH agent orchestration frames", () => {
     expect(approval).not.toHaveProperty("agent")
     expect(approval.type).toBe("interaction.approval.reply")
     expect(turnFrame("ses_1", "review", "claude-code").agent).toBe("claude")
+    expect(turnFrame("ses_1", "review", "antigravity-cli").agent).toBe("antigravity")
     expect(workspaceFrame("/tmp/work", "codex-cli").agent.id).toBe("codex")
   })
 

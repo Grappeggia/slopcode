@@ -1,6 +1,6 @@
 import type { SshAgent, SshOrchestratorEvent, SshTransport } from "./ssh"
 
-export type OrchestratorAgent = "slopcode" | "opencode" | "codex" | "claude"
+export type OrchestratorAgent = "slopcode" | "opencode" | "codex" | "claude" | "antigravity"
 
 export type OrchestratorInteraction = {
   id: string
@@ -56,6 +56,7 @@ export function agentID(value: SshAgent): OrchestratorAgent {
   if (value === "slopcode-cli") return "slopcode"
   if (value === "opencode-cli") return "opencode"
   if (value === "codex-cli") return "codex"
+  if (value === "antigravity-cli") return "antigravity"
   return "claude"
 }
 
