@@ -7,7 +7,13 @@
     <style>
       :root {
         color-scheme: dark;
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
         --page: #0b0e12;
         --surface: #12171d;
         --surface-raised: #171e26;
@@ -76,11 +82,11 @@
         margin: 0;
         padding: 32px;
         min-height: 100vh;
-        background:
-          radial-gradient(circle at 8% 0%, rgb(207 211 106 / 7%), transparent 30rem),
-          var(--page);
+        background: radial-gradient(circle at 8% 0%, rgb(207 211 106 / 7%), transparent 30rem), var(--page);
         color: var(--text);
-        transition: background-color 160ms ease, color 160ms ease;
+        transition:
+          background-color 160ms ease,
+          color 160ms ease;
       }
 
       main {
@@ -136,7 +142,10 @@
         border-radius: 16px;
         background: var(--surface);
         box-shadow: var(--shadow-sm);
-        transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+        transition:
+          background-color 160ms ease,
+          border-color 160ms ease,
+          box-shadow 160ms ease;
       }
 
       .toolbar-title {
@@ -404,12 +413,8 @@
             <p class="appearance-copy">Choose a comfortable reading theme.</p>
           </div>
           <div class="theme-toggle" role="group" aria-label="Choose gallery appearance">
-            <button class="theme-button" type="button" data-theme-option="light" aria-pressed="false">
-              Light
-            </button>
-            <button class="theme-button" type="button" data-theme-option="dark" aria-pressed="true">
-              Dark
-            </button>
+            <button class="theme-button" type="button" data-theme-option="light" aria-pressed="false">Light</button>
+            <button class="theme-button" type="button" data-theme-option="dark" aria-pressed="true">Dark</button>
           </div>
         </div>
       </section>

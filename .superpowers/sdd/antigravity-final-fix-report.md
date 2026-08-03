@@ -74,17 +74,17 @@ No publishing/release workflow, QR scanning, legacy HTTPS/desktop relay integrat
 
 All tests were run from package directories, never the repository root.
 
-| Command | Result |
-| --- | --- |
-| `bun test src` in `packages/android` | Pass: 87 tests, 404 expectations across 12 files |
-| `bun run typecheck` in `packages/android` | Pass: `tsgo --noEmit` |
-| `bun run build:web` in `packages/android` | Pass: 2,185 modules transformed; built in 18.48s |
+| Command                                                                                     | Result                                                                            |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `bun test src` in `packages/android`                                                        | Pass: 87 tests, 404 expectations across 12 files                                  |
+| `bun run typecheck` in `packages/android`                                                   | Pass: `tsgo --noEmit`                                                             |
+| `bun run build:web` in `packages/android`                                                   | Pass: 2,185 modules transformed; built in 18.48s                                  |
 | `./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin` in `packages/android` | `BUILD SUCCESSFUL`; Kotlin unit tests pass and the instrumented SSH test compiles |
-| `bun test test/remote-orchestrator.test.ts` in `packages/slopcode` | Pass: 18 tests, 108 expectations |
-| `bun run typecheck` in `packages/slopcode` | Pass: `tsgo --noEmit` |
-| Focused Android boundary/lifecycle suite | Pass: 31 tests, 188 expectations |
-| `bunx prettier --check` on every changed TypeScript/TSX file | Pass: all matched files use Prettier style |
-| `git diff --check -- packages/android packages/slopcode` | Pass: no whitespace errors |
+| `bun test test/remote-orchestrator.test.ts` in `packages/slopcode`                          | Pass: 18 tests, 108 expectations                                                  |
+| `bun run typecheck` in `packages/slopcode`                                                  | Pass: `tsgo --noEmit`                                                             |
+| Focused Android boundary/lifecycle suite                                                    | Pass: 31 tests, 188 expectations                                                  |
+| `bunx prettier --check` on every changed TypeScript/TSX file                                | Pass: all matched files use Prettier style                                        |
+| `git diff --check -- packages/android packages/slopcode`                                    | Pass: no whitespace errors                                                        |
 
 The web build emitted its existing dynamic/static import, duplicate source-map output, and large-chunk warnings but exited successfully. Kotlin compilation emitted the existing JSch `setPassword` deprecation warning during the first non-incremental unit run.
 
@@ -125,12 +125,12 @@ Fix: validation now completes before `workspace.bind(canonical)` replaces the cu
 
 ### Narrow validation
 
-| Command | Result |
-| --- | --- |
-| `bun test test/remote-orchestrator.test.ts` in `packages/slopcode` | Pass: 19 tests, 110 expectations |
-| `./gradlew :app:testDebugUnitTest` in `packages/android` | `BUILD SUCCESSFUL`; Kotlin unit coverage passes |
-| `bun run typecheck` in `packages/slopcode` | Pass: `tsgo --noEmit` |
-| `bunx prettier --check` on the changed CLI/test files | Pass |
-| `git diff --check` on the fix-wave paths | Pass |
+| Command                                                            | Result                                          |
+| ------------------------------------------------------------------ | ----------------------------------------------- |
+| `bun test test/remote-orchestrator.test.ts` in `packages/slopcode` | Pass: 19 tests, 110 expectations                |
+| `./gradlew :app:testDebugUnitTest` in `packages/android`           | `BUILD SUCCESSFUL`; Kotlin unit coverage passes |
+| `bun run typecheck` in `packages/slopcode`                         | Pass: `tsgo --noEmit`                           |
+| `bunx prettier --check` on the changed CLI/test files              | Pass                                            |
+| `git diff --check` on the fix-wave paths                           | Pass                                            |
 
 The protected `artifacts/android-ssh-flow/index.html` change remains untouched and unstaged. No release, QR/desktop relay, or gallery scope was added.

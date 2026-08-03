@@ -24,16 +24,16 @@
 
 ## Validation
 
-| Command | Result |
-| --- | --- |
-| `bun test src/ssh-session-flow.test.ts src/ssh-orchestrator.test.ts src/source-regression.test.ts` (packages/android) | Pass — 9 tests |
-| `bun test src` (packages/android) | Pass — 79 tests |
-| `bun run typecheck` (packages/android) | Pass |
-| `bun test test/remote-orchestrator.test.ts` (packages/slopcode) | Pass — 16 tests, deterministic fixture only |
-| `bun run typecheck` (packages/slopcode) | Pass |
-| `./gradlew :app:testDebugUnitTest` (packages/android) | BUILD SUCCESSFUL |
-| `bun run build` (packages/android) | Web build and `:app:assembleDebug` successful |
-| `git diff --check` | Pass |
+| Command                                                                                                               | Result                                        |
+| --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `bun test src/ssh-session-flow.test.ts src/ssh-orchestrator.test.ts src/source-regression.test.ts` (packages/android) | Pass — 9 tests                                |
+| `bun test src` (packages/android)                                                                                     | Pass — 79 tests                               |
+| `bun run typecheck` (packages/android)                                                                                | Pass                                          |
+| `bun test test/remote-orchestrator.test.ts` (packages/slopcode)                                                       | Pass — 16 tests, deterministic fixture only   |
+| `bun run typecheck` (packages/slopcode)                                                                               | Pass                                          |
+| `./gradlew :app:testDebugUnitTest` (packages/android)                                                                 | BUILD SUCCESSFUL                              |
+| `bun run build` (packages/android)                                                                                    | Web build and `:app:assembleDebug` successful |
+| `git diff --check`                                                                                                    | Pass                                          |
 
 The web build reports pre-existing Vite chunk-size/dynamic-import warnings but exits successfully. Android compilation reports the existing deprecated JSch `setPassword` warning.
 
