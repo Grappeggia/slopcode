@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-03T09:01:36-07:00",
-  "build": "android debug · native Codex App Server handshake",
+  "generatedAt": "2026-08-03T09:44:16-07:00",
+  "build": "v0.2.215 Android debug · native Codex App Server handshake",
   "requiredAgents": ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code", "antigravity-cli"],
   "shared": [
     {
@@ -84,9 +84,16 @@
     {
       "id": "debug-landscape-keyboard",
       "title": "Latest build · landscape keyboard",
-      "caption": "Large-font landscape keyboard fixture captured before the emulator's final rotation timeout.",
+      "caption": "Large-font landscape keyboard fixture captured from the v0.2.215 release build.",
       "src": "release-debug-06-landscape-light-keyboard.png",
       "alt": "Latest Android debug build in landscape with the keyboard fixture"
+    },
+    {
+      "id": "debug-landscape-dark-keyboard",
+      "title": "Latest build · landscape dark keyboard",
+      "caption": "Dark mode remains readable at large font scale with the keyboard open in landscape.",
+      "src": "release-debug-07-landscape-dark-keyboard.png",
+      "alt": "Latest Android debug build in landscape dark mode with the keyboard fixture"
     }
   ],
   "agents": {
