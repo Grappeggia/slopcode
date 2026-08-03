@@ -1,6 +1,6 @@
 {
   "name": "@slopcode-ai/console-mail",
-  "version": "0.2.212",
+  "version": "0.2.213",
   "dependencies": {
     "@jsx-email/all": "2.2.3",
     "@jsx-email/cli": "1.4.3",
