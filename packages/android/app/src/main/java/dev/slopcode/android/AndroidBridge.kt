@@ -272,6 +272,7 @@ class AndroidBridge(
   fun enqueueDeepLink(url: String) {
     val value = safeDeepLink(url) ?: return
     synchronized(deepLinks) {
+      if (deepLinks.contains(value)) return
       while (deepLinks.size >= MAX_DEEP_LINKS) deepLinks.removeAt(0)
       deepLinks += value
     }
@@ -337,7 +338,9 @@ class AndroidBridge(
     webView.post {
       if (!rendererReady || rendererNonce != nonce) {
         synchronized(deepLinks) {
-          urls.forEach { deepLinks.add(0, it) }
+          urls.asReversed().forEach { url ->
+            if (!deepLinks.contains(url)) deepLinks.add(0, url)
+          }
         }
         return@post
       }

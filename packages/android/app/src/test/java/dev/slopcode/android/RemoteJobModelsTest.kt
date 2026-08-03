@@ -100,6 +100,40 @@ class RemoteJobModelsTest {
   }
 
   @Test
+  fun revokedAndExpiredEventsAreTerminalAndUnknownEventsDoNotReenableApproval() {
+    val approval = state(status = RemoteJobStatus.WAITING_APPROVAL, approval = JSONObject().put("id", "apr_1"))
+    val unknown = RemoteJobReducer.apply(
+      approval,
+      RemoteJobEvent.parse(
+        JSONObject().put("id", "evt_unknown").put("jobID", approval.id)
+          .put("type", "job.capability.changed").put("data", JSONObject()),
+      )!!,
+    )
+    val revoked = RemoteJobReducer.apply(
+      approval,
+      RemoteJobEvent.parse(
+        JSONObject().put("id", "evt_revoked").put("jobID", approval.id)
+          .put("type", "remote.job.revoked").put("data", JSONObject().put("message", "Access revoked")),
+      )!!,
+    )
+    val expired = RemoteJobReducer.apply(
+      approval,
+      RemoteJobEvent.parse(
+        JSONObject().put("id", "evt_expired").put("jobID", approval.id)
+          .put("type", "job.expired").put("data", JSONObject().put("message", "Approval expired")),
+      )!!,
+    )
+
+    assertEquals(RemoteJobStatus.WAITING_APPROVAL, unknown.status)
+    assertEquals(RemoteJobStatus.REVOKED, revoked.status)
+    assertEquals(RemoteJobStatus.EXPIRED, expired.status)
+    assertTrue(RemoteJobStatus.terminal(revoked.status))
+    assertTrue(RemoteJobStatus.terminal(expired.status))
+    assertFalse(remoteJobNotificationActionAllowed(revoked, RemoteJobAction.APPROVE))
+    assertFalse(remoteJobNotificationActionAllowed(expired, RemoteJobAction.STOP))
+  }
+
+  @Test
   fun notificationActionsAreAllowlisted() {
     assertTrue(RemoteJobAction.valid(RemoteJobAction.APPROVE))
     assertTrue(RemoteJobAction.valid(RemoteJobAction.REJECT))

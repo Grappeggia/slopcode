@@ -1,26 +1,26 @@
-# Task 5 notification scope report
+# Task 5 notification review fixes
 
 ## Delivered
 
-- Added notification permission unit coverage for Android 13 grant, deny, first-prompt, upgrade-from-disabled, and pre-Android-13 enablement behavior.
-- Added notification-only action policy: approval, question, stop, retry, and terminal/revoked jobs have an explicit allowed action set. A question notification opens its exact job/session instead of sending an empty answer.
-- Hardened notification taps in `RemoteJobService`: duplicate concurrent taps are coalesced, stale terminal/revoked actions are ignored before network work, and stop/retry/accepted-action notifications refresh immediately.
-- Added `bun scripts/validate-android-audit.ts`, a repeatable emulator runner that rebuilds/installs the debug APK, captures portrait/landscape plus light/dark screenshots, restores device settings, writes bounded/redacted logs, runs notification unit and deep-link instrumentation checks, and reports live SSH as passed, failed, or unavailable.
+- `job.revoked` and `job.expired` now persist as terminal states. Unknown events preserve the current state, so they cannot reopen approval, question, stop, or retry actions.
+- Notification interactions are serialized per job state/interaction. Contradictory approval taps cannot both reach the action endpoint; each action request has a stable interaction-scoped `Idempotency-Key`.
+- A failed stop request leaves the remote job active and records `actionError` plus `retryAction=stop`; the notification tells the user to retry instead of claiming the job stopped.
+- Duplicate URI delivery from Intent data plus `notification_href` is coalesced while retaining the exact job and session. The bridge queue also remains deduplicated across deferred renderer delivery.
+- FCM payloads are bounded and covered as wake metadata only. They never persist or advance the SSE replay cursor before the stream consumes the event.
+- The Android audit runner records individual permission, action, terminal-event, exact-session, duplicate-link, replay/wake, FCM-payload, activity, screenshot, FCM-transport, and SSH results. It writes failures for interrupted checks rather than `not run`.
+- `:app:assembleRelease` now declares `syncWebAssets` for the release lint tasks that read generated web assets. No publishing or release workflow was changed.
 
 ## Validation
 
-- `bun test src/remote-jobs.test.ts src/remote-job-notification.test.ts src/remote-session-recovery.test.ts src/platform.test.ts src/bridge.test.ts` — 23 passed before Task 3 ownership was handed off. Task 3-owned TypeScript additions were then removed from this change set.
-- `bun run typecheck` — passed before the ownership handoff; no TypeScript files remain in this scoped commit.
-- `./gradlew :app:testDebugUnitTest --tests dev.slopcode.android.NotificationPermissionTest --tests dev.slopcode.android.RemoteJobNotificationTest` — passed.
+- `./gradlew :app:testDebugUnitTest --tests dev.slopcode.android.NotificationPermissionTest --tests dev.slopcode.android.RemoteJobModelsTest --tests dev.slopcode.android.RemoteJobNotificationTest --tests dev.slopcode.android.RemoteJobHttpTest --tests dev.slopcode.android.RemoteJobPushTest --tests dev.slopcode.android.DeepLinkDeliveryTest` — passed.
+- `bun run typecheck` — passed.
+- `bun test src/remote-jobs.test.ts src/remote-job-notification.test.ts src/remote-session-recovery.test.ts src/platform.test.ts src/bridge.test.ts` — 21 passed, 0 failed.
+- `bun run build` — passed.
 - `bun build scripts/validate-android-audit.ts --target bun --outdir /tmp/slopcode-android-audit-parse` — passed.
-- `./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.slopcode.android.SshTransportInstrumentedTest#deepLinkIntentResolvesToMainActivity` — passed on `emulator-5554` before the ownership handoff.
+- `./gradlew :app:assembleRelease` — passed, including `generateReleaseLintVitalReportModel`, `lintVitalAnalyzeRelease`, `lintVitalReportRelease`, and `lintVitalRelease`.
+- `ANDROID_AUDIT_BUILD=0 ANDROID_AUDIT_REPORT_DIR=/tmp/slopcode-android-audit-task5-rerun bun run ./scripts/validate-android-audit.ts` — passed all runnable checks on `emulator-5554`: notification permission/actions, revoked/expired handling, exact-session/pending link, duplicate delivery, cursor replay/wake, FCM payload wake, activity resolution, and four orientation/theme screenshots. The existing APK was used because the preceding full `bun run build` had already passed.
 
-## Unavailable or blocked checks
+## External limitations
 
-- Live SSH harness: `./scripts/run-ssh-e2e-all-agents.sh` exited 2 as designed because `SSH_HOST` is not configured. No SSH credentials or backend runs were attempted, and this report does not claim live SSH coverage.
-- Release APK: `:app:assembleRelease` is blocked by an existing Gradle validation error: `:app:generateReleaseLintVitalReportModel` reads `app/build/generated/assets/site` from `:app:syncWebAssets` without a declared dependency. The build configuration is outside this notification-only scope.
-- The screenshot runner was compiled but not rerun after the ownership handoff, to avoid altering the shared emulator while Task 3 is active. Run `bun scripts/validate-android-audit.ts` from `packages/android` on a reserved emulator; set `ANDROID_AUDIT_RUN_LIVE_SSH=1` only with the required protected SSH environment.
-
-## Ownership handoff
-
-At the user’s direction, Task 3 owns `remote-jobs.ts`, remote-job tests, lifecycle, replay, and deep-link work. No Task 5 changes to those files remain in this commit.
+- Firebase transport delivery is unavailable in this checkout: no registered Firebase project/device token or protected sender credentials are configured. Native FCM payload parsing and wake metadata are tested; no payload advances the persisted SSE cursor.
+- Live SSH is unavailable: `SSH_HOST`, `SSH_USER`, `SSH_KEY_FILE`, `SSH_PASSWORD_FILE`, `SSH_E2E_SETUP_AGENT`, `SSH_E2E_ALLOW_INSTALL`, `SSH_E2E_CONFIRM`, and `SSH_E2E_NETWORK_LOSS` are absent. No credentials were used and this report makes no live SSH claim.

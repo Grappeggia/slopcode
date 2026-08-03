@@ -53,6 +53,14 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
   dependsOn(syncWebAssets)
 }
 
+tasks.matching { it.name.startsWith("generate") && it.name.endsWith("LintVitalReportModel") }.configureEach {
+  dependsOn(syncWebAssets)
+}
+
+tasks.matching { it.name.contains("Lint", ignoreCase = true) && it.name.endsWith("Release") }.configureEach {
+  dependsOn(syncWebAssets)
+}
+
 dependencies {
   implementation("androidx.appcompat:appcompat:1.7.0")
   implementation("androidx.core:core-ktx:1.15.0")
@@ -65,6 +73,7 @@ dependencies {
   implementation("com.github.mwiede:jsch:2.28.4")
   implementation("org.bouncycastle:bcprov-jdk18on:1.77")
   testImplementation("junit:junit:4.13.2")
+  testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
   testImplementation("org.json:json:20240303")
   androidTestImplementation("androidx.test:runner:1.6.2")
   androidTestImplementation("androidx.test:core:1.6.1")

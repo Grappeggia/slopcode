@@ -1,6 +1,5 @@
 package dev.slopcode.android
 
-import android.util.Base64
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -9,6 +8,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.BufferedSource
 import org.json.JSONObject
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 internal sealed class RemoteJobStartResult {
@@ -103,6 +103,7 @@ internal class RemoteJobHttp(
       method = "POST",
       query = mapOf("workspace" to job.workspaceID, "path" to job.directory),
       body = body,
+      headers = mapOf("Idempotency-Key" to remoteJobActionIdempotencyKey(job, action)),
     )
     response.use {
       return it.isSuccessful
@@ -186,7 +187,7 @@ internal class RemoteJobHttp(
 
   private fun authorization(username: String, password: String): String {
     val raw = "$username:$password".toByteArray(Charsets.UTF_8)
-    return "Basic ${Base64.encodeToString(raw, Base64.NO_WRAP)}"
+    return "Basic ${Base64.getEncoder().encodeToString(raw)}"
   }
 
   private fun parseSse(source: BufferedSource, onEvent: (RemoteJobEvent) -> Boolean): RemoteJobStreamResult {

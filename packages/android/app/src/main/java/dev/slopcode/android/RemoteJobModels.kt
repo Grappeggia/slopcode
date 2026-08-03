@@ -13,8 +13,12 @@ internal object RemoteJobStatus {
   const val COMPLETED = "completed"
   const val FAILED = "failed"
   const val STOPPED = "stopped"
+  const val REVOKED = "revoked"
+  const val EXPIRED = "expired"
 
-  fun terminal(value: String) = value == COMPLETED || value == FAILED || value == STOPPED
+  fun terminal(value: String) = value == COMPLETED || value == FAILED || value == STOPPED || value == REVOKED || value == EXPIRED
+
+  fun retryable(value: String) = value == COMPLETED || value == FAILED || value == STOPPED
 }
 
 internal object RemoteJobAction {
@@ -117,6 +121,8 @@ internal data class RemoteJobState(
   val cursor: String? = null,
   val output: String? = null,
   val error: String? = null,
+  val actionError: String? = null,
+  val retryAction: String? = null,
   val progress: Double? = null,
   val commandPreview: JSONObject? = null,
   val approval: JSONObject? = null,
@@ -144,6 +150,8 @@ internal data class RemoteJobState(
     cursor?.let { put("cursor", it) }
     output?.let { put("output", it) }
     error?.let { put("error", it) }
+    actionError?.let { put("actionError", it) }
+    retryAction?.let { put("retryAction", it) }
     progress?.let { put("progress", it) }
     commandPreview?.let { put("commandPreview", JSONObject(it.toString())) }
     approval?.let { put("approval", JSONObject(it.toString())) }
@@ -187,6 +195,8 @@ internal data class RemoteJobState(
           RemoteJobStatus.COMPLETED,
           RemoteJobStatus.FAILED,
           RemoteJobStatus.STOPPED,
+          RemoteJobStatus.REVOKED,
+          RemoteJobStatus.EXPIRED,
         ) ||
         updatedAt <= 0
       ) return null
@@ -215,6 +225,8 @@ internal data class RemoteJobState(
         cursor = value.optString("cursor").takeIf(String::isNotEmpty),
         output = value.optString("output").takeIf(String::isNotEmpty),
         error = value.optString("error").takeIf(String::isNotEmpty),
+        actionError = value.optString("actionError").takeIf(String::isNotEmpty),
+        retryAction = value.optString("retryAction").takeIf(RemoteJobAction::valid),
         progress = progress,
         commandPreview = value.optJSONObject("commandPreview")?.let { JSONObject(it.toString()) },
         approval = approval?.let { JSONObject(it.toString()) },
@@ -258,11 +270,13 @@ internal object RemoteJobReducer {
     if (event.jobID != current.id) return current
     val keys = listOfNotNull(event.id, event.cursor).distinct()
     if (keys.any { it == current.cursor || current.seen.contains(it) }) return current
-    val type = event.type.removePrefix("job.").removePrefix("remote.job.")
+    val type = event.type.lowercase().removePrefix("job.").removePrefix("remote.job.")
     val reviewEvent = type.endsWith("review.updated") || type.endsWith("comment")
     val retryEvent = type.endsWith("retry") || type.endsWith("retried")
-    if (RemoteJobStatus.terminal(current.status) && !reviewEvent && !retryEvent) return current
+    if (RemoteJobStatus.terminal(current.status) && !reviewEvent && !(retryEvent && RemoteJobStatus.retryable(current.status))) return current
     val status = when {
+      type.endsWith("revoked") -> RemoteJobStatus.REVOKED
+      type.endsWith("expired") -> RemoteJobStatus.EXPIRED
       type.endsWith("completed") -> RemoteJobStatus.COMPLETED
       type.endsWith("failed") -> RemoteJobStatus.FAILED
       type.endsWith("stopped") || type == "stop" -> RemoteJobStatus.STOPPED
@@ -270,13 +284,15 @@ internal object RemoteJobReducer {
       type.endsWith("approval") || type.endsWith("approval_required") || type.endsWith("waiting_approval") ->
         RemoteJobStatus.WAITING_APPROVAL
       type.endsWith("question") -> RemoteJobStatus.WAITING_QUESTION
+      type.endsWith("started") || type.endsWith("running") || type.endsWith("progress") || type.endsWith("output") ->
+        RemoteJobStatus.RUNNING
       reviewEvent -> current.status
-      else -> RemoteJobStatus.RUNNING
+      else -> current.status
     }
     val chunk = event.data.optString("output").takeIf(String::isNotEmpty)
     val output = if (chunk == null) current.output else "${current.output.orEmpty()}$chunk".takeLast(MAX_OUTPUT_BYTES)
     val error = event.data.optString("error").takeIf(String::isNotEmpty)
-      ?: if (status == RemoteJobStatus.FAILED || status == RemoteJobStatus.STOPPED) {
+      ?: if (RemoteJobStatus.terminal(status)) {
         event.data.optString("message").takeIf(String::isNotEmpty)
       } else null
       ?: current.error
@@ -295,6 +311,8 @@ internal object RemoteJobReducer {
       cursor = event.cursor ?: event.id ?: current.cursor,
       output = output,
       error = error,
+      actionError = if (status == current.status) current.actionError else null,
+      retryAction = if (status == current.status) current.retryAction else null,
       progress = progress,
       commandPreview = commandPreview,
       approval = approval,

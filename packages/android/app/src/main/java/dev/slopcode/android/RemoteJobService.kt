@@ -21,7 +21,7 @@ internal class RemoteJobService : Service() {
   private lateinit var http: RemoteJobHttp
   private val executor = Executors.newCachedThreadPool()
   private val active = ConcurrentHashMap.newKeySet<String>()
-  private val actions = ConcurrentHashMap.newKeySet<String>()
+  private val actions = RemoteJobActionGate()
 
   override fun onCreate() {
     super.onCreate()
@@ -78,20 +78,32 @@ internal class RemoteJobService : Service() {
 
   private fun scheduleAction(id: String, action: String, payload: org.json.JSONObject? = null) {
     if (!RemoteJobAction.valid(action)) return
-    val key = "$id:$action"
-    if (!actions.add(key)) return
     executor.execute {
-      try {
-        val job = store.get(id) ?: return@execute
-        if (!remoteJobNotificationActionAllowed(job, action)) return@execute
+      val job = store.get(id) ?: return@execute
+      val lease = actions.acquire(job, action) ?: return@execute
+      lease.use {
+        val current = store.get(id) ?: return@use
+        if (lease.interaction != remoteJobActionInteraction(current) || !remoteJobNotificationActionAllowed(current, action)) return@use
         if (action == RemoteJobAction.STOP) {
-          runCatching { http.action(job, action, payload) }
+          val accepted = runCatching { http.action(current, action, payload) }.getOrDefault(false)
+          if (!accepted) {
+            store.update(id, event(id, "job.stop_failed", mapOf("message" to "Remote stop request failed"))) {
+              remoteJobActionFailure(it, action, "Remote stop request failed")
+            }?.let(::notifyJob)
+            return@use
+          }
           store.update(id, event(id, "job.stopped", mapOf("message" to "Stopped by user"))) {
-            it.copy(status = RemoteJobStatus.STOPPED, error = "Stopped by user", updatedAt = System.currentTimeMillis())
+            it.copy(
+              status = RemoteJobStatus.STOPPED,
+              error = "Stopped by user",
+              actionError = null,
+              retryAction = null,
+              updatedAt = System.currentTimeMillis(),
+            )
           }?.let(::notifyJob)
-          return@execute
+          return@use
         }
-        val accepted = runCatching { http.action(job, action, payload) }.getOrDefault(false)
+        val accepted = runCatching { http.action(current, action, payload) }.getOrDefault(false)
         if (!accepted) {
           store.update(id, event(id, "job.failed", mapOf("error" to "Remote action failed"))) {
             it.copy(status = RemoteJobStatus.FAILED, error = "Remote action failed", updatedAt = System.currentTimeMillis())
@@ -104,6 +116,8 @@ internal class RemoteJobService : Service() {
               status = RemoteJobStatus.RETRYING,
               started = true,
               error = null,
+              actionError = null,
+              retryAction = null,
               approval = null,
               question = null,
               updatedAt = System.currentTimeMillis(),
@@ -113,11 +127,16 @@ internal class RemoteJobService : Service() {
           return@execute
         }
         store.update(id, event(id, "job.progress", mapOf("message" to "Remote action accepted"))) {
-          it.copy(status = RemoteJobStatus.RUNNING, approval = null, question = null, updatedAt = System.currentTimeMillis())
+          it.copy(
+            status = RemoteJobStatus.RUNNING,
+            approval = null,
+            question = null,
+            actionError = null,
+            retryAction = null,
+            updatedAt = System.currentTimeMillis(),
+          )
         }?.let(::notifyJob)
         schedule(id)
-      } finally {
-        actions.remove(key)
       }
     }
   }
@@ -220,7 +239,7 @@ internal class RemoteJobService : Service() {
     val builder = NotificationCompat.Builder(this, JOB_CHANNEL)
       .setSmallIcon(android.R.drawable.stat_sys_download)
       .setContentTitle("${job.agent} remote job")
-      .setContentText(job.approval?.optString("title") ?: job.question?.optString("prompt") ?: job.error ?: job.output?.takeLast(180) ?: job.status.replace('_', ' '))
+      .setContentText(job.approval?.optString("title") ?: job.question?.optString("prompt") ?: job.actionError ?: job.error ?: job.output?.takeLast(180) ?: job.status.replace('_', ' '))
       .setContentIntent(openIntent(job))
       .setAutoCancel(!active)
       .setOngoing(active)

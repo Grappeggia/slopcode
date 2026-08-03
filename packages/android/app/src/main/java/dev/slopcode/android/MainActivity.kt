@@ -194,10 +194,7 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun handleIntent(intent: Intent?, flush: Boolean) {
-    val links = buildList {
-      intent?.dataString?.takeIf(String::isNotBlank)?.let(::add)
-      intent?.getStringExtra("notification_href")?.takeIf(String::isNotBlank)?.let(::add)
-    }.take(MAX_INTENT_LINKS)
+    val links = intentDeepLinks(intent?.dataString, intent?.getStringExtra("notification_href"))
     if (links.isEmpty()) return
     links.forEach(bridge::enqueueDeepLink)
     if (flush) bridge.flushDeepLinks()
@@ -212,7 +209,6 @@ class MainActivity : AppCompatActivity() {
     private const val TRUSTED_PATH_PREFIX = "/site/"
     private const val NOTIFICATION_PERMISSION_REQUEST = 1001
     private const val PRIVATE_KEY_REQUEST = 1002
-    private const val MAX_INTENT_LINKS = 2
   }
 
   private data class Insets(
