@@ -1,37 +1,37 @@
-# Task 2: durable remote orchestration journal
+# Task 2 follow-up report — Android shell layout review
+
+## Findings fixed
+
+- Landscape WebView safe-area variables were not reliable. `MainActivity` now records `WindowInsetsCompat` system-bar, cutout, and IME insets, exposes them through the origin-restricted Android bridge, and `SshShell` converts native pixels to CSS pixels on mount, rotation, viewport resize, and keyboard resize. Shell CSS consumes root-level inset variables, with a conservative 32px landscape hamburger floor.
+- Landscape onboarding `Continue` no longer uses sticky positioning. It remains in normal flow so it cannot cover `Add computer`, while the scroll container still makes the action reachable at the bottom.
+- `SshSession` now renders inside `SshShell`, so interactive PTY controls share the drawer, theme tokens, safe-area behavior, and native system-bar appearance with onboarding and agentic sessions.
+- Shell buttons, PTY inputs, approval/retry/stop controls, question answers, summaries, diagnostics, and text fields receive a 48px minimum touch height. Existing labels, live regions, and interaction semantics were preserved.
+- The visual matrix no longer reads CSS/source strings as its primary assertion. It now audits deterministic rendered rectangles, minimum touch targets, and the two historical landscape overlaps. A CDP-based emulator checker asserts the actual WebView geometry and writes a landscape evidence screenshot.
 
 ## Changed files
 
-- `packages/slopcode/src/server/routes/instance/httpapi/handlers/remote-agent-journal.ts`
-- `packages/slopcode/src/server/routes/instance/httpapi/handlers/remote-agent-jobs.ts`
-- `packages/slopcode/src/server/routes/instance/httpapi/handlers/remote-runtime.ts`
-- `packages/slopcode/test/server/remote-agent-journal.test.ts`
-- `packages/slopcode/test/server/httpapi-remote-runtime.test.ts`
-
-## Behavior
-
-- Stores remote job snapshots, backend PTY/session mappings, ordered retained events, expiring request idempotency records, terminal outcomes, pending interactions, artifact metadata, and plan-save tokens in SQLite.
-- PTY creation failures are compensated to a durable `failed` snapshot instead of leaving a queued claim; the job-state route exposes that recoverable terminal outcome.
-- Uses immediate SQLite transactions for create/duplicate/conflict decisions, event/state updates, interaction in-flight/delivery completion, artifact quotas, and plan-token consumption.
-- Rehydrates durable snapshots when the job service is created; a missing in-memory process handle does not mark a remote job failed.
-- Replays retained events and emits `job.snapshot_required` with the authoritative durable state when an explicit cursor predates the retained tail; `GET /remote/agent/job/:jobID` returns the same snapshot for HTTP recovery.
-- Approval/question actions now require the interaction ID, expected revision, and idempotency key. Delivery is marked in-flight first, and only resolves atomically with the durable state-clearing event after the live write succeeds; an in-flight retry is delivered at least once.
-- Artifact metadata and short-lived plan tokens are reachable through typed remote-job HTTP routes.
-- Every start, including a live in-memory job, passes through the scoped journal idempotency transaction; live conflicting prompts/configuration now fail cleanly.
-- Reused backend interaction IDs advance to a fresh durable revision that is reflected in the emitted event and snapshot before an answer is accepted.
-- Durable state, artifacts, plan preparation, and token commit are bound to both routed workspace and instance root; plan tokens are also bound to their original job ID.
-- Event streaming and all job actions use the same routed workspace/root guard, so an ID cannot expose retained output or mutate a job across an instance or workspace boundary.
-- SQLite query failures are terminated at the journal boundary while domain failures remain typed, so the job service API does not leak database driver errors into HTTP handlers.
-- Retains at most 2,048 events per job, bounds persisted event/state/metadata sizes, limits artifacts to 64 per job, expires idempotency records after 24 hours, and uses five-minute single-use plan tokens.
-- Keeps prompts and process environments out of the journal. Recovered jobs reject actions that cannot be delivered to an active in-memory process handle.
+- `packages/android/app/src/main/java/dev/slopcode/android/MainActivity.kt`
+- `packages/android/app/src/main/java/dev/slopcode/android/AndroidBridge.kt`
+- `packages/android/src/bridge.ts`
+- `packages/android/src/ssh-shell.css`
+- `packages/android/src/ssh-shell.tsx`
+- `packages/android/src/ssh-session.tsx`
+- `packages/android/src/ssh-shell-visual.ts`
+- `packages/android/src/ssh-shell-visual.test.ts`
+- `packages/android/scripts/verify-ssh-shell-emulator.ts`
 
 ## Validation
 
-- `bun test test/server/remote-agent-journal.test.ts --timeout 30000` — 9 pass.
-- `bun test test/server/httpapi-remote-runtime.test.ts --timeout 30000` — 23 pass, including cross-root and cross-workspace stream/action denial.
-- `bun run typecheck` — pass.
-- `git diff --check` — pass after the journal transaction/type-boundary correction.
+- `bun test` from `packages/android`: 99 passed; 1 unrelated source-regression assertion fails because another worker's live SSH harness no longer contains the expected `Process crashed` marker. No other worker file was changed to mask that failure.
+- `bun test src/ssh-shell-visual.test.ts src/ssh-session-flow.test.ts src/bridge.test.ts`: 18 passed, 52 assertions.
+- `bun run typecheck`: passed.
+- `bun run build:web`: passed; existing Vite chunk-size and duplicate-map warnings remain.
+- `./gradlew :app:compileDebugKotlin`: passed.
+- `./gradlew :app:assembleDebug`: passed.
+- Installed the final debug APK on `emulator-5554` and ran `bun scripts/verify-ssh-shell-emulator.ts` from `packages/android`.
+- Emulator assertion: landscape viewport `915×412`, native top/bottom insets `24px`, hamburger `top=36px` and `48×48`, Add/Continue separated by `16px` before and after scrolling, primary action in normal flow, and all rendered controls at least `48px` high.
+- Evidence screenshot: `/tmp/slopcode-task2-landscape-layout.png`.
 
-## Limitations
+## Commit
 
-- A service restart restores snapshots and replay state but does not recreate a PTY or resume a process. Recovered jobs remain inspectable; a user starts a fresh job to run again.
+Follow-up commit: pending.

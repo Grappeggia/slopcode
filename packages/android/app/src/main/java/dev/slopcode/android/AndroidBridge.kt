@@ -476,6 +476,10 @@ class AndroidBridge(
           activity.applySystemBars(argBoolean(args, 0) ?: error("Invalid system-bar appearance"))
           reply(replyProxy, bridgeResult(id))
         }
+        "systemInsets" -> {
+          arity(args, 0)
+          reply(replyProxy, bridgeResult(id, activity.systemInsets()))
+        }
         "remoteJobsReady" -> {
           arity(args, 1)
           jobsNonce = deepLinkNonce(args, 0)

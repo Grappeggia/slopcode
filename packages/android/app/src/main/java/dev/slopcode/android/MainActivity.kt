@@ -11,16 +11,20 @@ import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
   private lateinit var webView: WebView
   private lateinit var bridge: AndroidBridge
+  @Volatile private var windowInsets = Insets()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
@@ -29,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     setContentView(R.layout.activity_main)
 
     webView = findViewById(R.id.webview)
+    installWindowInsets()
     applySystemBars(resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES)
     bridge = AndroidBridge(this, webView)
 
@@ -139,6 +144,32 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  fun systemInsets(): JSONObject {
+    val value = windowInsets
+    return JSONObject()
+      .put("top", value.top)
+      .put("right", value.right)
+      .put("bottom", value.bottom)
+      .put("left", value.left)
+      .put("imeBottom", value.imeBottom)
+  }
+
+  private fun installWindowInsets() {
+    ViewCompat.setOnApplyWindowInsetsListener(webView) { _, value ->
+      val bars = value.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+      val ime = value.getInsets(WindowInsetsCompat.Type.ime())
+      windowInsets = Insets(
+        top = bars.top,
+        right = bars.right,
+        bottom = bars.bottom,
+        left = bars.left,
+        imeBottom = ime.bottom,
+      )
+      value
+    }
+    ViewCompat.requestApplyInsets(webView)
+  }
+
   override fun onRequestPermissionsResult(
     requestCode: Int,
     permissions: Array<out String>,
@@ -173,4 +204,12 @@ class MainActivity : AppCompatActivity() {
     private const val PRIVATE_KEY_REQUEST = 1002
     private const val MAX_INTENT_LINKS = 2
   }
+
+  private data class Insets(
+    val top: Int = 0,
+    val right: Int = 0,
+    val bottom: Int = 0,
+    val left: Int = 0,
+    val imeBottom: Int = 0,
+  )
 }

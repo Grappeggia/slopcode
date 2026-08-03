@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { SshEvent, SshTransport } from "./ssh"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { initialSshMode, returnToAgentic } from "./ssh-session-flow"
+import { SshShell } from "./ssh-shell"
 
 type Props = {
   ssh: SshTransport
@@ -185,8 +186,12 @@ export function SshSession(props: Props) {
   }
 
   return (
-    <main class="min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6">
-      <section class="w-full max-w-3xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4">
+    <SshShell workspace={props.workspace}>
+      <main data-ssh-interactive class="ssh-shell-page min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6">
+        <section
+          data-ssh-interactive-panel
+          class="ssh-shell-panel w-full max-w-3xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4"
+        >
         <div class="flex flex-col gap-1">
           <h1 class="text-20-medium">{name(props.workspace.agent)} over SSH</h1>
           <p class="text-14-regular text-text-weak">
@@ -326,7 +331,8 @@ export function SshSession(props: Props) {
             </Show>
           </div>
         </Show>
-      </section>
-    </main>
+        </section>
+      </main>
+    </SshShell>
   )
 }

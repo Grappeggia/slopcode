@@ -1,3 +1,11 @@
+:root {
+  --android-inset-top: env(safe-area-inset-top, 0px);
+  --android-inset-right: env(safe-area-inset-right, 0px);
+  --android-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --android-inset-left: env(safe-area-inset-left, 0px);
+  --android-ime-bottom: env(keyboard-inset-height, 0px);
+}
+
 [data-ssh-theme] {
   --ssh-canvas: #f7f7fb;
   --ssh-surface: #ffffff;
@@ -149,15 +157,19 @@
   min-block-size: 100dvh;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  padding-top: calc(env(safe-area-inset-top, 0px) + 76px) !important;
-  padding-bottom: max(24px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 24px)) !important;
+  padding-top: calc(var(--android-inset-top) + 76px) !important;
+  padding-bottom: max(24px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 24px)) !important;
 }
 
 [data-ssh-shell] > main form > button[type="submit"] {
   position: sticky;
-  bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 12px));
+  bottom: max(12px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 12px));
   z-index: 20;
   box-shadow: 0 8px 20px color-mix(in srgb, var(--ssh-canvas) 72%, transparent);
+}
+
+[data-ssh-shell] :is(button, [role="button"], input:not([type="checkbox"]), textarea, select, summary) {
+  min-height: 48px;
 }
 
 [data-ssh-shell] :is(button, input, textarea, summary) {
@@ -182,16 +194,16 @@
 }
 
 [data-ssh-menu-toggle] {
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
-  left: max(12px, env(safe-area-inset-left, 0px));
+  top: calc(var(--android-inset-top) + 12px);
+  left: max(12px, calc(var(--android-inset-left) + 12px));
   min-width: 48px;
   min-height: 48px;
 }
 
 [data-ssh-drawer] {
   box-sizing: border-box;
-  padding-top: calc(env(safe-area-inset-top, 0px) + 16px);
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  padding-top: calc(var(--android-inset-top) + 16px);
+  padding-bottom: calc(var(--android-inset-bottom) + 16px);
   background: var(--ssh-drawer);
   color: var(--ssh-text);
   transition:
@@ -201,16 +213,23 @@
 
 @media (orientation: landscape) and (max-height: 560px) {
   [data-ssh-menu-toggle] {
-    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    /* Android may place the status bar on the long edge in landscape. Keep a
+       conservative top floor while the native inset bridge supplies the exact
+       edge inset, so the hamburger never sits in the status-bar row. */
+    top: max(32px, calc(var(--android-inset-top) + 12px));
   }
 
   [data-ssh-shell] > main {
-    padding-top: calc(env(safe-area-inset-top, 0px) + 64px) !important;
-    padding-bottom: max(16px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 16px)) !important;
+    padding-top: max(64px, calc(var(--android-inset-top) + 64px)) !important;
+    padding-bottom: max(16px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 16px)) !important;
   }
 
   [data-ssh-shell] > main form > button[type="submit"] {
-    bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 8px));
+    /* A sticky action can cover the preceding Add computer action on short
+       landscape screens. Let the page reserve normal flow space instead. */
+    position: static;
+    bottom: auto;
+    box-shadow: none;
   }
 
   [data-ssh-shell] > main > :is(form, section) {

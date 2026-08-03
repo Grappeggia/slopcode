@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show, type JSX } from "solid-js"
+import { createEffect, createSignal, onCleanup, onMount, Show, type JSX } from "solid-js"
 import { getAndroidBridge } from "./bridge"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import "./ssh-shell.css"
@@ -39,6 +39,37 @@ function name(value: SshWorkspaceState["agent"] | undefined) {
 export function SshShell(props: Props) {
   const [scheme, setScheme] = createSignal<SshColorScheme>(readScheme())
   const [open, setOpen] = createSignal(false)
+
+  const syncInsets = async () => {
+    const bridge = getAndroidBridge()
+    if (!bridge?.systemInsets) return
+    const raw = await bridge.systemInsets().catch(() => undefined)
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return
+    const value = raw as Record<string, unknown>
+    const scale = Math.max(1, window.devicePixelRatio || 1)
+    const px = (key: string) => {
+      const next = value[key]
+      return `${typeof next === "number" && Number.isFinite(next) ? next / scale : 0}px`
+    }
+    document.documentElement.style.setProperty("--android-inset-top", px("top"))
+    document.documentElement.style.setProperty("--android-inset-right", px("right"))
+    document.documentElement.style.setProperty("--android-inset-bottom", px("bottom"))
+    document.documentElement.style.setProperty("--android-inset-left", px("left"))
+    document.documentElement.style.setProperty("--android-ime-bottom", px("imeBottom"))
+  }
+
+  onMount(() => {
+    void syncInsets()
+    const refresh = () => void syncInsets()
+    window.addEventListener("resize", refresh)
+    window.addEventListener("orientationchange", refresh)
+    window.visualViewport?.addEventListener("resize", refresh)
+    onCleanup(() => {
+      window.removeEventListener("resize", refresh)
+      window.removeEventListener("orientationchange", refresh)
+      window.visualViewport?.removeEventListener("resize", refresh)
+    })
+  })
 
   createEffect(() => {
     const value = scheme()

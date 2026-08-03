@@ -113,6 +113,7 @@ export type AndroidNativeBridge = {
   sshCredentialSet?(profile: string, value: string): Promise<unknown>
   sshCredentialClear?(profile: string): Promise<unknown>
   sshPickPrivateKey?(): Promise<unknown>
+  systemInsets?(): Promise<unknown>
   setSystemBars?(dark: boolean): Promise<unknown>
 }
 
@@ -211,6 +212,7 @@ export function getAndroidBridge(
     sshCredentialSet: (profile, value) => call("sshCredentialSet", profile, value),
     sshCredentialClear: (profile) => call("sshCredentialClear", profile),
     sshPickPrivateKey: () => call("sshPickPrivateKey"),
+    systemInsets: () => call("systemInsets"),
     setSystemBars: (dark) => call("setSystemBars", dark),
   } satisfies AndroidNativeBridge
 
