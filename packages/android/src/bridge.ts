@@ -113,6 +113,7 @@ export type AndroidNativeBridge = {
   sshCredentialSet?(profile: string, value: string): Promise<unknown>
   sshCredentialClear?(profile: string): Promise<unknown>
   sshPickPrivateKey?(): Promise<unknown>
+  setSystemBars?(dark: boolean): Promise<unknown>
 }
 
 const ports = new WeakMap<AndroidBridgePort, AndroidNativeBridge>()
@@ -210,6 +211,7 @@ export function getAndroidBridge(
     sshCredentialSet: (profile, value) => call("sshCredentialSet", profile, value),
     sshCredentialClear: (profile) => call("sshCredentialClear", profile),
     sshPickPrivateKey: () => call("sshPickPrivateKey"),
+    setSystemBars: (dark) => call("setSystemBars", dark),
   } satisfies AndroidNativeBridge
 
   ports.set(port, bridge)

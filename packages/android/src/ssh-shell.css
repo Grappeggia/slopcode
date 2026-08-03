@@ -1,63 +1,221 @@
-[data-ssh-theme="dark"] {
-  color-scheme: dark;
-  --background-base: #101010;
-  --background-weak: #1e1e1e;
-  --background-strong: #121212;
-  --background-stronger: #151515;
-  --surface-base: rgba(255, 255, 255, 0.031);
-  --surface-base-hover: rgba(255, 255, 255, 0.039);
-  --surface-base-active: rgba(255, 255, 255, 0.059);
-  --surface-inset-base: rgba(0, 0, 0, 0.5);
-  --surface-inset-strong: rgba(0, 0, 0, 0.8);
-  --surface-raised-base: rgba(255, 255, 255, 0.059);
-  --surface-raised-base-hover: rgba(255, 255, 255, 0.078);
-  --surface-raised-base-active: rgba(255, 255, 255, 0.102);
-  --surface-raised-strong: rgba(255, 255, 255, 0.078);
-  --surface-raised-stronger: rgba(255, 255, 255, 0.129);
-  --surface-raised-stronger-non-alpha: #1c1c1c;
-  --surface-weak: rgba(255, 255, 255, 0.078);
-  --surface-weaker: rgba(255, 255, 255, 0.102);
-  --surface-strong: rgba(255, 255, 255, 0.169);
-  --surface-brand-base: #fab283;
-  --surface-brand-hover: #eda779;
-  --surface-success-base: #062d04;
-  --surface-success-weak: #0a1e08;
-  --surface-critical-base: #1f0603;
-  --surface-critical-weak: #28110c;
-  --input-base: #1c1c1c;
-  --input-hover: #1c1c1c;
-  --input-active: #091123;
-  --input-disabled: #282828;
-  --text-base: rgba(255, 255, 255, 0.618);
-  --text-weak: rgba(255, 255, 255, 0.422);
-  --text-weaker: rgba(255, 255, 255, 0.284);
-  --text-strong: rgba(255, 255, 255, 0.936);
-  --text-invert-base: #a0a0a0;
-  --text-invert-strong: #ededed;
-  --text-on-brand-base: rgba(255, 255, 255, 0.603);
-  --text-on-critical-base: #fc533a;
-  --border-base: rgba(255, 255, 255, 0.195);
-  --border-weak-base: #282828;
-  --border-strong-base: rgba(255, 255, 255, 0.266);
-  --border-critical-base: #6a1206;
-  --icon-base: #7e7e7e;
-  --icon-weak-base: #343434;
-  --icon-strong-base: #ededed;
+[data-ssh-theme] {
+  --ssh-canvas: #f7f7fb;
+  --ssh-surface: #ffffff;
+  --ssh-drawer: #ffffff;
+  --ssh-input: #ffffff;
+  --ssh-text: #17171d;
+  --ssh-muted: #5e6270;
+  --ssh-border: #d9dbe5;
+  --ssh-brand: #5344d8;
+  --ssh-brand-hover: #4637bd;
+  --ssh-on-brand: #ffffff;
+  --ssh-success: #075f38;
+  --ssh-success-surface: #e7f6ed;
+  --ssh-critical: #a51d1d;
+  --ssh-critical-surface: #fff0ee;
+  color-scheme: light;
+  --background-base: var(--ssh-canvas);
+  --background-weak: #eeeff5;
+  --background-strong: var(--ssh-drawer);
+  --background-stronger: var(--ssh-surface);
+  --surface-base: var(--ssh-surface);
+  --surface-base-hover: #f1f0ff;
+  --surface-base-active: #e7e5ff;
+  --surface-inset-base: #eeeff4;
+  --surface-inset-strong: #dfe0ea;
+  --surface-raised-base: var(--ssh-surface);
+  --surface-raised-base-hover: #f6f5ff;
+  --surface-raised-base-active: #eceaff;
+  --surface-raised-strong: var(--ssh-surface);
+  --surface-raised-stronger: var(--ssh-surface);
+  --surface-raised-stronger-non-alpha: var(--ssh-surface);
+  --surface-weak: #e7e8f0;
+  --surface-weak-base: var(--surface-weak);
+  --surface-weaker: #f0f1f7;
+  --surface-strong: #dfe0ea;
+  --surface-brand-base: var(--ssh-brand);
+  --surface-brand-hover: var(--ssh-brand-hover);
+  --surface-success-base: #d7f2e1;
+  --surface-success-weak: var(--ssh-success-surface);
+  --surface-critical-base: #ffe6e2;
+  --surface-critical-weak: var(--ssh-critical-surface);
+  --input-base: var(--ssh-input);
+  --input-hover: #f9f9fd;
+  --input-active: var(--ssh-input);
+  --input-disabled: #eaebf1;
+  --text-base: #343640;
+  --text-weak: var(--ssh-muted);
+  --text-weaker: #858897;
+  --text-strong: var(--ssh-text);
+  --text-invert-base: #f7f7fb;
+  --text-invert-strong: #ffffff;
+  --text-on-brand-base: var(--ssh-on-brand);
+  --text-on-success-base: var(--ssh-success);
+  --text-on-success-strong: var(--ssh-success);
+  --text-on-critical-base: var(--ssh-critical);
+  --text-on-critical-strong: #701313;
+  --border-base: #c7c9d5;
+  --border-weak-base: var(--ssh-border);
+  --border-strong-base: #aeb1c0;
+  --border-critical-base: #df6d68;
+  --border-brand-base: var(--ssh-brand);
+  --border-focus: var(--ssh-brand);
+  --icon-base: #555967;
+  --icon-weak-base: #848897;
+  --icon-strong-base: var(--ssh-text);
+  --color-background-base: var(--background-base);
+  --color-background-weak: var(--background-weak);
+  --color-background-strong: var(--background-strong);
+  --color-surface-base: var(--surface-base);
+  --color-surface-base-hover: var(--surface-base-hover);
+  --color-surface-base-active: var(--surface-base-active);
+  --color-surface-raised-base: var(--surface-raised-base);
+  --color-surface-raised-base-hover: var(--surface-raised-base-hover);
+  --color-surface-raised-base-active: var(--surface-raised-base-active);
+  --color-surface-weak: var(--surface-weak);
+  --color-surface-weak-base: var(--surface-weak);
+  --color-surface-brand-base: var(--surface-brand-base);
+  --color-surface-brand-hover: var(--surface-brand-hover);
+  --color-surface-success-weak: var(--surface-success-weak);
+  --color-surface-critical-base: var(--surface-critical-base);
+  --color-surface-critical-weak: var(--surface-critical-weak);
+  --color-text-base: var(--text-base);
+  --color-text-weak: var(--text-weak);
+  --color-text-weaker: var(--text-weaker);
+  --color-text-strong: var(--text-strong);
+  --color-text-on-brand-base: var(--text-on-brand-base);
+  --color-text-on-success-strong: var(--text-on-success-strong);
+  --color-text-on-critical-base: var(--text-on-critical-base);
+  --color-text-on-critical-strong: var(--text-on-critical-strong);
+  --color-border-base: var(--border-base);
+  --color-border-weak-base: var(--border-weak-base);
+  --color-border-strong-base: var(--border-strong-base);
+  --color-border-brand-base: var(--border-brand-base);
+  --color-border-critical-base: var(--border-critical-base);
 }
 
-[data-ssh-theme="light"] {
-  color-scheme: light;
+[data-ssh-theme="dark"] {
+  --ssh-canvas: #111318;
+  --ssh-surface: #1a1d24;
+  --ssh-drawer: #171a21;
+  --ssh-input: #20242d;
+  --ssh-text: #f4f3fb;
+  --ssh-muted: #b6bac8;
+  --ssh-border: #373c49;
+  --ssh-brand: #b9adff;
+  --ssh-brand-hover: #d0c8ff;
+  --ssh-on-brand: #201a4b;
+  --ssh-success: #9be7bb;
+  --ssh-success-surface: #123d2b;
+  --ssh-critical: #ffb4ab;
+  --ssh-critical-surface: #4a2526;
+  color-scheme: dark;
+  --background-weak: #1b1e25;
+  --surface-base-hover: #242832;
+  --surface-base-active: #2d3240;
+  --surface-inset-base: #0d0f13;
+  --surface-inset-strong: #080a0d;
+  --surface-raised-base-hover: #242832;
+  --surface-raised-base-active: #2d3240;
+  --surface-weak: #2b303b;
+  --surface-weaker: #353b48;
+  --surface-strong: #444b59;
+  --surface-success-base: #154a33;
+  --surface-critical-base: #5b2929;
+  --input-hover: #272b35;
+  --input-disabled: #2a2e38;
+  --text-base: #e6e5ed;
+  --text-weaker: #858b9a;
+  --text-invert-base: #1b1d24;
+  --text-invert-strong: #121318;
+  --border-base: #5a6070;
+  --border-strong-base: #707788;
+  --border-critical-base: #ffb4ab;
+  --border-brand-base: var(--ssh-brand);
+  --icon-base: #c4c8d6;
+  --icon-weak-base: #8c92a1;
+  --icon-strong-base: #ffffff;
 }
 
 [data-ssh-shell] {
-  background: var(--background-base);
-  color: var(--text-strong);
+  min-height: 100dvh;
+  background: var(--ssh-canvas);
+  color: var(--ssh-text);
+}
+
+[data-ssh-shell] > main {
+  box-sizing: border-box;
+  block-size: 100dvh;
+  min-block-size: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 76px) !important;
+  padding-bottom: max(24px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 24px)) !important;
+}
+
+[data-ssh-shell] > main form > button[type="submit"] {
+  position: sticky;
+  bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 12px));
+  z-index: 20;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ssh-canvas) 72%, transparent);
+}
+
+[data-ssh-shell] :is(button, input, textarea, summary) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-ssh-shell] :is(button, input, textarea, summary):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--ssh-brand) 78%, transparent);
+  outline-offset: 2px;
+}
+
+[data-ssh-shell] .bg-surface-weak-base {
+  background-color: var(--surface-weak);
+}
+
+[data-ssh-shell] .text-text-success {
+  color: var(--ssh-success);
+}
+
+[data-ssh-shell] .text-text-critical {
+  color: var(--ssh-critical);
+}
+
+[data-ssh-menu-toggle] {
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: max(12px, env(safe-area-inset-left, 0px));
+  min-width: 48px;
+  min-height: 48px;
 }
 
 [data-ssh-drawer] {
+  box-sizing: border-box;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 16px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: var(--ssh-drawer);
+  color: var(--ssh-text);
   transition:
     transform 180ms ease,
     opacity 180ms ease;
+}
+
+@media (orientation: landscape) and (max-height: 560px) {
+  [data-ssh-menu-toggle] {
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+  }
+
+  [data-ssh-shell] > main {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 64px) !important;
+    padding-bottom: max(16px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 16px)) !important;
+  }
+
+  [data-ssh-shell] > main form > button[type="submit"] {
+    bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) + env(keyboard-inset-height, 0px) + 8px));
+  }
+
+  [data-ssh-shell] > main > :is(form, section) {
+    gap: 16px !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

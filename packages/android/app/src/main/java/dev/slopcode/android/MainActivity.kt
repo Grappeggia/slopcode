@@ -10,6 +10,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
@@ -23,9 +25,11 @@ class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
     super.onCreate(savedInstanceState)
+    WindowCompat.setDecorFitsSystemWindows(window, false)
     setContentView(R.layout.activity_main)
 
     webView = findViewById(R.id.webview)
+    applySystemBars(resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES)
     bridge = AndroidBridge(this, webView)
 
     val loader = WebViewAssetLoader.Builder()
@@ -122,6 +126,17 @@ class MainActivity : AppCompatActivity() {
   fun requestNotificationPermission() {
     if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
     requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
+  }
+
+  fun applySystemBars(dark: Boolean) {
+    window.statusBarColor = android.graphics.Color.TRANSPARENT
+    window.navigationBarColor = android.graphics.Color.TRANSPARENT
+    window.isStatusBarContrastEnforced = false
+    window.isNavigationBarContrastEnforced = false
+    WindowInsetsControllerCompat(window, webView).apply {
+      isAppearanceLightStatusBars = !dark
+      isAppearanceLightNavigationBars = !dark
+    }
   }
 
   override fun onRequestPermissionsResult(

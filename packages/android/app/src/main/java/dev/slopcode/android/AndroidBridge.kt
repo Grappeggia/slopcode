@@ -471,6 +471,11 @@ class AndroidBridge(
           arity(args, 1)
           reply(replyProxy, bridgeResult(id, openLink(argText(args, 0, MAX_URL_BYTES) ?: error("Invalid URL"))))
         }
+        "setSystemBars" -> {
+          arity(args, 1)
+          activity.applySystemBars(argBoolean(args, 0) ?: error("Invalid system-bar appearance"))
+          reply(replyProxy, bridgeResult(id))
+        }
         "remoteJobsReady" -> {
           arity(args, 1)
           jobsNonce = deepLinkNonce(args, 0)

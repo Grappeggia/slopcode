@@ -1,4 +1,5 @@
-import { createEffect, createSignal, For, Show, type JSX } from "solid-js"
+import { createEffect, createSignal, Show, type JSX } from "solid-js"
+import { getAndroidBridge } from "./bridge"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import "./ssh-shell.css"
 
@@ -43,19 +44,22 @@ export function SshShell(props: Props) {
     const value = scheme()
     document.documentElement.dataset.colorScheme = value
     document.documentElement.style.colorScheme = value
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", value === "dark" ? "#111318" : "#f7f7fb")
+    void getAndroidBridge()?.setSystemBars?.(value === "dark").catch(() => undefined)
     writeScheme(value)
   })
 
   const toggle = () => setScheme((value) => (value === "dark" ? "light" : "dark"))
 
   return (
-    <div data-ssh-shell data-ssh-theme={scheme()} class="min-h-screen">
+    <div data-ssh-shell data-ssh-theme={scheme()} class="min-h-[100dvh]">
       <button
         type="button"
         aria-label={open() ? "Close navigation" : "Open navigation"}
         aria-expanded={open()}
         onClick={() => setOpen((value) => !value)}
-        class="fixed left-3 top-3 z-40 flex h-12 w-12 items-center justify-center rounded-xl border border-border-weak-base bg-surface-raised-base text-16-medium shadow-md"
+        data-ssh-menu-toggle
+        class="fixed z-40 flex h-12 w-12 items-center justify-center rounded-xl border border-border-weak-base bg-surface-raised-base text-16-medium shadow-md"
       >
         {open() ? "×" : "☰"}
       </button>
@@ -65,7 +69,7 @@ export function SshShell(props: Props) {
           type="button"
           aria-label="Close navigation"
           onClick={() => setOpen(false)}
-          class="fixed inset-0 z-40 bg-black/35"
+          class="fixed inset-0 z-40 bg-black/45"
         />
       </Show>
 
@@ -83,7 +87,7 @@ export function SshShell(props: Props) {
             type="button"
             aria-label="Close navigation"
             onClick={() => setOpen(false)}
-            class="rounded-md px-3 py-2 text-16-medium"
+            class="min-h-12 min-w-12 rounded-md px-3 py-2 text-16-medium"
           >
             ×
           </button>
