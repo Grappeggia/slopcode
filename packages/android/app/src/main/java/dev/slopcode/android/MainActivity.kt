@@ -24,6 +24,7 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
   private lateinit var webView: WebView
   private lateinit var bridge: AndroidBridge
+  private val back = AndroidBackRequestGate()
   @Volatile private var windowInsets = Insets()
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,6 +67,7 @@ class MainActivity : AppCompatActivity() {
 
       override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
         super.onPageStarted(view, url, favicon)
+        back.invalidate()
         bridge.onRendererNavigation()
       }
 
@@ -78,9 +80,11 @@ class MainActivity : AppCompatActivity() {
 
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
+        val request = back.next()
         webView.evaluateJavascript(
           "(typeof window.__slopcodeAndroidBack === 'function' && window.__slopcodeAndroidBack()) ? 'handled' : 'unhandled'",
         ) { value ->
+          if (!back.active(request) || isFinishing || isDestroyed || !::webView.isInitialized) return@evaluateJavascript
           if (value == "\"handled\"") return@evaluateJavascript
           if (webView.canGoBack()) webView.goBack() else finish()
         }
@@ -116,6 +120,7 @@ class MainActivity : AppCompatActivity() {
   }
 
   override fun onDestroy() {
+    back.invalidate()
     if (::bridge.isInitialized) bridge.close()
     if (::webView.isInitialized) webView.destroy()
     super.onDestroy()

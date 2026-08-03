@@ -19,6 +19,7 @@ import { persistSshWorkspace } from "./platform"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { SshShell } from "./ssh-shell"
 import {
+  abandonSshSetup,
   connectedSshWorkspace,
   createSshConnectionGate,
   createSshCredentialLoader,
@@ -179,9 +180,17 @@ export function SshConnect(props: Props) {
         return true
       }
       if (setup()) {
-        setSetup()
-        setPreflight()
-        setError("")
+        void abandonSshSetup({
+          onboarding,
+          ssh: props.ssh,
+          reset: () => {
+            setSetup()
+            setPreflight()
+            setCheckingLogin(false)
+            setBusy(false)
+            setError("")
+          },
+        })
         return true
       }
       if (step() === "agent") {

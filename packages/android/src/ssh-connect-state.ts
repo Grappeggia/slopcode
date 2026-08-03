@@ -1,4 +1,12 @@
-import { normalizeSshTarget, parseSshTarget, sshProfile, validSshPath, type SshAgent, type SshCredential } from "./ssh"
+import {
+  normalizeSshTarget,
+  parseSshTarget,
+  sshProfile,
+  validSshPath,
+  type SshAgent,
+  type SshCredential,
+  type SshTransport,
+} from "./ssh"
 
 export type SshConnectAuth = "password" | "privateKey"
 
@@ -158,4 +166,14 @@ export function leaveSshOnboarding(input: {
   input.onboarding.advance()
   input.reset()
   return input.connections.close(request)
+}
+
+export function abandonSshSetup(input: {
+  onboarding: OnboardingGeneration
+  ssh: Pick<SshTransport, "cleanup">
+  reset(): void
+}) {
+  input.onboarding.advance()
+  input.reset()
+  return input.ssh.cleanup().catch(() => undefined)
 }

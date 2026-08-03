@@ -256,11 +256,12 @@ internal data class RemoteJobEvent(
 internal object RemoteJobReducer {
   fun apply(current: RemoteJobState, event: RemoteJobEvent, now: Long = System.currentTimeMillis()): RemoteJobState {
     if (event.jobID != current.id) return current
-    val key = event.cursor ?: event.id
-    if (key != null && (key == current.cursor || current.seen.contains(key))) return current
+    val keys = listOfNotNull(event.id, event.cursor).distinct()
+    if (keys.any { it == current.cursor || current.seen.contains(it) }) return current
     val type = event.type.removePrefix("job.").removePrefix("remote.job.")
     val reviewEvent = type.endsWith("review.updated") || type.endsWith("comment")
-    if (RemoteJobStatus.terminal(current.status) && !reviewEvent) return current
+    val retryEvent = type.endsWith("retry") || type.endsWith("retried")
+    if (RemoteJobStatus.terminal(current.status) && !reviewEvent && !retryEvent) return current
     val status = when {
       type.endsWith("completed") -> RemoteJobStatus.COMPLETED
       type.endsWith("failed") -> RemoteJobStatus.FAILED
@@ -287,11 +288,11 @@ internal object RemoteJobReducer {
       ?: current.approval
     val question = event.data.optJSONObject("question")?.let { JSONObject(it.toString()) } ?: current.question
     val review = event.data.optJSONObject("review")?.let { JSONObject(it.toString()) } ?: current.review
-    val seen = if (key == null) current.seen else (current.seen + key).takeLast(MAX_SEEN_EVENTS)
+    val seen = (current.seen + keys).distinct().takeLast(MAX_SEEN_EVENTS)
     return current.copy(
       status = status,
       sessionID = sessionID,
-      cursor = key ?: current.cursor,
+      cursor = event.cursor ?: event.id ?: current.cursor,
       output = output,
       error = error,
       progress = progress,

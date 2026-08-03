@@ -106,7 +106,12 @@ export function SshShell(props: Props) {
 
       <aside
         data-ssh-drawer
+        data-ssh-drawer-open={open() ? "true" : undefined}
         aria-label="Slopcode navigation"
+        aria-hidden={!open()}
+        aria-modal={open()}
+        inert={!open()}
+        role="dialog"
         class={`fixed inset-y-0 left-0 z-50 flex w-72 max-w-[86vw] flex-col border-r border-border-weak-base bg-background-strong p-4 shadow-lg ${open() ? "translate-x-0" : "-translate-x-full"}`}
       >
         <div class="flex items-center justify-between gap-3 border-b border-border-weak-base pb-4 pl-14">

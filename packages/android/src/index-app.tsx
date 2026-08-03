@@ -86,31 +86,34 @@ export async function mountAndroidApp() {
         const [workspace, setWorkspace] = createSignal<SshWorkspaceState>()
         const [view, setView] = createSignal<"agentic" | "interactive">("agentic")
         return (
-          <Show
-            when={workspace()}
-            fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
-          >
-            {(value) => (
-              <Show
-                when={view() === "agentic"}
-                fallback={
-                  <SshSession
+          <>
+            <RemoteSessionNotice message={remoteSessionError()} />
+            <Show
+              when={workspace()}
+              fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
+            >
+              {(value) => (
+                <Show
+                  when={view() === "agentic"}
+                  fallback={
+                    <SshSession
+                      ssh={shell.ssh!}
+                      workspace={value()}
+                      onAgentic={() => setView("agentic")}
+                      onDisconnected={() => window.location.reload()}
+                    />
+                  }
+                >
+                  <SshAgenticSession
                     ssh={shell.ssh!}
                     workspace={value()}
-                    onAgentic={() => setView("agentic")}
+                    onInteractive={() => setView("interactive")}
                     onDisconnected={() => window.location.reload()}
                   />
-                }
-              >
-                <SshAgenticSession
-                  ssh={shell.ssh!}
-                  workspace={value()}
-                  onInteractive={() => setView("interactive")}
-                  onDisconnected={() => window.location.reload()}
-                />
-              </Show>
-            )}
-          </Show>
+                </Show>
+              )}
+            </Show>
+          </>
         )
       }, root)
       return
@@ -118,24 +121,27 @@ export async function mountAndroidApp() {
     render(() => {
       const [view, setView] = createSignal<"agentic" | "interactive">("agentic")
       return (
-        <Show
-          when={view() === "agentic"}
-          fallback={
-            <SshSession
+        <>
+          <RemoteSessionNotice message={remoteSessionError()} />
+          <Show
+            when={view() === "agentic"}
+            fallback={
+              <SshSession
+                ssh={shell.ssh!}
+                workspace={sshWorkspace}
+                onAgentic={() => setView("agentic")}
+                onDisconnected={() => window.location.reload()}
+              />
+            }
+          >
+            <SshAgenticSession
               ssh={shell.ssh!}
               workspace={sshWorkspace}
-              onAgentic={() => setView("agentic")}
+              onInteractive={() => setView("interactive")}
               onDisconnected={() => window.location.reload()}
             />
-          }
-        >
-          <SshAgenticSession
-            ssh={shell.ssh!}
-            workspace={sshWorkspace}
-            onInteractive={() => setView("interactive")}
-            onDisconnected={() => window.location.reload()}
-          />
-        </Show>
+          </Show>
+        </>
       )
     }, root)
     return

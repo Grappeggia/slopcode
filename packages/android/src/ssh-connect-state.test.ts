@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  abandonSshSetup,
   connectedSshWorkspace,
   createSshConnectionGate,
   createSshCredentialLoader,
@@ -17,6 +18,24 @@ function deferred<T>() {
 }
 
 describe("SSH onboarding transitions", () => {
+  test("cleans an active native setup channel before Back clears its onboarding state", async () => {
+    const calls: string[] = []
+    const onboarding = createSshOnboardingGeneration()
+
+    await abandonSshSetup({
+      onboarding,
+      ssh: {
+        cleanup: async () => {
+          calls.push("cleanup")
+        },
+      },
+      reset: () => calls.push("reset"),
+    })
+
+    expect(calls).toEqual(["reset", "cleanup"])
+    expect(onboarding.current()).toBe(1)
+  })
+
   test("clears credentials, pending verification, setup, and errors when changing computers or auth methods", () => {
     const password = resetSshOnboarding()
     const key = resetSshOnboarding("privateKey")

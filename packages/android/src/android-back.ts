@@ -12,7 +12,7 @@ export function handleAndroidBack(close: () => boolean, navigate: AndroidBackHan
 }
 
 export function closeSshNavigation() {
-  const drawer = document.querySelector<HTMLElement>("[data-ssh-drawer][aria-hidden='false']")
+  const drawer = document.querySelector<HTMLElement>("[data-ssh-drawer-open='true']")
   if (!drawer) return false
   document.querySelector<HTMLButtonElement>("[data-ssh-menu-toggle]")?.click()
   return true

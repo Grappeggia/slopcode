@@ -157,4 +157,21 @@ describe("Android durable remote jobs", () => {
       ),
     ).toEqual(retried)
   })
+
+  test("rejects an out-of-order replayed event ID after newer events", () => {
+    const first = applyRemoteJobEvent(
+      job,
+      parseRemoteJobEvent({ id: "evt_first", cursor: "cur_first", jobID: job.id, type: "job.progress", data: { output: "first" } })!,
+    )
+    const next = applyRemoteJobEvent(
+      first,
+      parseRemoteJobEvent({ id: "evt_next", cursor: "cur_next", jobID: job.id, type: "job.progress", data: { output: " next" } })!,
+    )
+    const replay = applyRemoteJobEvent(
+      next,
+      parseRemoteJobEvent({ id: "evt_first", cursor: "cur_replay", jobID: job.id, type: "job.progress", data: { output: " replay" } })!,
+    )
+
+    expect(replay).toEqual(next)
+  })
 })

@@ -59,3 +59,20 @@ The bridge idempotency ledger remains intentionally in memory; durable restart r
 ### Blocker
 
 No protected SSH fixture credentials were available, so this follow-up does not claim a live SSH connection or agent run. The credential-gated emulator harness remains the required live validation path.
+
+## Independent review fixes
+
+- The shared Android Back contract now detects the SSH drawer through its explicit open-state marker while retaining `aria-hidden` and `inert` semantics. A real Chrome DOM regression opens the rendered drawer, invokes Back, and verifies both its open and closed states.
+- Back during an active SSH install/sign-in invalidates onboarding first, clears setup UI, and queues native `ssh.cleanup()` so an exec channel cannot remain busy after the UI is dismissed. Native connection cancellation is generation-scoped, including cancellation before the JSch session is published.
+- Remote-session links still parse legacy job-only input, but route it to the explicit recovery notice on every SSH and remote route; only an exact persisted job and session opens a session. Remote event reducers now persist a bounded history of both event IDs and cursors, reject out-of-order replay, and continue to allow terminal-job retries.
+- MainActivity now gives each async WebView Back callback a request generation and invalidates callbacks on renderer navigation/destruction, so rapid Back taps or stale Activity callbacks cannot act after a newer request.
+
+### Verification
+
+- `bun test src/android-back.test.ts src/ssh-shell-dom.test.ts src/ssh-connect-state.test.ts src/remote-session-recovery.test.ts src/remote-session-route.test.ts src/remote-jobs.test.ts src/bridge.test.ts src/platform.test.ts` — 37 passed (the DOM test uses Vite plus headless Chrome).
+- `bun run typecheck` and `bun run build:web` — passed.
+- `./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug` — passed.
+
+### Remaining blocker
+
+No protected SSH fixture credentials are available. These fixes do not claim a live SSH connection, setup action, or agent run; the credential-gated emulator harness remains required for that validation.

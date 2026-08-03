@@ -22,6 +22,9 @@ describe("remote session deep-link recovery", () => {
   })
 
   test("explains stale or mismatched deep links instead of silently routing", () => {
+    expect(resolveRemoteSession({ jobID: "job_1" }, [job])).toEqual({
+      error: "Session unavailable or expired. Choose a workspace or start a new session.",
+    })
     expect(resolveRemoteSession({ jobID: "job_missing" }, [job])).toEqual({
       error: "Session unavailable or expired. Choose a workspace or start a new session.",
     })

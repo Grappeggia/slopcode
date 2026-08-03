@@ -72,6 +72,34 @@ class RemoteJobModelsTest {
   }
 
   @Test
+  fun replayedEventIdsAndCursorsStayRejectedAfterNewerEventsAndRetriesRemainValid() {
+    val first = RemoteJobReducer.apply(
+      state(),
+      RemoteJobEvent.parse(
+        JSONObject().put("id", "evt_first").put("cursor", "cur_first").put("jobID", "job_test")
+          .put("type", "job.stopped").put("data", JSONObject()),
+      )!!,
+    )
+    val retried = RemoteJobReducer.apply(
+      first,
+      RemoteJobEvent.parse(
+        JSONObject().put("id", "evt_retry").put("cursor", "cur_retry").put("jobID", "job_test")
+          .put("type", "job.retry").put("data", JSONObject()),
+      )!!,
+    )
+    val replayed = RemoteJobReducer.apply(
+      retried,
+      RemoteJobEvent.parse(
+        JSONObject().put("id", "evt_first").put("cursor", "cur_replay").put("jobID", "job_test")
+          .put("type", "job.progress").put("data", JSONObject().put("output", "replayed")),
+      )!!,
+    )
+
+    assertEquals(RemoteJobStatus.RETRYING, retried.status)
+    assertEquals(retried, replayed)
+  }
+
+  @Test
   fun notificationActionsAreAllowlisted() {
     assertTrue(RemoteJobAction.valid(RemoteJobAction.APPROVE))
     assertTrue(RemoteJobAction.valid(RemoteJobAction.REJECT))

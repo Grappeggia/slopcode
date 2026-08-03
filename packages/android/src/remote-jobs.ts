@@ -87,6 +87,7 @@ export type RemoteJob = {
   approval?: RemoteApproval
   question?: RemoteQuestion
   review?: RemoteReview
+  seen?: string[]
   updatedAt: number
 }
 
@@ -157,6 +158,7 @@ const MAX_REVIEW_FILES = 64
 const MAX_REVIEW_TESTS = 64
 const MAX_REVIEW_SCREENSHOTS = 16
 const MAX_REVIEW_COMMENTS = 128
+const MAX_SEEN_EVENTS = 64
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -376,6 +378,16 @@ function config(value: unknown) {
   return next
 }
 
+function eventHistory(value: unknown) {
+  if (!Array.isArray(value) || value.length > MAX_SEEN_EVENTS) return
+  const values = value.flatMap((item) => {
+    const next = text(item, MAX_ID_LENGTH)
+    return next ? [next] : []
+  })
+  if (values.length !== value.length) return
+  return [...new Set(values)].slice(-MAX_SEEN_EVENTS)
+}
+
 export function parseRemoteJob(value: unknown): RemoteJob | undefined {
   if (!record(value)) return
   const id = text(value.id ?? value.jobID, MAX_ID_LENGTH)
@@ -405,6 +417,7 @@ export function parseRemoteJob(value: unknown): RemoteJob | undefined {
     value.commandPreview === undefined ? undefined : parseRemoteCommandPreview(value.commandPreview)
   const questionValue = value.question === undefined ? undefined : parseRemoteQuestion(value.question)
   const reviewValue = value.review === undefined ? undefined : parseRemoteReview(value.review)
+  const seen = value.seen === undefined ? undefined : eventHistory(value.seen)
   const progress = value.progress
   if (
     (value.sessionID !== undefined && !sessionID) ||
@@ -415,6 +428,7 @@ export function parseRemoteJob(value: unknown): RemoteJob | undefined {
     (value.commandPreview !== undefined && commandPreview === undefined) ||
     (value.question !== undefined && questionValue === undefined) ||
     (value.review !== undefined && reviewValue === undefined) ||
+    (value.seen !== undefined && seen === undefined) ||
     (progress !== undefined && (typeof progress !== "number" || progress < 0 || progress > 1))
   )
     return
@@ -434,6 +448,7 @@ export function parseRemoteJob(value: unknown): RemoteJob | undefined {
     ...(approvalValue ? { approval: approvalValue } : {}),
     ...(questionValue ? { question: questionValue } : {}),
     ...(reviewValue ? { review: reviewValue } : {}),
+    ...(seen?.length ? { seen } : {}),
     updatedAt,
   }
 }
@@ -510,8 +525,8 @@ function terminal(type: string) {
 
 export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): RemoteJob {
   if (event.jobID !== current.id) return current
-  if (event.id && current.cursor === event.id) return current
-  if (event.cursor && current.cursor === event.cursor) return current
+  const seen = [event.id, event.cursor].flatMap((value) => (value ? [value] : []))
+  if (seen.some((value) => value === current.cursor || current.seen?.includes(value))) return current
   const reviewEvent = event.type.endsWith("review.updated") || event.type.endsWith("comment")
   const retryEvent = event.type.endsWith("retry") || event.type.endsWith("retried")
   if (
@@ -552,6 +567,7 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
     ...(event.data.question ? { question: event.data.question } : {}),
     ...(event.data.review ? { review: event.data.review } : {}),
     ...(event.data.progress === undefined ? {} : { progress: event.data.progress }),
+    ...(seen.length ? { seen: [...(current.seen ?? []), ...seen].filter((value, index, values) => values.indexOf(value) === index).slice(-MAX_SEEN_EVENTS) } : {}),
     updatedAt: Date.now(),
   }
 }
