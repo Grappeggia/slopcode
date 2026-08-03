@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { SshEvent, SshTransport } from "./ssh"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { initialSshMode, returnToAgentic } from "./ssh-session-flow"
+import { installAndroidBack } from "./android-back"
 import { SshShell } from "./ssh-shell"
 
 type Props = {
@@ -95,9 +96,15 @@ export function SshSession(props: Props) {
 
   onMount(() => {
     const stop = props.ssh.subscribe(handle)
+    const releaseBack = installAndroidBack(() => {
+      if (busy()) return true
+      void agentic()
+      return true
+    })
     void connect()
     onCleanup(() => {
       stop()
+      releaseBack()
       void props.ssh.cleanup()
     })
   })

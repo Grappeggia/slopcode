@@ -93,6 +93,7 @@ export type AndroidNativeBridge = {
   remoteJobAction(jobID: string, action: RemoteJobAction, payload?: string): Promise<unknown>
   sshEventsReady?(nonce: string): Promise<unknown>
   sshConnect?(input: string): Promise<unknown>
+  sshCancelConnect?(): Promise<unknown>
   sshTrustHostKey?(input: string): Promise<unknown>
   sshStatus?(): Promise<unknown>
   sshDisconnect?(): Promise<unknown>
@@ -192,6 +193,7 @@ export function getAndroidBridge(
     remoteJobAction: (jobID, action, payload) => call("remoteJobAction", jobID, action, payload),
     sshEventsReady: (nonce) => call("sshEventsReady", nonce),
     sshConnect: (input) => call("sshConnect", input),
+    sshCancelConnect: () => call("sshCancelConnect"),
     sshTrustHostKey: (input) => call("sshTrustHostKey", input),
     sshStatus: () => call("sshStatus"),
     sshDisconnect: () => call("sshDisconnect"),
@@ -223,6 +225,7 @@ export function getAndroidBridge(
 export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): SshTransport | undefined {
   if (
     !bridge?.sshConnect ||
+    !bridge.sshCancelConnect ||
     !bridge.sshTrustHostKey ||
     !bridge.sshStatus ||
     !bridge.sshDisconnect ||
@@ -262,6 +265,7 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
         parseSshConnectResult,
         "Android returned an invalid SSH connection result.",
       ),
+    cancelConnect: () => bridge.sshCancelConnect!(),
     trustHostKey: (profile, fingerprint) =>
       result(
         bridge.sshTrustHostKey!(JSON.stringify({ profile, fingerprint })),

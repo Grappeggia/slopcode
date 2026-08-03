@@ -212,6 +212,26 @@ describe("SSH onboarding transitions", () => {
     })
   })
 
+  test("allows a newer connection only after a cancelled attempt has released the connection gate", async () => {
+    const closing = deferred<undefined>()
+    const gate = createSshConnectionGate({
+      status: async () => ({ connected: true, profile: "marcos@mac.example.com:22" }),
+      disconnect: async () => closing.promise,
+    })
+    const cancelled = gate.start()
+    const closingAttempt = gate.close(cancelled)
+    const next = gate.start()
+    const waiting = gate.ready(next)
+
+    let ready = false
+    void waiting.then(() => (ready = true))
+    await Promise.resolve()
+    expect(ready).toBeFalse()
+    closing.resolve(undefined)
+    expect(await closingAttempt).toBeFalse()
+    expect(await waiting).toBeTrue()
+  })
+
   test("does not expose a draft computer or mismatched folder in shell navigation", () => {
     const input = {
       connected: true,

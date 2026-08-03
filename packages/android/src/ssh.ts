@@ -111,6 +111,7 @@ export type SshEvent =
 
 export type SshTransport = {
   connect(input: SshConnectionInput): Promise<SshConnectResult>
+  cancelConnect(): Promise<unknown>
   trustHostKey(profile: string, fingerprint: string): Promise<SshConnectResult>
   status(): Promise<{ connected: boolean; remoteTransport: boolean; profile?: string }>
   disconnect(): Promise<unknown>

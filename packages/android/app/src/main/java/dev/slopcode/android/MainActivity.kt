@@ -78,7 +78,12 @@ class MainActivity : AppCompatActivity() {
 
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
-        if (webView.canGoBack()) webView.goBack() else finish()
+        webView.evaluateJavascript(
+          "(typeof window.__slopcodeAndroidBack === 'function' && window.__slopcodeAndroidBack()) ? 'handled' : 'unhandled'",
+        ) { value ->
+          if (value == "\"handled\"") return@evaluateJavascript
+          if (webView.canGoBack()) webView.goBack() else finish()
+        }
       }
     })
 

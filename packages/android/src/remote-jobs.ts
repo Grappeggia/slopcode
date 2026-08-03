@@ -513,7 +513,12 @@ export function applyRemoteJobEvent(current: RemoteJob, event: RemoteJobEvent): 
   if (event.id && current.cursor === event.id) return current
   if (event.cursor && current.cursor === event.cursor) return current
   const reviewEvent = event.type.endsWith("review.updated") || event.type.endsWith("comment")
-  if ((current.status === "completed" || current.status === "failed" || current.status === "stopped") && !reviewEvent)
+  const retryEvent = event.type.endsWith("retry") || event.type.endsWith("retried")
+  if (
+    (current.status === "completed" || current.status === "failed" || current.status === "stopped") &&
+    !reviewEvent &&
+    !retryEvent
+  )
     return current
   const done = terminal(event.type)
   const approval =

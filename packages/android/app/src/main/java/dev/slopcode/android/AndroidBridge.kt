@@ -502,6 +502,11 @@ class AndroidBridge(
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH configuration")
           sshAsync(id, replyProxy) { ssh.connect(raw) }
         }
+        "sshCancelConnect" -> {
+          arity(args, 0)
+          ssh.cancelConnect()
+          reply(replyProxy, bridgeResult(id, true))
+        }
         "sshTrustHostKey" -> {
           arity(args, 1)
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid host-key confirmation")

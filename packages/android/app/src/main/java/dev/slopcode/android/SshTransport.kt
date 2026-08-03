@@ -1,6 +1,8 @@
 package dev.slopcode.android
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Base64
 import com.jcraft.jsch.Channel
 import com.jcraft.jsch.ChannelExec
@@ -39,6 +41,8 @@ internal class SshTransport(
   private val pending = ConcurrentHashMap<String, PendingHostKey>()
   private val workspace = SshWorkspaceScope()
   private var session: Session? = null
+  private var connecting: Session? = null
+  private var connectCancelled = false
   private var channel: ChannelExec? = null
   private var output: OutputStream? = null
   private var channelID: String? = null
@@ -58,6 +62,7 @@ internal class SshTransport(
     synchronized(lock) {
       check(!closed) { "SSH transport is unavailable." }
     }
+    if (!online()) throw SshTransportException("offline", "You appear offline. Connect to a network and retry.")
     val stored = credentials.get(request.profile)
     val auth = request.auth ?: stored?.optString("auth")?.takeIf(String::isNotEmpty)
     val password = request.password ?: stored?.optString("password")?.takeIf(String::isNotEmpty)
@@ -93,9 +98,22 @@ internal class SshTransport(
       session.setTimeout(CONNECT_TIMEOUT_MS)
       session.setServerAliveInterval(15_000)
       session.setServerAliveCountMax(3)
-      session.connect(CONNECT_TIMEOUT_MS)
+      synchronized(lock) {
+        connecting = session
+        connectCancelled = false
+      }
+      try {
+        session.connect(CONNECT_TIMEOUT_MS)
+      } finally {
+        synchronized(lock) {
+          if (connecting === session) connecting = null
+        }
+      }
       session
     } catch (cause: Throwable) {
+      if (synchronized(lock) { connectCancelled }) {
+        throw SshTransportException("connect_cancelled", "SSH connection cancelled.", cause)
+      }
       val candidate = hostCandidate(request, jsch)
       val changed = repository.wasChanged(request.hostKeyName())
       if (changed) {
@@ -455,10 +473,12 @@ internal class SshTransport(
     val next: ChannelExec?
     val remote: ChannelExec?
     val current: Session?
+    val pending: Session?
     synchronized(lock) {
       next = channel
       remote = orchestratorChannel
       current = session
+      pending = connecting
       channel = null
       output = null
       channelID = null
@@ -466,6 +486,8 @@ internal class SshTransport(
       orchestratorOutput = null
       orchestratorID = null
       session = null
+      connecting = null
+      connectCancelled = true
       profile = null
       workspace.reset()
       connectionEpoch += 1
@@ -474,6 +496,15 @@ internal class SshTransport(
     runCatching { next?.disconnect() }
     runCatching { remote?.disconnect() }
     runCatching { current?.disconnect() }
+    runCatching { pending?.disconnect() }
+  }
+
+  fun cancelConnect() {
+    val pending = synchronized(lock) {
+      connectCancelled = true
+      connecting
+    }
+    runCatching { pending?.disconnect() }
   }
 
   fun close() {
@@ -694,6 +725,13 @@ internal class SshTransport(
       return SshTransportException("network_error", "Could not reach the SSH host. Check the host, port, and network.", cause)
     }
     return SshTransportException("ssh_failed", cause.message?.take(512) ?: "SSH operation failed.", cause)
+  }
+
+  private fun online(): Boolean {
+    val manager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val network = manager.activeNetwork ?: return false
+    val capabilities = manager.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
   }
 
   private fun classifySftp(cause: Throwable): SshTransportException {

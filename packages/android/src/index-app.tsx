@@ -21,6 +21,7 @@ import { SshConnect } from "./ssh-connect"
 import { SshAgenticSession } from "./ssh-agentic-session"
 import { SshSession } from "./ssh-session"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
+import { resolveRemoteSession } from "./remote-session-recovery"
 
 function emitDeepLinks(urls: string[]) {
   if (urls.length === 0) return
@@ -30,22 +31,50 @@ function emitDeepLinks(urls: string[]) {
   window.dispatchEvent(new CustomEvent("slopcode:deep-link", { detail: { urls } }))
 }
 
+function RemoteSessionNotice(props: { message: string }) {
+  return (
+    <Show when={props.message}>
+      <p role="alert" class="m-4 rounded-lg border border-border-critical-base bg-surface-critical-base px-4 py-3 text-14-regular text-text-on-critical-base">
+        {props.message}
+      </p>
+    </Show>
+  )
+}
+
 export async function mountAndroidApp() {
   const root = document.getElementById("root")
   if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
 
   const [remoteSession, setRemoteSession] = createSignal<RemoteSessionDeepLink>()
+  const [remoteSessionError, setRemoteSessionError] = createSignal("")
   const [shell, initial, sshWorkspace] = await Promise.all([
     shellBridge(),
     readInitialWorkspaceState(),
     readInitialSshWorkspace(),
   ])
+  let deepLinkRequest = 0
+  const selectRemoteSession = async (session: RemoteSessionDeepLink) => {
+    const request = ++deepLinkRequest
+    if (!shell.remoteJobs) {
+      if (request === deepLinkRequest) setRemoteSessionError("Session unavailable or expired. Choose a workspace or start a new session.")
+      return
+    }
+    const resolution = resolveRemoteSession(session, await shell.remoteJobs.list())
+    if (request !== deepLinkRequest) return
+    if ("error" in resolution) {
+      setRemoteSession()
+      setRemoteSessionError(resolution.error)
+      return
+    }
+    setRemoteSessionError("")
+    setRemoteSession(resolution.session)
+  }
   if (shell.capabilities.deepLinks)
     shell.subscribeDeepLinks((urls) => {
       const session = urls
         .map(parseRemoteSessionDeepLink)
         .find((item): item is RemoteSessionDeepLink => item !== undefined)
-      if (session) setRemoteSession(session)
+      if (session) void selectRemoteSession(session)
       emitDeepLinks(urls)
     })
   if (shell.ssh) {
@@ -117,7 +146,15 @@ export async function mountAndroidApp() {
     workspace?.mode !== "ssh" ||
     !remoteCapabilityEnabled(initial.state.workspace, "sshWorkspace")
   ) {
-    render(() => <RemoteConnect onConnected={() => window.location.reload()} />, root)
+    render(
+      () => (
+        <>
+          <RemoteSessionNotice message={remoteSessionError()} />
+          <RemoteConnect onConnected={() => window.location.reload()} />
+        </>
+      ),
+      root,
+    )
     return
   }
   const selection =
@@ -131,24 +168,27 @@ export async function mountAndroidApp() {
   if (selectedAgent === "codex-cli" || selectedAgent === "opencode-cli" || selectedAgent === "claude-code") {
     render(
       () => (
-        <RemoteAgentSession
-          agent={selectedAgent}
-          serverUrl={selection.url}
-          username={initial.secret?.username}
-          password={initial.secret?.password ?? ""}
-          workspaceID={selection.workspaceID ?? ""}
-          directory={selection.directory ?? ""}
-          jobID={remoteSession()?.jobID}
-          sessionID={remoteSession()?.sessionID}
-          background={shell.remoteJobs}
-          catalog={initial.state.commandCatalog}
-          onCatalog={(catalog: RemoteCommandCatalog) =>
-            void persistRemoteWorkspace(
-              { ...initial.state, commandCatalog: catalog, savedAt: new Date().toISOString() },
-              initial.secret,
-            ).catch(() => undefined)
-          }
-        />
+        <>
+          <RemoteSessionNotice message={remoteSessionError()} />
+          <RemoteAgentSession
+            agent={selectedAgent}
+            serverUrl={selection.url}
+            username={initial.secret?.username}
+            password={initial.secret?.password ?? ""}
+            workspaceID={selection.workspaceID ?? ""}
+            directory={selection.directory ?? ""}
+            jobID={remoteSession()?.jobID}
+            sessionID={remoteSession()?.sessionID}
+            background={shell.remoteJobs}
+            catalog={initial.state.commandCatalog}
+            onCatalog={(catalog: RemoteCommandCatalog) =>
+              void persistRemoteWorkspace(
+                { ...initial.state, commandCatalog: catalog, savedAt: new Date().toISOString() },
+                initial.secret,
+              ).catch(() => undefined)
+            }
+          />
+        </>
       ),
       root,
     )

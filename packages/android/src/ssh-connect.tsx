@@ -14,6 +14,7 @@ import {
   type SshTransport,
 } from "./ssh"
 import { canOpenExternalUrl, getAndroidBridge } from "./bridge"
+import { installAndroidBack } from "./android-back"
 import { persistSshWorkspace } from "./platform"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { SshShell } from "./ssh-shell"
@@ -171,6 +172,36 @@ export function SshConnect(props: Props) {
   onMount(() => {
     const unsubscribe = props.ssh.subscribe((event) => void onSshEvent(event))
     onCleanup(unsubscribe)
+    const releaseBack = installAndroidBack(() => {
+      if (pendingKey()) {
+        setPendingKey()
+        setError("")
+        return true
+      }
+      if (setup()) {
+        setSetup()
+        setPreflight()
+        setError("")
+        return true
+      }
+      if (step() === "agent") {
+        setStep("folder")
+        setBrowseOpen(true)
+        setError("")
+        return true
+      }
+      if (step() === "folder") {
+        void leave()
+        return true
+      }
+      if (started()) {
+        clearOnboarding()
+        setStarted(false)
+        return true
+      }
+      return false
+    })
+    onCleanup(releaseBack)
     if (!props.initial) return
     setStarted(false)
     void loadCredentials(props.initial.profile)
@@ -480,6 +511,15 @@ export function SshConnect(props: Props) {
     } finally {
       if (active(request, profile)) setBusy(false)
     }
+  }
+
+  const cancelConnect = async () => {
+    if (!busy() || connected()) return
+    onboarding.advance()
+    setBusy(false)
+    setPendingKey()
+    setError("SSH connection cancelled.")
+    await props.ssh.cancelConnect().catch(() => undefined)
   }
 
   const trust = async () => {
@@ -1360,25 +1400,36 @@ export function SshConnect(props: Props) {
           </Show>
 
           <Show when={!started() || (started() && !connected()) || (connected() && step() === "agent")}>
-            <button
-              type="submit"
-              disabled={busy()}
-              class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50"
-            >
-              {!started()
-                ? "Continue"
-                : !connected()
-                  ? busy()
-                    ? "Connecting…"
-                    : "Connect to SSH host"
-                  : busy()
-                    ? "Checking CLI…"
-                    : setup()
-                      ? setup()!.action === "install"
-                        ? "Install the agent above"
-                        : "Complete sign-in above"
-                      : "Run preflight and open agent"}
-            </button>
+            <div class="flex flex-wrap gap-3">
+              <button
+                type="submit"
+                disabled={busy()}
+                class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50"
+              >
+                {!started()
+                  ? "Continue"
+                  : !connected()
+                    ? busy()
+                      ? "Connecting…"
+                      : "Connect to SSH host"
+                    : busy()
+                      ? "Checking CLI…"
+                      : setup()
+                        ? setup()!.action === "install"
+                          ? "Install the agent above"
+                          : "Complete sign-in above"
+                        : "Run preflight and open agent"}
+              </button>
+              <Show when={busy() && !connected()}>
+                <button
+                  type="button"
+                  onClick={() => void cancelConnect()}
+                  class="min-h-12 rounded-md border border-border-weak-base px-4 py-3 text-12-medium"
+                >
+                  Cancel connection
+                </button>
+              </Show>
+            </div>
           </Show>
         </form>
       </main>

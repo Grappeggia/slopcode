@@ -43,3 +43,19 @@
 - Regression coverage includes invalid canonical symlinks and oversized/traversal paths, overlapping turns and delayed output, duplicate/conflicting session and turn requests, cross-session public-ID collisions, and asynchronous event ordering.
 
 The bridge idempotency ledger remains intentionally in memory; durable restart recovery is still a follow-up for the journal integration and is not claimed by this correction.
+
+## Android lifecycle and recovery follow-up
+
+- Added a native-to-renderer Android Back contract. SSH onboarding dismisses transient host-key/setup state, returns agent selection to folders, returns folders to authentication, and only then permits the Activity fallback. Interactive PTY Back returns safely to the agentic screen; the existing PTY cleanup path remains in use.
+- Added `ACCESS_NETWORK_STATE`, an immediate native offline failure, and an in-flight SSH cancellation bridge. Cancel disconnects the connecting JSch session rather than waiting for the 15-second socket timeout.
+- Made remote-session deep links validate their exact persisted job/session first. Missing or expired links now show a recovery message instead of silently landing at the chooser.
+- Allowed a stopped/failed/completed durable job to accept a later retry event, retaining its cursor while rejecting duplicate events.
+
+### Verification
+
+- `bun test src/android-back.test.ts src/remote-session-recovery.test.ts src/ssh-connect-state.test.ts src/remote-jobs.test.ts src/bridge.test.ts src/platform.test.ts` — 33 passed.
+- `bun run typecheck`, `bun run build:web`, and `./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug` — passed.
+
+### Blocker
+
+No protected SSH fixture credentials were available, so this follow-up does not claim a live SSH connection or agent run. The credential-gated emulator harness remains the required live validation path.

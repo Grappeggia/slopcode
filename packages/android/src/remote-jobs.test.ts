@@ -135,4 +135,26 @@ describe("Android durable remote jobs", () => {
     expect(commented.status).toBe("completed")
     expect(commented.review?.comments[0]?.body).toBe("Please add a test.")
   })
+
+  test("preserves the resume cursor across stop and retry while rejecting replayed events", () => {
+    const stopped = applyRemoteJobEvent(
+      job,
+      parseRemoteJobEvent({ id: "evt_stop", cursor: "evt_stop", jobID: job.id, type: "job.stopped", data: {} })!,
+    )
+    const retried = applyRemoteJobEvent(
+      stopped,
+      parseRemoteJobEvent({ id: "evt_retry", cursor: "evt_retry", jobID: job.id, type: "job.retry", data: {} })!,
+    )
+
+    expect(stopped.status).toBe("stopped")
+    expect(stopped.cursor).toBe("evt_stop")
+    expect(retried.status).toBe("retrying")
+    expect(retried.cursor).toBe("evt_retry")
+    expect(
+      applyRemoteJobEvent(
+        retried,
+        parseRemoteJobEvent({ id: "evt_retry", cursor: "evt_retry", jobID: job.id, type: "job.progress", data: { output: "replayed" } })!,
+      ),
+    ).toEqual(retried)
+  })
 })

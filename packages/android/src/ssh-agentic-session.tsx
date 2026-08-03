@@ -16,6 +16,7 @@ import {
   type OrchestratorWire,
 } from "./ssh-orchestrator"
 import { SshShell } from "./ssh-shell"
+import { installAndroidBack } from "./android-back"
 import {
   canRetry,
   canSubmit,
@@ -131,6 +132,14 @@ export function SshAgenticSession(props: Props) {
   }
 
   onMount(() => void start())
+
+  onMount(() => {
+    const releaseBack = installAndroidBack(() => {
+      if (busy()) return true
+      return false
+    })
+    onCleanup(releaseBack)
+  })
 
   onCleanup(() => {
     stopped = true
