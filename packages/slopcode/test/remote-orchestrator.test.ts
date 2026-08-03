@@ -6,7 +6,7 @@ import { spawn } from "node:child_process"
 import { Schema } from "effect"
 import { AgentOrchestrationFrame } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
-import { connect as connectCli } from "@/remote-orchestrator/cli"
+import { argv, connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
 import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
 
@@ -100,6 +100,98 @@ describe("remote orchestrator", () => {
       expect(session.question("unknown", "answer")).toBe(false)
       await session.close()
     }
+  })
+
+  test("passes Antigravity prompts as a single argv value and parses stream JSON", async () => {
+    const cwd = await temp()
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-cli-agent.ts")
+    const prompt = 'safe; $(not-a-command) "quoted"\nnext line'
+    const events: ACPEvent[] = []
+    let value: readonly string[] = []
+    const session = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: (event) => events.push(event),
+      start: (agent, dir, text) => {
+        value = argv(agent, text)
+        return spawn(process.execPath, [fixture, agent, text], {
+          cwd: dir,
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      },
+    })
+    await session.turn(prompt)
+    expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", prompt])
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "output", text: `antigravity:${prompt.replaceAll("\n", " ")}` }),
+    )
+    await session.close()
+  })
+
+  test("falls back to text output and reports a missing Antigravity CLI", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const text = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: (event) => events.push(event),
+      start: () =>
+        spawn(process.execPath, ["-e", 'process.stdout.write("plain output")'], {
+          cwd,
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+    })
+    await text.turn("ignored")
+    expect(events).toContainEqual(expect.objectContaining({ type: "output", text: "plain output" }))
+    const missing = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: () => undefined,
+      start: () => spawn(path.join(cwd, "missing-agy"), [], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+    })
+    await expect(missing.turn("ignored")).rejects.toThrow("ENOENT")
+    await text.close()
+    await missing.close()
+  })
+
+  test("routes Antigravity through the supported bridge adapter", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const opened: string[] = []
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => {
+        opened.push(input.agent)
+        return {
+          nativeID: "antigravity-session",
+          capabilities: ["workspace", "sessions", "turns"],
+          async turn() {},
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_antigravity", path: root },
+        agent: { id: "antigravity", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_antigravity",
+        agent: "antigravity",
+        requestID: "req_antigravity_session",
+        idempotencyKey: "idem_antigravity_session",
+      }),
+    )
+    expect(opened).toEqual(["antigravity"])
+    expect(sessionResponses(output)).toHaveLength(1)
+    await bridge.close()
   })
 
   test("omits invalid ACP approval locations without stranding permission requests", async () => {

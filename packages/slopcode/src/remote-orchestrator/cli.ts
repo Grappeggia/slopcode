@@ -6,23 +6,31 @@ import {
 } from "@slopcode-ai/protocol"
 import type { ACPEvent, Session } from "./acp"
 
-type Agent = Extract<AgentOrchestrationAgentID, "codex" | "claude">
-type Launch = (agent: Agent, cwd: string) => ChildProcess
+type Agent = Extract<AgentOrchestrationAgentID, "codex" | "claude" | "antigravity">
+type Launch = (agent: Agent, cwd: string, prompt: string) => ChildProcess
 
 const programs: Record<Agent, readonly string[]> = {
   codex: ["codex", "exec", "--json"],
   claude: ["claude", "-p", "--output-format", "stream-json", "--verbose"],
+  antigravity: ["agy", "--print", "--output-format", "stream-json"],
 }
 
-export const launch: Launch = (agent, cwd) =>
-  spawn(programs[agent][0], programs[agent].slice(1), {
+export const argv = (agent: Agent, prompt: string) =>
+  agent === "antigravity" ? [...programs[agent], prompt] : programs[agent]
+
+export const launch: Launch = (agent, cwd, prompt) => {
+  const args = argv(agent, prompt)
+  return spawn(args[0], args.slice(1), {
     cwd,
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   })
+}
 
 const bytes = (value: string) => Buffer.byteLength(value)
+const clip = (value: string, size: number) =>
+  bytes(value) <= size ? value : Buffer.from(value).subarray(0, size).toString("utf8")
 const clean = (value: string, size = AgentOrchestrationLimits.maxTextBytes) => {
   const normalized = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
   return [...normalized].reduce(
@@ -104,7 +112,7 @@ export async function connect(input: {
   const turn = async (prompt: string) => {
     if (closed) throw new Error(`${input.agent} session is closed`)
     if (active) throw new Error(`${input.agent} already has an active turn`)
-    const next = (input.start ?? launch)(input.agent, input.cwd)
+    const next = (input.start ?? launch)(input.agent, input.cwd, prompt)
     const stdin = next.stdin
     const stdout = next.stdout
     const stderrStream = next.stderr
@@ -129,7 +137,7 @@ export async function connect(input: {
         buffer = ""
       }
       stdout.on("data", (chunk: Buffer) => {
-        buffer += chunk.toString("utf8")
+        buffer = clip(`${buffer}${chunk.toString("utf8")}`, AgentOrchestrationLimits.maxTextBytes)
         const values = buffer.split(/\r?\n/)
         buffer = values.pop() ?? ""
         values
@@ -138,7 +146,7 @@ export async function connect(input: {
           .forEach((value) => input.emit({ type: "output", text: value, nativeID }))
       })
       stderrStream.on("data", (chunk: Buffer) => {
-        stderr = `${stderr}${chunk.toString("utf8")}`.slice(-8 * 1024)
+        stderr = clean(`${stderr}${chunk.toString("utf8")}`, 8 * 1024)
       })
       next.once("error", (error) => done({ code: null, error: error.message }))
       next.once("close", (code, signal) => {
@@ -157,7 +165,7 @@ export async function connect(input: {
         },
         10 * 60 * 1_000,
       )
-      stdin.end(`${prompt}\n`)
+      stdin.end(input.agent === "antigravity" ? undefined : `${prompt}\n`)
     })
     active = undefined
     if (result.error) throw new Error(result.error)

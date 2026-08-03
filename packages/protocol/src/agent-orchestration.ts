@@ -63,9 +63,13 @@ const prototype = (value: string) => value === "__proto__" || value === "constru
 export const AgentOrchestrationVersion = Schema.Literal("v1").annotate({ identifier: "AgentOrchestrationV1.Version" })
 export type AgentOrchestrationVersion = typeof AgentOrchestrationVersion.Type
 
-export const AgentOrchestrationAgentID = Schema.Literals(["slopcode", "opencode", "codex", "claude"]).annotate({
-  identifier: "AgentOrchestrationV1.AgentID",
-})
+export const AgentOrchestrationAgentID = Schema.Literals([
+  "slopcode",
+  "opencode",
+  "codex",
+  "claude",
+  "antigravity",
+]).annotate({ identifier: "AgentOrchestrationV1.AgentID" })
 export type AgentOrchestrationAgentID = typeof AgentOrchestrationAgentID.Type
 
 export const AgentOrchestrationRequestID = identifier("req_", "request ID").pipe(

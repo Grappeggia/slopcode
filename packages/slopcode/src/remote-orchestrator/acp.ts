@@ -139,7 +139,7 @@ export async function connect(input: {
   emit: (event: ACPEvent) => void
   start?: Launch
 }): Promise<Session> {
-  if (input.agent === "codex" || input.agent === "claude")
+  if (input.agent === "codex" || input.agent === "claude" || input.agent === "antigravity")
     return connectCli({ agent: input.agent, cwd: input.cwd, emit: input.emit })
   if (input.agent !== "slopcode" && input.agent !== "opencode")
     throw new Error(`agent ${input.agent} does not support ACP`)

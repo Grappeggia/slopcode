@@ -80,7 +80,7 @@ type RequestRecord = {
 
 const maxRequests = 256
 const isSupportedAgent = (value: AgentOrchestrationAgentID) =>
-  value === "slopcode" || value === "opencode" || value === "codex" || value === "claude"
+  value === "slopcode" || value === "opencode" || value === "codex" || value === "claude" || value === "antigravity"
 
 export class Bridge {
   readonly workspaces = new Map<string, string>()

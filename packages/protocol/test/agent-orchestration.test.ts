@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import {
   AgentOrchestrationApprovalReply,
+  AgentOrchestrationAgentID,
   AgentOrchestrationArtifact,
   AgentOrchestrationCapabilities,
   AgentOrchestrationError,
@@ -46,6 +47,10 @@ const event = {
 } as const
 
 describe("agent orchestration protocol contracts", () => {
+  test("accepts antigravity as a public orchestration agent", async () => {
+    expect(await decode(AgentOrchestrationAgentID, "antigravity")).toBe("antigravity")
+  })
+
   test("accepts strict workspace, session, turn, interaction, plan, artifact, event, and error frames", async () => {
     const frames = [
       {
