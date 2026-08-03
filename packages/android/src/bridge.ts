@@ -19,6 +19,7 @@ import {
   parseSshPreflight,
   parseSshOrchestratorEventMessage,
   parseSshOrchestratorStart,
+  parseSshWorkspaceSelection,
   parseSshStart,
   parseSshStatus,
   type SshAgent,
@@ -98,6 +99,7 @@ export type AndroidNativeBridge = {
   sshCleanup?(): Promise<unknown>
   sshHome?(): Promise<unknown>
   sshList?(path: string, showHidden?: boolean): Promise<unknown>
+  sshSelectWorkspace?(path: string): Promise<unknown>
   sshExec?(input: string): Promise<unknown>
   sshAuthStatus?(input: string): Promise<unknown>
   sshStart?(input: string): Promise<unknown>
@@ -194,6 +196,7 @@ export function getAndroidBridge(
     sshCleanup: () => call("sshCleanup"),
     sshHome: () => call("sshHome"),
     sshList: (path, showHidden = false) => call("sshList", path, showHidden),
+    sshSelectWorkspace: (path) => call("sshSelectWorkspace", path),
     sshExec: (input) => call("sshExec", input),
     sshAuthStatus: (input) => call("sshAuthStatus", input),
     sshStart: (input) => call("sshStart", input),
@@ -222,6 +225,7 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
     !bridge.sshCleanup ||
     !bridge.sshHome ||
     !bridge.sshList ||
+    !bridge.sshSelectWorkspace ||
     !bridge.sshExec ||
     !bridge.sshAuthStatus ||
     !bridge.sshStart ||
@@ -266,6 +270,14 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
     home: () => result(bridge.sshHome!(), parseSshHome, "Android returned an invalid SFTP home."),
     list: (path, showHidden = false) =>
       result(bridge.sshList!(path, showHidden), parseSshListing, "Android returned an invalid SFTP listing."),
+    selectWorkspace: async (path) =>
+      (
+        await result(
+          bridge.sshSelectWorkspace!(path),
+          parseSshWorkspaceSelection,
+          "Android returned an invalid SSH workspace selection.",
+        )
+      ).path,
     execVersion: (agent: SshAgent, directory: string) =>
       result(
         bridge.sshExec!(JSON.stringify({ agent, directory })),

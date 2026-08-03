@@ -281,6 +281,7 @@ export type OrchestratorWire = {
   ssh: SshTransport
   send(value: RecordValue): Promise<RecordValue>
   connect(onEvent: (value: RecordValue) => void): () => void
+  scope(id: string): void
 }
 
 export function wire(ssh: SshTransport): OrchestratorWire {
@@ -289,7 +290,9 @@ export function wire(ssh: SshTransport): OrchestratorWire {
     { resolve: (value: RecordValue) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
   >()
   let unsubscribe: () => void = () => undefined
+  let channel: string | undefined
   const send = (value: RecordValue) => {
+    if (!channel) return Promise.reject(new Error("The orchestration transport has no active native channel."))
     const request = id(value.requestID)
     if (!request) return Promise.reject(new Error("The orchestration request has no valid request ID."))
     const task = new Promise<RecordValue>((resolve, reject) => {
@@ -310,6 +313,7 @@ export function wire(ssh: SshTransport): OrchestratorWire {
   }
   const connect = (onEvent: (value: RecordValue) => void) => {
     unsubscribe = ssh.subscribeOrchestrator((event: SshOrchestratorEvent) => {
+      if (!channel || event.id !== channel) return
       if (event.type === "error") {
         for (const [request, item] of pending) {
           pending.delete(request)
@@ -333,12 +337,14 @@ export function wire(ssh: SshTransport): OrchestratorWire {
       if (message.kind === "response" && pending.has(message.requestID)) {
         const item = pending.get(message.requestID)!
         pending.delete(message.requestID)
+        clearTimeout(item.timer)
         item.resolve(message.value)
         return
       }
       if (message.kind === "error" && message.requestID && pending.has(message.requestID)) {
         const item = pending.get(message.requestID)!
         pending.delete(message.requestID)
+        clearTimeout(item.timer)
         item.reject(new Error(message.message))
         return
       }
@@ -346,6 +352,7 @@ export function wire(ssh: SshTransport): OrchestratorWire {
     })
     return () => {
       unsubscribe()
+      channel = undefined
       for (const item of pending.values()) {
         clearTimeout(item.timer)
         item.reject(new Error("Orchestration transport closed."))
@@ -353,7 +360,16 @@ export function wire(ssh: SshTransport): OrchestratorWire {
       pending.clear()
     }
   }
-  return { ssh, send, connect }
+  return {
+    ssh,
+    send,
+    connect,
+    scope(value) {
+      const next = id(value)
+      if (!next) throw new Error("The native orchestration channel ID is invalid.")
+      channel = next
+    },
+  }
 }
 
 const REQUEST_TIMEOUT = 30_000

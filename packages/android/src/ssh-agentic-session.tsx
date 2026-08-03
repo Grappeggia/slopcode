@@ -16,7 +16,14 @@ import {
   type OrchestratorWire,
 } from "./ssh-orchestrator"
 import { SshShell } from "./ssh-shell"
-import { canRetry, canSubmit, handoffToInteractive, reconnectAgentic, stopAgentic } from "./ssh-session-flow"
+import {
+  canRetry,
+  canSubmit,
+  cleanupAgenticStart,
+  handoffToInteractive,
+  reconnectAgentic,
+  stopAgentic,
+} from "./ssh-session-flow"
 
 type Props = {
   ssh: SshTransport
@@ -97,8 +104,11 @@ export function SshAgenticSession(props: Props) {
     const next = wire(props.ssh)
     setWireState(next)
     closeWire = next.connect(event)
+    let started = false
     try {
-      await props.ssh.orchestratorStart(props.workspace.directory)
+      const channel = await props.ssh.orchestratorStart(props.workspace.directory)
+      next.scope(channel.id)
+      started = true
       const workspace = await next.send(workspaceFrame(props.workspace.directory, props.workspace.agent))
       const workspaceValue = workspace.workspace
       const workspaceObject =
@@ -112,7 +122,8 @@ export function SshAgenticSession(props: Props) {
       if (!sessionID) throw new Error("The remote agent did not return a session.")
       setState((current) => ({ ...current, phase: "ready", sessionID }))
     } catch (cause) {
-      closeWire()
+      await cleanupAgenticStart(props.ssh, () => setWireState(), closeWire, started)
+      closeWire = () => undefined
       showError(cause, "Could not start the remote agent session.")
     } finally {
       setBusy(false)
@@ -313,7 +324,7 @@ export function SshAgenticSession(props: Props) {
                 >
                   Reconnect
                 </button>
-                <Show when={state().lastPrompt}>
+                <Show when={state().lastPrompt && canRetry(state().phase, state().sessionID, !!wireState())}>
                   <button
                     type="button"
                     onClick={retry}

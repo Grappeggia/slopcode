@@ -2,13 +2,21 @@ import { describe, expect, test } from "bun:test"
 import {
   canRetry,
   canSubmit,
+  cleanupAgenticStart,
   handoffToInteractive,
+  initialSshMode,
   reconnectAgentic,
   returnToAgentic,
   stopAgentic,
 } from "./ssh-session-flow"
 
 describe("SSH session handoff", () => {
+  test("opens Antigravity directly in interactive PTY mode", () => {
+    expect(initialSshMode("antigravity-cli")).toBe("interactive")
+    expect(initialSshMode("slopcode-cli")).toBe("prompt")
+    expect(initialSshMode("codex-cli")).toBe("prompt")
+  })
+
   test("stops and closes the agentic bridge before opening the interactive CLI", async () => {
     const calls: string[] = []
     await handoffToInteractive(
@@ -29,6 +37,28 @@ describe("SSH session handoff", () => {
       ),
     ).rejects.toThrow("stop failed")
     expect(calls).toEqual([])
+  })
+
+  test("clears and closes a failed startup before stopping its native orchestrator", async () => {
+    const calls: string[] = []
+    await cleanupAgenticStart(
+      { orchestratorStop: async () => void calls.push("stop") },
+      () => void calls.push("clear"),
+      () => void calls.push("close"),
+      true,
+    )
+    expect(calls).toEqual(["clear", "close", "stop"])
+  })
+
+  test("does not stop a native orchestrator that never started", async () => {
+    const calls: string[] = []
+    await cleanupAgenticStart(
+      { orchestratorStop: async () => void calls.push("stop") },
+      () => void calls.push("clear"),
+      () => void calls.push("close"),
+      false,
+    )
+    expect(calls).toEqual(["clear", "close"])
   })
 
   test("stops before reconnecting and cleans only the PTY before returning", async () => {

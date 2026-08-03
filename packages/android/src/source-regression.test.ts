@@ -88,6 +88,7 @@ describe("android security source regressions", () => {
     expect(session).toContain("Open Interactive CLI")
     const pty = await Bun.file(`${root}/src/ssh-session.tsx`).text()
     expect(pty).toContain("Return to agentic session")
+    expect(pty).toContain("initialSshMode(props.workspace.agent)")
     const instrumented = await Bun.file(
       `${root}/app/src/androidTest/java/dev/slopcode/android/SshTransportInstrumentedTest.kt`,
     ).text()

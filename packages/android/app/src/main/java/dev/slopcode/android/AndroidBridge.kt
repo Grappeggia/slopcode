@@ -526,6 +526,11 @@ class AndroidBridge(
           val showHidden = if (args.length() == 2) argBoolean(args, 1) ?: error("Invalid hidden-entry setting") else false
           sshAsync(id, replyProxy) { ssh.list(path, showHidden) }
         }
+        "sshSelectWorkspace" -> {
+          arity(args, 1)
+          val path = argText(args, 0, MAX_DIRECTORY_CHARS) ?: error("Invalid remote workspace")
+          sshAsync(id, replyProxy) { ssh.selectWorkspace(path) }
+        }
         "sshExec" -> {
           arity(args, 1)
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH exec request")

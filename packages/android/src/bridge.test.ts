@@ -7,6 +7,7 @@ import {
   parsePermission,
   parseSupportedDeepLinks,
   parseStringArray,
+  sshTransportBridge,
 } from "./bridge"
 
 function port(handler: (request: { id: string; method: string; args?: unknown[] }) => unknown) {
@@ -70,6 +71,21 @@ describe("android bridge capability detection", () => {
 })
 
 describe("android bridge parsing helpers", () => {
+  test("selects and returns the native canonical SSH workspace", async () => {
+    const calls: Array<{ method: string; args?: unknown[] }> = []
+    const bridge = getAndroidBridge({
+      SlopcodeAndroid: port((request) => {
+        calls.push({ method: request.method, args: request.args })
+        if (request.method === "sshSelectWorkspace") return { path: "/srv/canonical-project" }
+        return true
+      }),
+    })
+    const ssh = sshTransportBridge(bridge)
+    expect(ssh).toBeDefined()
+    await expect(ssh!.selectWorkspace("/srv/project-link")).resolves.toBe("/srv/canonical-project")
+    expect(calls).toContainEqual({ method: "sshSelectWorkspace", args: ["/srv/project-link"] })
+  })
+
   test("reads string arrays safely", () => {
     expect(parseStringArray('["one","two",3]')).toEqual(["one", "two"])
     expect(parseStringArray(["one", "two", 3])).toEqual(["one", "two"])

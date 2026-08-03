@@ -7,7 +7,8 @@ import {
 import type { ACPEvent, Session } from "./acp"
 
 type Agent = Extract<AgentOrchestrationAgentID, "codex" | "claude" | "antigravity">
-type Launch = (agent: Agent, cwd: string, prompt: string) => ChildProcess
+type Format = "stream" | "text"
+type Launch = (agent: Agent, cwd: string, prompt: string, format: Format) => ChildProcess
 
 const programs: Record<Agent, readonly string[]> = {
   codex: ["codex", "exec", "--json"],
@@ -15,11 +16,15 @@ const programs: Record<Agent, readonly string[]> = {
   antigravity: ["agy", "--print", "--output-format", "stream-json"],
 }
 
-export const argv = (agent: Agent, prompt: string) =>
-  agent === "antigravity" ? [...programs[agent], "--", prompt] : programs[agent]
+export const argv = (agent: Agent, prompt: string, format: Format = "stream") =>
+  agent === "antigravity"
+    ? format === "text"
+      ? ["agy", "--print", "--", prompt]
+      : [...programs[agent], "--", prompt]
+    : programs[agent]
 
-export const launch: Launch = (agent, cwd, prompt) => {
-  const args = argv(agent, prompt)
+export const launch: Launch = (agent, cwd, prompt, format) => {
+  const args = argv(agent, prompt, format)
   return spawn(args[0], args.slice(1), {
     cwd,
     shell: false,
@@ -40,6 +45,11 @@ const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 const text = (value: unknown) => (typeof value === "string" ? clean(value) : "")
+
+const unsupported = (value: string) =>
+  /(?:(?:unknown|unrecognized|unsupported|invalid)\s+(?:option|argument)[^\r\n]*(?:--output-format|stream-json)|(?:--output-format|stream-json)[^\r\n]*(?:unknown|unrecognized|unsupported|invalid)\s+(?:option|argument))/i.test(
+    value,
+  )
 
 function output(value: unknown, depth = 0): string {
   if (depth > 5) return ""
@@ -110,86 +120,91 @@ export async function connect(input: {
   const turn = async (prompt: string) => {
     if (closed) throw new Error(`${input.agent} session is closed`)
     if (active) throw new Error(`${input.agent} already has an active turn`)
-    const next = (input.start ?? launch)(input.agent, input.cwd, prompt)
-    const stdin = next.stdin
-    const stdout = next.stdout
-    const stderrStream = next.stderr
-    if (!stdin || !stdout || !stderrStream) {
-      await stop(next)
-      throw new Error(`${input.agent} CLI did not provide stdio`)
-    }
-    active = next
-    const result = await new Promise<{ code: number | null; error?: string }>((resolve) => {
-      let buffer = Buffer.alloc(0)
-      let stderr = ""
-      let settled = false
-      let dropped = false
-      const done = (value: { code: number | null; error?: string }) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve(value)
+    const run = async (format: Format) => {
+      const next = (input.start ?? launch)(input.agent, input.cwd, prompt, format)
+      const stdin = next.stdin
+      const stdout = next.stdout
+      const stderrStream = next.stderr
+      if (!stdin || !stdout || !stderrStream) {
+        await stop(next)
+        throw new Error(`${input.agent} CLI did not provide stdio`)
       }
-      const flush = () => {
-        if (dropped) return
-        const value = line(buffer.toString("utf8"))
-        if (value) input.emit({ type: "output", text: value, nativeID })
-        buffer = Buffer.alloc(0)
-      }
-      stdout.on("data", (chunk: Buffer) => {
-        let rest = chunk
-        while (rest.byteLength) {
-          if (dropped) {
+      active = next
+      const result = await new Promise<{ code: number | null; error?: string; stderr: string }>((resolve) => {
+        let buffer = Buffer.alloc(0)
+        let stderr = ""
+        let settled = false
+        let dropped = false
+        const done = (value: { code: number | null; error?: string }) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          resolve({ ...value, stderr })
+        }
+        const flush = () => {
+          if (dropped) return
+          const value = line(buffer.toString("utf8"))
+          if (value) input.emit({ type: "output", text: value, nativeID })
+          buffer = Buffer.alloc(0)
+        }
+        stdout.on("data", (chunk: Buffer) => {
+          let rest = chunk
+          while (rest.byteLength) {
+            if (dropped) {
+              const index = rest.indexOf(10)
+              if (index < 0) return
+              rest = rest.subarray(index + 1)
+              dropped = false
+              continue
+            }
             const index = rest.indexOf(10)
-            if (index < 0) return
-            rest = rest.subarray(index + 1)
-            dropped = false
-            continue
-          }
-          const index = rest.indexOf(10)
-          if (index < 0) {
-            if (buffer.byteLength + rest.byteLength > AgentOrchestrationLimits.maxTextBytes) {
-              buffer = Buffer.alloc(0)
-              dropped = true
+            if (index < 0) {
+              if (buffer.byteLength + rest.byteLength > AgentOrchestrationLimits.maxTextBytes) {
+                buffer = Buffer.alloc(0)
+                dropped = true
+                return
+              }
+              buffer = Buffer.concat([buffer, rest])
               return
             }
-            buffer = Buffer.concat([buffer, rest])
-            return
-          }
-          const value = rest.subarray(0, index)
-          rest = rest.subarray(index + 1)
-          if (buffer.byteLength + value.byteLength > AgentOrchestrationLimits.maxTextBytes) {
+            const value = rest.subarray(0, index)
+            rest = rest.subarray(index + 1)
+            if (buffer.byteLength + value.byteLength > AgentOrchestrationLimits.maxTextBytes) {
+              buffer = Buffer.alloc(0)
+              continue
+            }
+            const output = line(Buffer.concat([buffer, value]).toString("utf8").replace(/\r$/, ""))
             buffer = Buffer.alloc(0)
-            continue
+            if (output) input.emit({ type: "output", text: output, nativeID })
           }
-          const output = line(Buffer.concat([buffer, value]).toString("utf8").replace(/\r$/, ""))
-          buffer = Buffer.alloc(0)
-          if (output) input.emit({ type: "output", text: output, nativeID })
-        }
-      })
-      stderrStream.on("data", (chunk: Buffer) => {
-        stderr = clean(`${stderr}${chunk.toString("utf8")}`, 8 * 1024)
-      })
-      next.once("error", (error) => done({ code: null, error: error.message }))
-      next.once("close", (code, signal) => {
-        flush()
-        if (code === 0) return done({ code })
-        const detail = clean(stderr, 2_048)
-        done({
-          code,
-          error:
-            detail || (signal ? `${input.agent} stopped with ${signal}` : `${input.agent} exited with code ${code}`),
         })
+        stderrStream.on("data", (chunk: Buffer) => {
+          stderr = clean(`${stderr}${chunk.toString("utf8")}`, 8 * 1024)
+        })
+        next.once("error", (error) => done({ code: null, error: error.message }))
+        next.once("close", (code, signal) => {
+          flush()
+          if (code === 0) return done({ code })
+          const detail = clean(stderr, 2_048)
+          done({
+            code,
+            error:
+              detail || (signal ? `${input.agent} stopped with ${signal}` : `${input.agent} exited with code ${code}`),
+          })
+        })
+        const timer = setTimeout(
+          () => {
+            void stop(next).then(() => done({ code: null, error: `${input.agent} turn timed out` }))
+          },
+          10 * 60 * 1_000,
+        )
+        stdin.end(input.agent === "antigravity" ? undefined : `${prompt}\n`)
       })
-      const timer = setTimeout(
-        () => {
-          void stop(next).then(() => done({ code: null, error: `${input.agent} turn timed out` }))
-        },
-        10 * 60 * 1_000,
-      )
-      stdin.end(input.agent === "antigravity" ? undefined : `${prompt}\n`)
-    })
-    active = undefined
+      if (active === next) active = undefined
+      return result
+    }
+    const first = await run("stream")
+    const result = input.agent === "antigravity" && first.error && unsupported(first.stderr) ? await run("text") : first
     if (result.error) throw new Error(result.error)
   }
   return {

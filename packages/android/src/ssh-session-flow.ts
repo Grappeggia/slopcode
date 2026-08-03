@@ -1,7 +1,12 @@
 import type { SshTransport } from "./ssh"
+import type { SshAgent } from "./ssh"
 import type { OrchestratorState } from "./ssh-orchestrator"
 
 type View = "agentic" | "interactive"
+
+export function initialSshMode(agent: SshAgent) {
+  return agent === "antigravity-cli" ? "interactive" : "prompt"
+}
 
 export function canSubmit(phase: OrchestratorState["phase"]) {
   return phase !== "waiting" && phase !== "stopped"
@@ -14,6 +19,17 @@ export function canRetry(phase: OrchestratorState["phase"], sessionID: string | 
 export async function stopAgentic(ssh: Pick<SshTransport, "orchestratorStop">, close: () => void) {
   await ssh.orchestratorStop()
   close()
+}
+
+export async function cleanupAgenticStart(
+  ssh: Pick<SshTransport, "orchestratorStop">,
+  clear: () => void,
+  close: () => void,
+  started: boolean,
+) {
+  clear()
+  close()
+  if (started) await ssh.orchestratorStop().catch(() => undefined)
 }
 
 export async function reconnectAgentic(

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { SshOrchestratorEvent, SshTransport } from "./ssh"
 import {
   agentID,
   parseInteraction,
@@ -7,6 +8,7 @@ import {
   reduceOrchestratorEvent,
   replyFrame,
   turnFrame,
+  wire,
   workspaceFrame,
 } from "./ssh-orchestrator"
 
@@ -72,5 +74,49 @@ describe("SSH agent orchestration frames", () => {
     })
     expect(completed.phase).toBe("completed")
     expect(completed.interaction).toBeUndefined()
+  })
+
+  test("scopes native events to the active orchestrator channel", async () => {
+    let emit: (event: SshOrchestratorEvent) => void = () => undefined
+    const inputs: string[] = []
+    const ssh = {
+      orchestratorInput: async (value: string) => void inputs.push(value),
+      subscribeOrchestrator(listener: (event: SshOrchestratorEvent) => void) {
+        emit = listener
+        return () => undefined
+      },
+    } as SshTransport
+    const events: Record<string, unknown>[] = []
+    const next = wire(ssh)
+    const close = next.connect((value) => events.push(value))
+    await expect(next.send({ requestID: "req_unscoped" })).rejects.toThrow("no active native channel")
+    next.scope("ssh_current")
+    const pending = next.send({ requestID: "req_scoped", kind: "request" })
+    expect(inputs).toHaveLength(1)
+    emit({
+      type: "output",
+      id: "ssh_stale",
+      data: JSON.stringify({ kind: "response", requestID: "req_scoped", source: "stale" }),
+    })
+    emit({ type: "error", id: "ssh_stale", message: "stale failure" })
+    emit({ type: "completed", id: "ssh_stale", exitCode: 1 })
+    emit({
+      type: "output",
+      id: "ssh_stale",
+      data: JSON.stringify({ kind: "event", sessionID: "ses_1", type: "turn.output", text: "stale" }),
+    })
+    emit({
+      type: "output",
+      id: "ssh_current",
+      data: JSON.stringify({ kind: "event", sessionID: "ses_1", type: "turn.output", text: "current" }),
+    })
+    emit({
+      type: "output",
+      id: "ssh_current",
+      data: JSON.stringify({ kind: "response", requestID: "req_scoped", source: "current" }),
+    })
+    await expect(pending).resolves.toMatchObject({ source: "current" })
+    expect(events).toEqual([expect.objectContaining({ kind: "event", sessionID: "ses_1", text: "current" })])
+    close()
   })
 })

@@ -9,6 +9,7 @@ import {
   parseSshTarget,
   parseSshPreflight,
   parseSshStart,
+  parseSshWorkspaceSelection,
   sshSetupRecipe,
   sshProfile,
   validSshPath,
@@ -62,6 +63,12 @@ describe("direct SSH boundary parsing", () => {
     expect(parseSshHome({ path: "/" })).toBe("/")
     expect(parseSshHome({ path: "/Users/../etc" })).toBeUndefined()
     expect(parseSshHome({ path: "relative" })).toBeUndefined()
+  })
+
+  test("accepts only a specific canonical workspace selection", () => {
+    expect(parseSshWorkspaceSelection({ path: "/srv/project" })).toEqual({ path: "/srv/project" })
+    expect(parseSshWorkspaceSelection({ path: "/" })).toBeUndefined()
+    expect(parseSshWorkspaceSelection({ path: "/srv/../etc" })).toBeUndefined()
   })
 
   test("accepts only a connected result after native transport verification", () => {

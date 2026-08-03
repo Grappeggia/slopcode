@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { SshEvent, SshTransport } from "./ssh"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
-import { returnToAgentic } from "./ssh-session-flow"
+import { initialSshMode, returnToAgentic } from "./ssh-session-flow"
 
 type Props = {
   ssh: SshTransport
@@ -23,7 +23,7 @@ function name(agent: SshWorkspaceState["agent"]) {
 export function SshSession(props: Props) {
   const [output, setOutput] = createSignal("")
   const [prompt, setPrompt] = createSignal("")
-  const [mode, setMode] = createSignal<"prompt" | "interactive">("prompt")
+  const [mode, setMode] = createSignal<"prompt" | "interactive">(initialSshMode(props.workspace.agent))
   const [activeID, setActiveID] = createSignal<string>()
   const [busy, setBusy] = createSignal(true)
   const [connected, setConnected] = createSignal(false)
@@ -60,6 +60,7 @@ export function SshSession(props: Props) {
   }
 
   const connect = async () => {
+    let ready = false
     setBusy(true)
     setError("")
     try {
@@ -77,15 +78,18 @@ export function SshSession(props: Props) {
           throw new Error("The SSH host key is not trusted yet. Return to SSH setup to verify it.")
       }
       setConnected(true)
+      await props.ssh.selectWorkspace(props.workspace.directory)
       const result = await props.ssh.execVersion(props.workspace.agent, props.workspace.directory)
       setPreflight(result.output || result.error || "")
       if (!result.ok) throw new Error(result.error ?? `The ${name(props.workspace.agent)} preflight failed.`)
+      ready = true
     } catch (cause) {
       setConnected(false)
       setError(cause instanceof Error ? cause.message : "SSH session could not be opened.")
     } finally {
       setBusy(false)
     }
+    if (ready && initialSshMode(props.workspace.agent) === "interactive") await startInteractive()
   }
 
   onMount(() => {

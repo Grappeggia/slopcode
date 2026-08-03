@@ -343,7 +343,6 @@ export function SshConnect(props: Props) {
       setHomePath(home)
       setDirectory(home)
       await browse(home, false)
-      void refreshAgentStatuses(home)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "SSH connection failed.")
     } finally {
@@ -368,14 +367,23 @@ export function SshConnect(props: Props) {
     }
   }
 
-  const selectFolder = (path: string) => {
+  const selectFolder = async (path: string) => {
     const next = validSshPath(path)
-    if (!next) return
-    setDirectory(next)
-    setStep("agent")
-    setBrowseOpen(false)
-    setQuery("")
-    void refreshAgentStatuses(next)
+    if (!next || browseBusy()) return
+    setBrowseBusy(true)
+    setError("")
+    try {
+      const canonical = await props.ssh.selectWorkspace(next)
+      setDirectory(canonical)
+      setStep("agent")
+      setBrowseOpen(false)
+      setQuery("")
+      await refreshAgentStatuses(canonical)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not select the remote workspace.")
+    } finally {
+      setBrowseBusy(false)
+    }
   }
 
   const leave = async () => {
@@ -827,13 +835,13 @@ export function SshConnect(props: Props) {
                 <For each={recentFolders()}>
                   {(folder) => (
                     <div class="flex items-center gap-3 rounded-lg border border-border-weak-base px-3 py-3">
-                      <button type="button" onClick={() => selectFolder(folder)} class="min-w-0 flex-1 text-left">
+                      <button type="button" onClick={() => void selectFolder(folder)} class="min-w-0 flex-1 text-left">
                         <span class="block truncate text-14-medium">{folder}</span>
                         <span class="block text-12-regular text-text-weak">Remote folder</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => selectFolder(folder)}
+                        onClick={() => void selectFolder(folder)}
                         class="shrink-0 rounded-md bg-surface-brand-base px-3 py-2 text-12-regular text-text-on-brand-base"
                       >
                         Use
@@ -977,7 +985,8 @@ export function SshConnect(props: Props) {
                   </div>
                   <button
                     type="button"
-                    onClick={() => selectFolder(browsePath())}
+                    disabled={browseBusy() || browsePath() === "/"}
+                    onClick={() => void selectFolder(browsePath())}
                     class="shrink-0 rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base"
                   >
                     Use this folder

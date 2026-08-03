@@ -37,6 +37,7 @@ internal class SshTransport(
   private val executor = Executors.newCachedThreadPool()
   private val lock = Any()
   private val pending = ConcurrentHashMap<String, PendingHostKey>()
+  private val workspace = SshWorkspaceScope()
   private var session: Session? = null
   private var channel: ChannelExec? = null
   private var output: OutputStream? = null
@@ -193,10 +194,49 @@ internal class SshTransport(
     return result
   }
 
+  fun selectWorkspace(rawPath: String): JSONObject {
+    workspace.reset()
+    val path = SshPath.normalize(rawPath)
+      ?: throw SshTransportException("invalid_workspace", "Remote workspace path is invalid.")
+    if (path == "/") {
+      throw SshTransportException("invalid_workspace", "Choose a specific remote workspace instead of the filesystem root.")
+    }
+    val current = currentSession()
+    val epoch = synchronized(lock) {
+      if (channel?.isConnected == true || orchestratorChannel?.isConnected == true) {
+        throw SshTransportException("session_busy", "Stop the active SSH session before selecting another workspace.")
+      }
+      connectionEpoch
+    }
+    val sftp = openSftp(current)
+    return try {
+      val canonical = SshPath.normalize(sftp.realpath(path))
+        ?: throw SshTransportException("invalid_workspace", "The SSH server returned an invalid canonical workspace path.")
+      if (canonical == "/") {
+        throw SshTransportException("invalid_workspace", "Choose a specific remote workspace instead of the filesystem root.")
+      }
+      if (!sftp.stat(canonical).isDir) {
+        throw SshTransportException("workspace_not_directory", "The selected remote workspace is not a directory.")
+      }
+      synchronized(lock) {
+        if (session !== current || !current.isConnected || connectionEpoch != epoch) {
+          throw SshTransportException("stale_workspace", "The SSH connection changed while selecting the workspace.")
+        }
+        workspace.bind(canonical)
+      }
+      JSONObject().put("path", canonical)
+    } catch (cause: Throwable) {
+      throw classifySftp(cause)
+    } finally {
+      sftp.disconnect()
+    }
+  }
+
   fun version(raw: String): JSONObject {
     val request = SshVersionRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "CLI preflight configuration is invalid.")
-    val result = runExec(SshCommand.version(request.agent, request.directory))
+    val directory = workspace.require(request.directory)
+    val result = runExec(SshCommand.version(request.agent, directory))
     val combined = "${result.first}\n${result.second}".trim().take(MAX_OUTPUT_CHARS)
     return JSONObject()
       .put("agent", request.agent.id)
@@ -218,7 +258,8 @@ internal class SshTransport(
   fun authStatus(raw: String): JSONObject {
     val request = SshVersionRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "CLI authentication check is invalid.")
-    val result = runExec(SshCommand.authStatus(request.agent, request.directory))
+    val directory = workspace.require(request.directory)
+    val result = runExec(SshCommand.authStatus(request.agent, directory))
     val combined = "${result.first}\n${result.second}".trim().take(MAX_OUTPUT_CHARS)
     return JSONObject()
       .put("agent", request.agent.id)
@@ -241,6 +282,7 @@ internal class SshTransport(
   fun start(raw: String): JSONObject {
     val request = SshStartRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "SSH agent session configuration is invalid.")
+    val directory = workspace.require(request.directory)
     val id = "ssh_${UUID.randomUUID().toString().replace("-", "")}"
     val next = currentSession()
     synchronized(lock) {
@@ -253,10 +295,10 @@ internal class SshTransport(
     if (pty) channel.setPtyType("xterm-256color", request.cols, request.rows, request.width, request.height)
     channel.setCommand(
       when (request.setup) {
-        SshSetupAction.INSTALL -> SshCommand.install(request.agent, request.directory)
-        SshSetupAction.LOGIN -> SshCommand.login(request.agent, request.directory)
-        null -> if (request.operation == "prompt") SshCommand.prompt(request.agent, request.directory)
-        else SshCommand.interactive(request.agent, request.directory)
+        SshSetupAction.INSTALL -> SshCommand.install(request.agent, directory)
+        SshSetupAction.LOGIN -> SshCommand.login(request.agent, directory)
+        null -> if (request.operation == "prompt") SshCommand.prompt(request.agent, directory)
+        else SshCommand.interactive(request.agent, directory)
       },
     )
     if (request.operation == "prompt") {
@@ -297,6 +339,7 @@ internal class SshTransport(
   fun orchestratorStart(raw: String): JSONObject {
     val request = SshOrchestratorRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "Remote orchestrator configuration is invalid.")
+    val directory = workspace.require(request.directory)
     val next = currentSession()
     val id = "ssh_${UUID.randomUUID().toString().replace("-", "")}"
     synchronized(lock) {
@@ -306,8 +349,8 @@ internal class SshTransport(
     }
     val channel = next.openChannel("exec") as ChannelExec
     channel.setPty(false)
-    channel.setCommand(SshCommand.orchestrator(request.directory))
-    channel.setEnv("SLOPCODE_REMOTE_ORCHESTRATOR_ROOT", request.directory)
+    channel.setCommand(SshCommand.orchestrator(directory))
+    channel.setEnv("SLOPCODE_REMOTE_ORCHESTRATOR_ROOT", directory)
     try {
       channel.connect(CONNECT_TIMEOUT_MS)
       synchronized(lock) {
@@ -425,6 +468,7 @@ internal class SshTransport(
       orchestratorID = null
       session = null
       profile = null
+      workspace.reset()
       connectionEpoch += 1
       folderCache.clear()
     }

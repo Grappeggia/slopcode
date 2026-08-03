@@ -184,7 +184,9 @@ class SshTransportInstrumentedTest {
     }
     try {
       assertEquals("connected", connect(transport, profile, host, port, user, directory, key!!).optString("status"))
-      val started = transport.orchestratorStart(JSONObject().put("directory", directory).toString())
+      val workspacePath = transport.selectWorkspace(directory).optString("path")
+      assertTrue(workspacePath.startsWith("/") && workspacePath != "/")
+      val started = transport.orchestratorStart(JSONObject().put("directory", workspacePath).toString())
       assertTrue(started.optString("id").startsWith("ssh_"))
       send(
         transport,
@@ -194,7 +196,7 @@ class SshTransportInstrumentedTest {
           .put("type", "workspace.open")
           .put("requestID", "req_android_workspace")
           .put("idempotencyKey", "idem_android_workspace")
-          .put("workspace", JSONObject().put("id", "wrk_android").put("path", directory).put("name", "Android E2E"))
+          .put("workspace", JSONObject().put("id", "wrk_android").put("path", workspacePath).put("name", "Android E2E"))
           .put("agent", JSONObject().put("id", protocolAgent).put("capabilities", org.json.JSONArray(listOf("workspace", "sessions", "turns")))),
       )
       val workspace = waitForOrchestratorResponse(events, "req_android_workspace")

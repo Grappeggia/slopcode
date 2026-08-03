@@ -84,6 +84,18 @@ class SshModelsTest {
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("authentication failed", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("gemini-3.6-flash-high\nerror: login failed", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("not-authenticated", 0))
+    assertFalse(
+      SshAgent.ANTIGRAVITY.loggedIn(
+        "Error: Please sign in to view available models. Launch the CLI without arguments to sign in.",
+        1,
+      ),
+    )
+    assertFalse(
+      SshAgent.ANTIGRAVITY.loggedIn(
+        "gemini-3.6-flash-high\nPlease sign in to view available models.",
+        0,
+      ),
+    )
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("unexpected", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("gemini-3.6-flash-high", 1))
   }
@@ -141,6 +153,21 @@ class SshModelsTest {
   }
 
   @Test
+  fun `workspace scope requires one exact non-root canonical selection and resets`() {
+    val scope = SshWorkspaceScope()
+    assertEquals("workspace_selection_required", failure { scope.require("/srv/project") })
+    assertEquals("invalid_workspace", failure { scope.bind("/") })
+    assertEquals("invalid_workspace", failure { scope.bind("/srv/../etc") })
+    scope.bind("/srv/project")
+    assertEquals("/srv/project", scope.require("/srv/project"))
+    assertEquals("workspace_mismatch", failure { scope.require("/srv/project-sibling") })
+    assertEquals("workspace_mismatch", failure { scope.require("/srv/project/child") })
+    assertEquals("workspace_mismatch", failure { scope.require("/srv/project/link-outside") })
+    scope.reset()
+    assertEquals("workspace_selection_required", failure { scope.require("/srv/project") })
+  }
+
+  @Test
   fun `prefetch selects only immediate validated folders and respects the limit`() {
     val entries = JSONArray()
       .put(JSONObject().put("type", "directory").put("path", "/tmp/one"))
@@ -150,5 +177,12 @@ class SshModelsTest {
       .put(JSONObject().put("type", "directory").put("path", "/tmp/one/nested"))
     assertEquals(listOf("/tmp/one"), SshPrefetch.directories("/tmp", entries, 1))
     assertEquals(listOf("/tmp/one", "/tmp/two"), SshPrefetch.directories("/tmp", entries))
+  }
+
+  private fun failure(block: () -> Unit) = try {
+    block()
+    ""
+  } catch (cause: SshTransportException) {
+    cause.code
   }
 }

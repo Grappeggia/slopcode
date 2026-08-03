@@ -51,6 +51,33 @@ internal object SshPrefetch {
   }
 }
 
+internal class SshWorkspaceScope {
+  private var path: String? = null
+
+  @Synchronized
+  fun bind(value: String) {
+    if (value == "/" || SshPath.normalize(value) != value) {
+      throw SshTransportException("invalid_workspace", "Choose a specific canonical remote workspace directory.")
+    }
+    path = value
+  }
+
+  @Synchronized
+  fun require(value: String): String {
+    val selected = path
+      ?: throw SshTransportException("workspace_selection_required", "Select a remote workspace before running commands.")
+    if (value != selected) {
+      throw SshTransportException("workspace_mismatch", "The requested directory is not the selected remote workspace.")
+    }
+    return selected
+  }
+
+  @Synchronized
+  fun reset() {
+    path = null
+  }
+}
+
 internal enum class SshAgent(
   val id: String,
   val binary: String,
@@ -251,6 +278,7 @@ internal fun SshAgent.loggedIn(output: String, exitCode: Int): Boolean {
   if (exitCode != 0) return false
   val value = output.trim()
   if (this == SshAgent.ANTIGRAVITY) {
+    if (Regex("\\b(?:please\\s+)?sign\\s+in\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
     if (Regex("\\b(?:auth(?:entication)?|login|error|not-authenticated)\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
     return Regex("(?m)^(?:gemini|claude|gpt)(?:[-_][a-z0-9.]+)+$", RegexOption.IGNORE_CASE).containsMatchIn(value)
   }

@@ -112,8 +112,8 @@ describe("remote orchestrator", () => {
       agent: "antigravity",
       cwd,
       emit: (event) => events.push(event),
-      start: (agent, dir, text) => {
-        value = argv(agent, text)
+      start: (agent, dir, text, format) => {
+        value = argv(agent, text, format)
         return spawn(process.execPath, [fixture, agent, text], {
           cwd: dir,
           shell: false,
@@ -134,7 +134,59 @@ describe("remote orchestrator", () => {
       const value = argv("antigravity", prompt)
       expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", "--", prompt])
       expect(value.slice(value.indexOf("--") + 1)).toEqual([prompt])
+      expect(argv("antigravity", prompt, "text")).toEqual(["agy", "--print", "--", prompt])
     }
+  })
+
+  test("falls back once to fixed text argv only for an unsupported stream-json option", async () => {
+    const cwd = await temp()
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-antigravity.ts")
+    const prompt = 'safe; $(not-a-command) "quoted"\nnext line'
+    const events: ACPEvent[] = []
+    const launches: Array<readonly string[]> = []
+    const session = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: (event) => events.push(event),
+      start: (agent, dir, text, format) => {
+        const value = argv(agent, text, format)
+        launches.push(value)
+        return spawn(process.execPath, [fixture, ...value.slice(1)], {
+          cwd: dir,
+          env: { ...process.env, AGY_TEST_PROMPT: text },
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      },
+    })
+    await session.turn(prompt)
+    expect(launches).toEqual([
+      ["agy", "--print", "--output-format", "stream-json", "--", prompt],
+      ["agy", "--print", "--", prompt],
+    ])
+    expect(events).toContainEqual(expect.objectContaining({ type: "output", text: "fallback-ok" }))
+    await session.close()
+  })
+
+  test("does not retry arbitrary Antigravity failures", async () => {
+    const cwd = await temp()
+    let launches = 0
+    const session = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: () => undefined,
+      start: () => {
+        launches += 1
+        return spawn(process.execPath, ["-e", 'process.stderr.write("network failed\\n"); process.exit(7)'], {
+          cwd,
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      },
+    })
+    await expect(session.turn("safe prompt")).rejects.toThrow("network failed")
+    expect(launches).toBe(1)
+    await session.close()
   })
 
   test("drops an oversized partial output record and parses the following record", async () => {

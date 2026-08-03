@@ -69,6 +69,10 @@ export type SshHome = {
   path: string
 }
 
+export type SshWorkspaceSelection = {
+  path: string
+}
+
 export type SshPreflight = {
   agent: SshAgent
   executable: string
@@ -113,6 +117,7 @@ export type SshTransport = {
   cleanup(): Promise<unknown>
   home(): Promise<string>
   list(path: string, showHidden?: boolean): Promise<SshFolderListing>
+  selectWorkspace(path: string): Promise<string>
   execVersion(agent: SshAgent, directory: string): Promise<SshPreflight>
   execAuthStatus(agent: SshAgent, directory: string): Promise<SshAuthStatus>
   start(input: {
@@ -321,6 +326,12 @@ export function parseSshListing(value: unknown): SshFolderListing | undefined {
 export function parseSshHome(value: unknown): string | undefined {
   if (!object(value) || typeof value.path !== "string") return
   return validSshPath(value.path)
+}
+
+export function parseSshWorkspaceSelection(value: unknown): SshWorkspaceSelection | undefined {
+  const path = parseSshHome(value)
+  if (!path || path === "/") return
+  return { path }
 }
 
 export function parseSshPreflight(value: unknown): SshPreflight | undefined {
