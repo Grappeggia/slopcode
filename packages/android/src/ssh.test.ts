@@ -145,7 +145,7 @@ describe("direct SSH boundary parsing", () => {
         agent: "antigravity-cli",
         executable: "agy",
         exitCode: 0,
-        output: "Available agents:\n  gemini-3-pro",
+        output: "authenticated",
         ok: true,
         loggedIn: true,
       }),

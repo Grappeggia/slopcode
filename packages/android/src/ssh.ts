@@ -10,7 +10,7 @@ export function sshSetupRecipe(agent: SshAgent, action: SshSetupAction) {
       : agent === "codex-cli"
         ? "npm install -g @openai/codex"
         : agent === "opencode-cli"
-        ? "npm install -g opencode-ai"
+          ? "npm install -g opencode-ai"
           : agent === "claude-code"
             ? "npm install -g @anthropic-ai/claude-code"
             : "curl -fsSL https://antigravity.google/cli/install.sh | bash"

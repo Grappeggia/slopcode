@@ -73,15 +73,22 @@ class SshModelsTest {
     assertTrue(SshCommand.authStatus(SshAgent.CODEX, "/tmp/project").contains("exec \"codex\" \"login\" \"status\""))
     assertTrue(SshCommand.authStatus(SshAgent.CLAUDE, "/tmp/project").contains("exec \"claude\" \"auth\" \"status\""))
     assertTrue(SshCommand.version(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\" \"--version\""))
-    assertTrue(SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\" \"agents\""))
+    assertTrue(
+      SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project")
+        .contains("if [ -s \"\u0024HOME/.gemini/antigravity-cli/antigravity-oauth-token\" ]"),
+    )
+    assertTrue(SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project").contains("authenticated"))
+    assertTrue(SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project").contains("not-authenticated"))
     assertTrue(SshAgent.CODEX.loggedIn("Logged in using ChatGPT", 0))
     assertTrue(SshAgent.OPENCODE.loggedIn("4 credentials", 0))
     assertFalse(SshAgent.CLAUDE.loggedIn("{\"loggedIn\":false}", 0))
     assertFalse(SshAgent.SLOPCODE.loggedIn("0 credentials", 0))
     assertFalse(SshAgent.CODEX.loggedIn("Logged in using ChatGPT", 1))
-    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("Available agents:", 0))
-    assertTrue(SshAgent.ANTIGRAVITY.loggedIn("Available agents:\n  gemini-3-pro", 0))
-    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("Available agents:\n  gemini-3-pro", 1))
+    assertTrue(SshAgent.ANTIGRAVITY.loggedIn("authenticated", 0))
+    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("not-authenticated", 0))
+    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("", 0))
+    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("unexpected", 0))
+    assertFalse(SshAgent.ANTIGRAVITY.loggedIn("authenticated", 1))
   }
 
   @Test
