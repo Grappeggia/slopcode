@@ -187,6 +187,7 @@ describe("remote orchestrator", () => {
     const root = await temp()
     const output: Frame[] = []
     const opened: string[] = []
+    let closed = 0
     const bridge = new Bridge(
       root,
       (value) => output.push(value),
@@ -198,7 +199,9 @@ describe("remote orchestrator", () => {
           async turn() {},
           approval: () => false,
           question: () => false,
-          async close() {},
+          async close() {
+            closed += 1
+          },
         }
       },
     )
@@ -219,6 +222,7 @@ describe("remote orchestrator", () => {
     expect(opened).toEqual(["antigravity"])
     expect(sessionResponses(output)).toHaveLength(1)
     await bridge.close()
+    expect(closed).toBe(1)
   })
 
   test("omits invalid ACP approval locations without stranding permission requests", async () => {

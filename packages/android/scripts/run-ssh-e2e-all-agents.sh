@@ -16,7 +16,9 @@ directory=${SSH_DIRECTORY:-/tmp}
 port=${SSH_PORT:-22}
 
 failed=0
-for agent in slopcode-cli codex-cli opencode-cli claude-code; do
+echo "This harness uses real CLIs on the configured disposable SSH host; it does not use a fake model fixture."
+echo "A successful model turn still requires the host's real agent credentials and service access."
+for agent in slopcode-cli codex-cli opencode-cli claude-code antigravity-cli; do
   echo "Running native SSH E2E for $agent"
   if ! ./gradlew :app:connectedDebugAndroidTest \
     -Pandroid.testInstrumentationRunnerArguments.sshKeyB64="$key" \
@@ -35,4 +37,4 @@ if (( failed != 0 )); then
   exit 1
 fi
 
-echo "Native SSH E2E passed for all four allowlisted agents."
+echo "Native SSH E2E passed for all five allowlisted agents."

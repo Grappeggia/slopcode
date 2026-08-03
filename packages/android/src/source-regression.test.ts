@@ -84,6 +84,17 @@ describe("android security source regressions", () => {
     expect(session).toContain("Remote agent session")
     expect(session).toContain("Approval required")
     expect(session).toContain("Diagnostics")
+    expect(session).toContain("Antigravity headless session")
+    expect(session).toContain("Open Interactive CLI")
+    const pty = await Bun.file(`${root}/src/ssh-session.tsx`).text()
+    expect(pty).toContain("Return to agentic session")
+    const instrumented = await Bun.file(
+      `${root}/app/src/androidTest/java/dev/slopcode/android/SshTransportInstrumentedTest.kt`,
+    ).text()
+    const harness = await Bun.file(`${root}/scripts/run-ssh-e2e-all-agents.sh`).text()
+    expect(instrumented).toContain('"antigravity-cli" -> "antigravity"')
+    expect(harness).toContain("antigravity-cli")
+    expect(harness).toContain("real CLIs")
     const remoteConnect = await Bun.file(`${root}/src/remote-connect.tsx`).text()
     expect(remoteConnect).toContain("getReader()")
     expect(remoteConnect).toContain("AbortController")

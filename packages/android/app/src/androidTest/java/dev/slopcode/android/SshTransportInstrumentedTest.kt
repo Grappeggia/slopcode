@@ -174,6 +174,7 @@ class SshTransportInstrumentedTest {
       "codex-cli" -> "codex"
       "opencode-cli" -> "opencode"
       "claude-code" -> "claude"
+      "antigravity-cli" -> "antigravity"
       else -> "slopcode"
     }
     val profile = "$user@$host:$port"

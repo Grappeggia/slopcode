@@ -502,10 +502,17 @@ class AndroidBridge(
           arity(args, 0)
           sshAsync(id, replyProxy) { ssh.status() }
         }
-        "sshDisconnect", "sshCleanup" -> {
+        "sshDisconnect" -> {
           arity(args, 0)
           sshAsync(id, replyProxy) {
             ssh.disconnect()
+            ssh.status()
+          }
+        }
+        "sshCleanup" -> {
+          arity(args, 0)
+          sshAsync(id, replyProxy) {
+            ssh.cleanup()
             ssh.status()
           }
         }

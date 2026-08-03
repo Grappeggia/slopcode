@@ -353,6 +353,17 @@ internal class SshTransport(
     runCatching { next?.disconnect() }
   }
 
+  fun cleanup() {
+    val next = synchronized(lock) {
+      val value = channel
+      channel = null
+      output = null
+      channelID = null
+      value
+    }
+    runCatching { next?.disconnect() }
+  }
+
   fun input(value: String) {
     if (value.toByteArray(StandardCharsets.UTF_8).size > MAX_INPUT_BYTES || value.contains('\u0000')) {
       throw SshTransportException("invalid_input", "SSH input is too large or contains an invalid character.")

@@ -1,10 +1,12 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import type { SshEvent, SshTransport } from "./ssh"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
+import { returnToAgentic } from "./ssh-session-flow"
 
 type Props = {
   ssh: SshTransport
   workspace: SshWorkspaceState
+  onAgentic: () => void
   onDisconnected: () => void
 }
 
@@ -166,6 +168,18 @@ export function SshSession(props: Props) {
     props.onDisconnected()
   }
 
+  const agentic = async () => {
+    if (busy()) return
+    setBusy(true)
+    setError("")
+    try {
+      await returnToAgentic(props.ssh, props.onAgentic)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not close the interactive SSH session.")
+      setBusy(false)
+    }
+  }
+
   return (
     <main class="min-h-screen bg-surface-base text-text-strong flex items-center justify-center p-6">
       <section class="w-full max-w-3xl rounded-xl border border-border-weak-base bg-surface-raised-base p-6 flex flex-col gap-4">
@@ -216,6 +230,14 @@ export function SshSession(props: Props) {
             class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
           >
             Disconnect
+          </button>
+          <button
+            type="button"
+            disabled={busy()}
+            onClick={() => void agentic()}
+            class="rounded-md border border-border-weak-base px-3 py-2 disabled:opacity-50"
+          >
+            Return to agentic session
           </button>
         </div>
 

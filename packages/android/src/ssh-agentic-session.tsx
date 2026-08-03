@@ -16,10 +16,12 @@ import {
   type OrchestratorWire,
 } from "./ssh-orchestrator"
 import { SshShell } from "./ssh-shell"
+import { handoffToInteractive, reconnectAgentic, stopAgentic } from "./ssh-session-flow"
 
 type Props = {
   ssh: SshTransport
   workspace: SshWorkspaceState
+  onInteractive: () => void
   onDisconnected: () => void
 }
 
@@ -167,9 +169,12 @@ export function SshAgenticSession(props: Props) {
   const stop = async () => {
     if (busy()) return
     setBusy(true)
-    await props.ssh.orchestratorStop().catch((cause) => showError(cause, "Could not stop the remote agent."))
-    closeWire()
-    setState((previous) => ({ ...previous, phase: "stopped", interaction: undefined }))
+    try {
+      await stopAgentic(props.ssh, closeWire)
+      setState((previous) => ({ ...previous, phase: "stopped", interaction: undefined }))
+    } catch (cause) {
+      showError(cause, "Could not stop the remote agent.")
+    }
     setBusy(false)
   }
 
@@ -191,8 +196,27 @@ export function SshAgenticSession(props: Props) {
 
   const reconnect = async () => {
     if (busy()) return
-    await props.ssh.orchestratorStop().catch(() => undefined)
-    await start()
+    setBusy(true)
+    setError("")
+    try {
+      await reconnectAgentic(props.ssh, closeWire, start)
+    } catch (cause) {
+      showError(cause, "Could not reconnect the remote agent session.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const interactive = async () => {
+    if (busy()) return
+    setBusy(true)
+    setError("")
+    try {
+      await handoffToInteractive(props.ssh, closeWire, props.onInteractive)
+    } catch (cause) {
+      showError(cause, "Could not stop the remote agent before opening the interactive CLI.")
+      setBusy(false)
+    }
   }
 
   const choose = (value: string) => {
@@ -272,6 +296,11 @@ export function SshAgenticSession(props: Props) {
               class="rounded-xl border border-border-critical-base bg-surface-critical-weak p-4 flex flex-col gap-3"
             >
               <p class="text-14-regular">{error() || state().error}</p>
+              <p class="text-12-regular text-text-weak">
+                {props.workspace.agent === "antigravity-cli"
+                  ? "Check the SSH connection, Antigravity sign-in, and workspace access, then reconnect."
+                  : "Check the SSH connection and workspace access, then reconnect."}
+              </p>
               <div class="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -291,6 +320,19 @@ export function SshAgenticSession(props: Props) {
                 </Show>
               </div>
             </div>
+          </Show>
+
+          <Show when={props.workspace.agent === "antigravity-cli"}>
+            <section
+              class="rounded-xl border border-border-weak-base bg-surface-base p-4"
+              aria-label="Antigravity limitations"
+            >
+              <p class="text-14-medium">Antigravity headless session</p>
+              <p class="mt-1 text-12-regular text-text-weak">
+                Antigravity runs through its one-shot CLI. Prompts and text output are supported; structured tool and
+                approval events are not available here.
+              </p>
+            </section>
           </Show>
 
           <Show when={state().items.length > 0}>
@@ -454,6 +496,18 @@ export function SshAgenticSession(props: Props) {
             <Show when={state().phase === "completed"}>
               <span class="text-12-regular text-text-weak">Turn complete. Ask for the next outcome when ready.</span>
             </Show>
+            <Show when={state().phase === "stopped"}>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-12-regular text-text-weak">Stopped. Reconnect, then retry the last request.</span>
+                <button
+                  type="button"
+                  onClick={() => void reconnect()}
+                  class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
+                >
+                  Reconnect
+                </button>
+              </div>
+            </Show>
           </div>
 
           <details class="rounded-xl border border-border-weak-base bg-surface-base p-3">
@@ -462,7 +516,19 @@ export function SshAgenticSession(props: Props) {
               <p>Transport: native SSH · backend: {agentID(props.workspace.agent)}</p>
               <p>Session: {state().sessionID ?? "starting"}</p>
               <p>Cursor: {state().cursor ?? "none"}</p>
-              <p>Raw PTY output is kept out of the primary experience. Use this panel for transport state only.</p>
+              <p>
+                Raw PTY output is kept out of the primary experience. Use Interactive CLI for terminal prompts and
+                sign-in.
+              </p>
+              <button
+                type="button"
+                disabled={busy()}
+                onClick={() => void interactive()}
+                class="w-fit rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+              >
+                Open Interactive CLI
+              </button>
+              <p>Opening it stops this agentic session and keeps this SSH workspace connected.</p>
             </div>
           </details>
         </section>

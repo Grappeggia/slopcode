@@ -19,6 +19,7 @@ import { remoteCapabilityEnabled } from "./remote-workspace-state"
 import { parseRemoteSessionDeepLink, type RemoteSessionDeepLink } from "./remote-jobs"
 import { SshConnect } from "./ssh-connect"
 import { SshAgenticSession } from "./ssh-agentic-session"
+import { SshSession } from "./ssh-session"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 
 function emitDeepLinks(urls: string[]) {
@@ -54,25 +55,60 @@ export async function mountAndroidApp() {
     if (!sshWorkspace || !status.connected || status.profile !== sshWorkspace.profile) {
       render(() => {
         const [workspace, setWorkspace] = createSignal<SshWorkspaceState>()
+        const [view, setView] = createSignal<"agentic" | "interactive">("agentic")
         return (
           <Show
             when={workspace()}
             fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
           >
             {(value) => (
-              <SshAgenticSession ssh={shell.ssh!} workspace={value()} onDisconnected={() => window.location.reload()} />
+              <Show
+                when={view() === "agentic"}
+                fallback={
+                  <SshSession
+                    ssh={shell.ssh!}
+                    workspace={value()}
+                    onAgentic={() => setView("agentic")}
+                    onDisconnected={() => window.location.reload()}
+                  />
+                }
+              >
+                <SshAgenticSession
+                  ssh={shell.ssh!}
+                  workspace={value()}
+                  onInteractive={() => setView("interactive")}
+                  onDisconnected={() => window.location.reload()}
+                />
+              </Show>
             )}
           </Show>
         )
       }, root)
       return
     }
-    render(
-      () => (
-        <SshAgenticSession ssh={shell.ssh!} workspace={sshWorkspace} onDisconnected={() => window.location.reload()} />
-      ),
-      root,
-    )
+    render(() => {
+      const [view, setView] = createSignal<"agentic" | "interactive">("agentic")
+      return (
+        <Show
+          when={view() === "agentic"}
+          fallback={
+            <SshSession
+              ssh={shell.ssh!}
+              workspace={sshWorkspace}
+              onAgentic={() => setView("agentic")}
+              onDisconnected={() => window.location.reload()}
+            />
+          }
+        >
+          <SshAgenticSession
+            ssh={shell.ssh!}
+            workspace={sshWorkspace}
+            onInteractive={() => setView("interactive")}
+            onDisconnected={() => window.location.reload()}
+          />
+        </Show>
+      )
+    }, root)
     return
   }
   const workspace = initial.state.workspace?.workspace
