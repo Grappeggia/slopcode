@@ -22,6 +22,7 @@ import {
   createSshConnectionGate,
   createSshCredentialLoader,
   createSshOnboardingGeneration,
+  leaveSshOnboarding,
   resetSshOnboarding,
   type SshConnectAuth,
 } from "./ssh-connect-state"
@@ -525,13 +526,15 @@ export function SshConnect(props: Props) {
     }
   }
 
-  const leave = async () => {
-    const attempt = connections.start()
-    onboarding.advance()
-    clearOnboarding()
-    setStarted(false)
-    await connections.close(attempt)
-  }
+  const leave = () =>
+    leaveSshOnboarding({
+      connections,
+      onboarding,
+      reset: () => {
+        clearOnboarding()
+        setStarted(false)
+      },
+    })
 
   const checkPreflight = async (offerLogin = true, request = onboarding.current(), profile = selectedProfile()) => {
     if (!active(request, profile) || !connected()) return false

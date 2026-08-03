@@ -4,6 +4,7 @@ import {
   createSshConnectionGate,
   createSshCredentialLoader,
   createSshOnboardingGeneration,
+  leaveSshOnboarding,
   resetSshOnboarding,
 } from "./ssh-connect-state"
 
@@ -160,10 +161,55 @@ describe("SSH onboarding transitions", () => {
     ).toBeUndefined()
     closing.resolve(undefined)
     expect(await disconnect).toBeTrue()
+  })
 
-    const source = await Bun.file(`${import.meta.dir}/ssh-connect.tsx`).text()
-    const leave = source.slice(source.indexOf("const leave"), source.indexOf("const checkPreflight"))
-    expect(leave.indexOf("clearOnboarding()")).toBeLessThan(leave.indexOf("await connections.close"))
+  test("leaves before a deferred disconnect and preserves a newer workspace attempt", async () => {
+    const closing = deferred<undefined>()
+    const calls: string[] = []
+    const gate = createSshConnectionGate({
+      status: async () => ({ connected: true, profile: "marcos@mac.example.com:22" }),
+      disconnect: async () => {
+        calls.push("disconnect")
+        return closing.promise
+      },
+    })
+    const generation = createSshOnboardingGeneration()
+    let state = {
+      connected: true,
+      profile: "marcos@mac.example.com:22",
+      directory: "/Users/marcos/old-workspace",
+      agent: "slopcode-cli",
+    }
+    const leave = leaveSshOnboarding({
+      connections: gate,
+      onboarding: generation,
+      reset: () => {
+        const next = resetSshOnboarding()
+        state = { connected: next.connected, profile: "", directory: next.directory, agent: "slopcode-cli" }
+      },
+    })
+
+    await Promise.resolve()
+    expect(calls).toEqual(["disconnect"])
+    expect(state.connected).toBeFalse()
+    const newer = gate.start()
+    const ready = gate.ready(newer)
+    state = {
+      connected: true,
+      profile: "marcos@mac.example.com:22",
+      directory: "/Users/marcos/new-workspace",
+      agent: "codex-cli",
+    }
+    closing.resolve(undefined)
+
+    expect(await leave).toBeFalse()
+    expect(await ready).toBeTrue()
+    expect(state).toEqual({
+      connected: true,
+      profile: "marcos@mac.example.com:22",
+      directory: "/Users/marcos/new-workspace",
+      agent: "codex-cli",
+    })
   })
 
   test("does not expose a draft computer or mismatched folder in shell navigation", () => {

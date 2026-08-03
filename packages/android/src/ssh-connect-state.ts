@@ -11,6 +11,15 @@ type ConnectionTransport = {
   disconnect(): Promise<unknown>
 }
 
+type ConnectionGate = {
+  start(): number
+  close(request: number): Promise<boolean>
+}
+
+type OnboardingGeneration = {
+  advance(): number
+}
+
 export function emptySshCredentials(auth: SshConnectAuth = "password") {
   return {
     auth,
@@ -138,4 +147,15 @@ export function createSshConnectionGate(transport: ConnectionTransport) {
       })
     },
   }
+}
+
+export function leaveSshOnboarding(input: {
+  connections: ConnectionGate
+  onboarding: OnboardingGeneration
+  reset(): void
+}) {
+  const request = input.connections.start()
+  input.onboarding.advance()
+  input.reset()
+  return input.connections.close(request)
 }
