@@ -195,7 +195,11 @@ export async function connect(input: {
       return
     }
     if (current.type === "plan") {
-      emit({ type: "plan", id: nativeID, content: clean(current.text, AgentOrchestrationLimits.maxTextBytes, "Plan unavailable") })
+      emit({
+        type: "plan",
+        id: nativeID,
+        content: clean(current.text, AgentOrchestrationLimits.maxTextBytes, "Plan unavailable"),
+      })
       return
     }
     if (current.type === "userMessage" || current.type === "hookPrompt" || current.type === "contextCompaction") return
@@ -260,7 +264,9 @@ export async function connect(input: {
     const finish = () => {
       if (answers.size < values.length) return
       respond(requestID, {
-        answers: Object.fromEntries(values.map((value) => [id(value.id), { answers: [answers.get(id(value.id)) ?? ""] }])),
+        answers: Object.fromEntries(
+          values.map((value) => [id(value.id), { answers: [answers.get(id(value.id)) ?? ""] }]),
+        ),
       })
     }
     for (const value of values) {
@@ -418,12 +424,14 @@ export async function connect(input: {
       return
     }
     if (typeof value.method === "string")
-      queue = queue.then(() => notification(value)).catch((error: unknown) => {
-        emit({
-          type: "retry",
-          reason: clean(error instanceof Error ? error.message : "Codex App Server event failed", 2 * 1024),
+      queue = queue
+        .then(() => notification(value))
+        .catch((error: unknown) => {
+          emit({
+            type: "retry",
+            reason: clean(error instanceof Error ? error.message : "Codex App Server event failed", 2 * 1024),
+          })
         })
-      })
   }
   child.stdout.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk])
@@ -493,17 +501,22 @@ export async function connect(input: {
     async turn(prompt) {
       if (closed) throw new Error("Codex App Server session is closed")
       if (turns.size) throw new Error("Codex already has an active turn")
-      const result = object(await request("turn/start", {
-        threadId: nativeID,
-        input: [{ type: "text", text: prompt, text_elements: [] }],
-      }))
+      const result = object(
+        await request("turn/start", {
+          threadId: nativeID,
+          input: [{ type: "text", text: prompt, text_elements: [] }],
+        }),
+      )
       const nativeTurn = clean(object(result.turn).id, 512)
       if (!nativeTurn) throw new Error("Codex App Server did not return a turn ID")
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          turns.delete(nativeTurn)
-          reject(new Error("Codex App Server turn timed out"))
-        }, 10 * 60 * 1_000)
+        const timer = setTimeout(
+          () => {
+            turns.delete(nativeTurn)
+            reject(new Error("Codex App Server turn timed out"))
+          },
+          10 * 60 * 1_000,
+        )
         turns.set(nativeTurn, { resolve, reject, timer })
       })
     },

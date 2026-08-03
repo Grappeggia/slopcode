@@ -431,7 +431,8 @@ export function SshConnect(props: Props) {
   const refreshAgentStatuses = async (folder: string, request = onboarding.current(), profile = selectedProfile()) => {
     const results = await Promise.all(
       SSH_AGENTS.map(async (value) => {
-        const server = value === "codex-cli" ? await props.ssh.codexAppServerStatus(folder).catch(() => undefined) : undefined
+        const server =
+          value === "codex-cli" ? await props.ssh.codexAppServerStatus(folder).catch(() => undefined) : undefined
         if (value === "codex-cli") return { value, result: server?.preflight, auth: server?.auth, server }
         const result = await props.ssh.execVersion(value, folder).catch(() => undefined)
         const auth = result?.ok ? await props.ssh.execAuthStatus(value, folder).catch(() => undefined) : undefined
@@ -452,14 +453,14 @@ export function SshConnect(props: Props) {
                 ? "Not installed"
                 : "Needs setup"
             : result
-            ? !result.ok
-              ? result.exitCode === 127
-                ? "Not installed"
-                : "Needs setup"
-              : auth?.loggedIn
-                ? "Ready"
-                : "Needs setup"
-            : "Needs setup",
+              ? !result.ok
+                ? result.exitCode === 127
+                  ? "Not installed"
+                  : "Needs setup"
+                : auth?.loggedIn
+                  ? "Ready"
+                  : "Needs setup"
+              : "Needs setup",
         ]),
       ),
     )
@@ -613,10 +614,22 @@ export function SshConnect(props: Props) {
       if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
       setAgentStatuses((current) => ({
         ...current,
-        [selected]: server ? (server.ready ? "Ready" : server.state === "not_installed" ? "Not installed" : "Needs setup") : result.ok ? "Ready" : result.exitCode === 127 ? "Not installed" : "Needs setup",
+        [selected]: server
+          ? server.ready
+            ? "Ready"
+            : server.state === "not_installed"
+              ? "Not installed"
+              : "Needs setup"
+          : result.ok
+            ? "Ready"
+            : result.exitCode === 127
+              ? "Not installed"
+              : "Needs setup",
       }))
       if (selected === "codex-cli") setAppServer(server)
-      setPreflight(server?.output || result.output || result.error || `${result.executable} exited with ${result.exitCode}.`)
+      setPreflight(
+        server?.output || result.output || result.error || `${result.executable} exited with ${result.exitCode}.`,
+      )
       if (result.exitCode === 127) {
         setSetup({ action: "install", state: "available", output: "" })
         setError("")
@@ -1312,13 +1325,21 @@ export function SshConnect(props: Props) {
                   </p>
                 </div>
                 <ol class="grid grid-cols-3 gap-2" aria-label="Codex App Server checklist">
-                  <li class={`rounded-lg border p-3 text-12-regular ${appServer()?.preflight.ok ? "border-border-brand-base" : "border-border-weak-base"}`}>
+                  <li
+                    class={`rounded-lg border p-3 text-12-regular ${appServer()?.preflight.ok ? "border-border-brand-base" : "border-border-weak-base"}`}
+                  >
                     <span class="block text-text-weak">1</span>
-                    <span class="block mt-1">{appServer()?.preflight.ok ? "Installed — complete" : "Installed — checking"}</span>
+                    <span class="block mt-1">
+                      {appServer()?.preflight.ok ? "Installed — complete" : "Installed — checking"}
+                    </span>
                   </li>
-                  <li class={`rounded-lg border p-3 text-12-regular ${appServer()?.auth?.loggedIn ? "border-border-brand-base" : "border-border-weak-base"}`}>
+                  <li
+                    class={`rounded-lg border p-3 text-12-regular ${appServer()?.auth?.loggedIn ? "border-border-brand-base" : "border-border-weak-base"}`}
+                  >
                     <span class="block text-text-weak">2</span>
-                    <span class="block mt-1">{appServer()?.auth?.loggedIn ? "Signed in — complete" : "Signed in — checking"}</span>
+                    <span class="block mt-1">
+                      {appServer()?.auth?.loggedIn ? "Signed in — complete" : "Signed in — checking"}
+                    </span>
                   </li>
                   <li
                     class={`rounded-lg border p-3 text-12-regular ${appServer()?.ready ? "border-border-brand-base" : "border-border-weak-base"}`}

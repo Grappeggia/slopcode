@@ -471,7 +471,8 @@ export function parseSshCodexAppServerStatus(value: unknown): SshCodexAppServerS
     typeof value.output !== "string"
   )
     return
-  if (value.state === "ready" && (value.ready !== true || value.handshake !== "verified" || auth?.loggedIn !== true)) return
+  if (value.state === "ready" && (value.ready !== true || value.handshake !== "verified" || auth?.loggedIn !== true))
+    return
   if (value.state !== "ready" && value.ready !== false) return
   return {
     executable: "codex",

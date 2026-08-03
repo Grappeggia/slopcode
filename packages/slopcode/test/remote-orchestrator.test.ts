@@ -6,10 +6,7 @@ import { spawn } from "node:child_process"
 import { Schema } from "effect"
 import { AgentOrchestrationFrame, AgentOrchestrationLimits } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
-import {
-  argv as appServerArgv,
-  connect as connectCodex,
-} from "@/remote-orchestrator/codex-app-server"
+import { argv as appServerArgv, connect as connectCodex } from "@/remote-orchestrator/codex-app-server"
 import { argv, connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
 import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
@@ -135,12 +132,16 @@ describe("remote orchestrator", () => {
       command: "printf fixture",
       cwd,
     })
-    for (const item of events.filter((event): event is Extract<ACPEvent, { type: "approval" }> => event.type === "approval"))
+    for (const item of events.filter(
+      (event): event is Extract<ACPEvent, { type: "approval" }> => event.type === "approval",
+    ))
       expect(session.approval(item.id, true)).toBe(true)
     await waitFor(() => events.filter((event) => event.type === "question").length >= 2)
     const question = events.find((event) => event.type === "question" && event.prompt === "Continue fixture?")
     expect(question).toMatchObject({ type: "question", prompt: "Continue fixture?", options: ["Yes"] })
-    for (const item of events.filter((event): event is Extract<ACPEvent, { type: "question" }> => event.type === "question"))
+    for (const item of events.filter(
+      (event): event is Extract<ACPEvent, { type: "question" }> => event.type === "question",
+    ))
       expect(session.question(item.id, "Yes")).toBe(true)
     await turn
     expect(events.map((event) => event.type)).toEqual(
