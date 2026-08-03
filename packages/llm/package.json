@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "0.2.211",
+  "version": "0.2.212",
   "name": "@slopcode-ai/llm",
   "type": "module",
   "license": "MIT",
