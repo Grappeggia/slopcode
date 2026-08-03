@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { connectedSshWorkspace, createSshCredentialLoader, resetSshOnboarding } from "./ssh-connect-state"
+import {
+  connectedSshWorkspace,
+  createSshCredentialLoader,
+  createSshOnboardingGeneration,
+  resetSshOnboarding,
+} from "./ssh-connect-state"
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined
@@ -57,6 +62,35 @@ describe("SSH onboarding transitions", () => {
     expect(await old).toBeFalse()
     expect(await next).toBeTrue()
     expect(values).toEqual(["privateKey"])
+  })
+
+  test("does not replace manually edited credentials for the same saved profile", async () => {
+    const result = deferred<{ auth: "password"; password: string } | undefined>()
+    const loader = createSshCredentialLoader({ credentialGet: () => result.promise })
+    const values: string[] = []
+    const request = loader.load(
+      "marcos@mac.example.com:22",
+      () => "marcos@mac.example.com:22",
+      (credential) => {
+        if (credential.auth === "password") values.push(credential.password)
+      },
+    )
+
+    loader.invalidate()
+    result.resolve({ auth: "password", password: "saved-password" })
+
+    expect(await request).toBeFalse()
+    expect(values).toEqual([])
+  })
+
+  test("invalidates every in-flight onboarding operation after a transition", () => {
+    const generation = createSshOnboardingGeneration()
+    const request = generation.current()
+
+    generation.advance()
+
+    expect(generation.matches(request)).toBeFalse()
+    expect(generation.matches(generation.current())).toBeTrue()
   })
 
   test("does not expose a draft computer or mismatched folder in shell navigation", () => {

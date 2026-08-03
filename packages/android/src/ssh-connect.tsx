@@ -20,6 +20,7 @@ import { SshShell } from "./ssh-shell"
 import {
   connectedSshWorkspace,
   createSshCredentialLoader,
+  createSshOnboardingGeneration,
   resetSshOnboarding,
   type SshConnectAuth,
 } from "./ssh-connect-state"
@@ -139,8 +140,7 @@ export function SshConnect(props: Props) {
   const [checkingLogin, setCheckingLogin] = createSignal(false)
   const [agentStatuses, setAgentStatuses] = createSignal<Partial<Record<SshAgent, AgentStatus>>>({})
   const credentials = createSshCredentialLoader(props.ssh)
-  let browsing = 0
-  let connecting = 0
+  const onboarding = createSshOnboardingGeneration()
   const selectedProfile = createMemo(() => {
     const normalized = normalizeSshTarget(target())
     const parsed = normalized ? parseSshTarget(normalized) : undefined
@@ -161,6 +161,10 @@ export function SshConnect(props: Props) {
     return (listing()?.entries ?? []).filter((entry) => !term || entry.name.toLowerCase().includes(term))
   })
 
+  function active(request: number, profile = selectedProfile()) {
+    return onboarding.matches(request) && profile === selectedProfile()
+  }
+
   onMount(() => {
     const unsubscribe = props.ssh.subscribe((event) => void onSshEvent(event))
     onCleanup(unsubscribe)
@@ -172,6 +176,8 @@ export function SshConnect(props: Props) {
   async function onSshEvent(event: SshEvent) {
     const current = setup()
     if (!current) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     if (event.type === "started") {
       if (event.agent !== agent() || event.operation !== current.action) return
       if (current.id && current.id !== event.id) return
@@ -180,10 +186,12 @@ export function SshConnect(props: Props) {
     }
     if (!current.id || current.id !== event.id) return
     if (event.type === "output") {
+      if (!active(request, profile) || setup() !== current) return
       setSetup({ ...current, output: appendOutput(current.output, event.data) })
       return
     }
     if (event.type === "error") {
+      if (!active(request, profile) || setup() !== current) return
       setSetup({ ...current, state: "failed", output: appendOutput(current.output, `\n${event.message}\n`) })
       setError(event.message)
       setBusy(false)
@@ -193,11 +201,12 @@ export function SshConnect(props: Props) {
     if (event.exitCode !== 0) {
       if (current.action === "login" && checkingLogin()) {
         setCheckingLogin(false)
-        const ready = await checkPreflight(false)
-        if (ready) await saveWorkspace()
-        setBusy(false)
+        const ready = await checkPreflight(false, request, profile)
+        if (ready) await saveWorkspace(request, profile)
+        if (active(request, profile)) setBusy(false)
         return
       }
+      if (!active(request, profile) || setup() !== current) return
       setSetup({
         ...current,
         state: "failed",
@@ -207,17 +216,18 @@ export function SshConnect(props: Props) {
       setBusy(false)
       return
     }
+    if (!active(request, profile) || setup() !== current) return
     setSetup({ ...current, state: "complete" })
     if (current.action === "install") {
-      const ready = await checkPreflight(false)
-      if (ready) setSetup({ action: "login", state: "available", output: "" })
-      setBusy(false)
+      const ready = await checkPreflight(false, request, profile)
+      if (ready && active(request, profile)) setSetup({ action: "login", state: "available", output: "" })
+      if (active(request, profile)) setBusy(false)
       return
     }
-    const ready = await checkPreflight(false)
-    if (ready) await saveWorkspace()
-    setCheckingLogin(false)
-    setBusy(false)
+    const ready = await checkPreflight(false, request, profile)
+    if (ready) await saveWorkspace(request, profile)
+    if (active(request, profile)) setCheckingLogin(false)
+    if (active(request, profile)) setBusy(false)
   }
 
   async function loadCredentials(value: string) {
@@ -233,8 +243,7 @@ export function SshConnect(props: Props) {
 
   function clearOnboarding(nextAuth: Auth = "password") {
     credentials.invalidate()
-    browsing += 1
-    connecting += 1
+    onboarding.advance()
     const next = resetSshOnboarding(nextAuth)
     setAuth(next.auth)
     setPassword(next.password)
@@ -269,8 +278,11 @@ export function SshConnect(props: Props) {
       setError("The Android private-key picker is unavailable on this device.")
       return
     }
+    const request = onboarding.current()
+    const profile = selectedProfile()
     try {
       const value = await bridge.sshPickPrivateKey()
+      if (!active(request, profile)) return
       if (value === null || value === undefined) {
         setError("")
         return
@@ -279,10 +291,13 @@ export function SshConnect(props: Props) {
         setError("Choose an OpenSSH private-key file to continue.")
         return
       }
+      credentials.invalidate()
+      onboarding.advance()
       setPrivateKey(value)
       setPrivateKeyLabel("Private key selected")
       setError("")
     } catch (cause) {
+      if (!active(request, profile)) return
       setError(cause instanceof Error ? cause.message : "Could not read the private-key file.")
     }
   }
@@ -323,26 +338,47 @@ export function SshConnect(props: Props) {
     setTarget(value)
   }
 
+  const changePassword = (value: string) => {
+    credentials.invalidate()
+    onboarding.advance()
+    setPassword(value)
+  }
+
+  const changePassphrase = (value: string) => {
+    credentials.invalidate()
+    onboarding.advance()
+    setPassphrase(value)
+  }
+
+  const chooseAgent = (value: SshAgent) => {
+    onboarding.advance()
+    setAgent(value)
+    setSetup()
+    setPreflight()
+    setError("")
+  }
+
   const browse = async (path = browsePath(), hidden = showHidden()) => {
     const next = validSshPath(path)
     if (!next || browseBusy()) return
-    const request = ++browsing
+    const request = onboarding.current()
+    const profile = selectedProfile()
     setBrowseBusy(true)
     setError("")
     try {
       const result = await props.ssh.list(next, hidden)
-      if (request !== browsing) return
+      if (!active(request, profile)) return
       setBrowsePath(result.path)
       setListing(result)
     } catch (cause) {
-      if (request !== browsing) return
+      if (!active(request, profile)) return
       setError(cause instanceof Error ? cause.message : "Could not browse the remote machine.")
     } finally {
-      if (request === browsing) setBrowseBusy(false)
+      if (active(request, profile)) setBrowseBusy(false)
     }
   }
 
-  const refreshAgentStatuses = async (folder: string) => {
+  const refreshAgentStatuses = async (folder: string, request = onboarding.current(), profile = selectedProfile()) => {
     const results = await Promise.all(
       SSH_AGENTS.map(async (value) => {
         const result = await props.ssh.execVersion(value, folder).catch(() => undefined)
@@ -350,6 +386,7 @@ export function SshConnect(props: Props) {
         return { value, result, auth }
       }),
     )
+    if (!active(request, profile) || folder !== directory()) return
     setAgentStatuses(
       Object.fromEntries(
         results.map(({ value, result, auth }) => [
@@ -386,7 +423,7 @@ export function SshConnect(props: Props) {
       setError("Paste the SSH private key, or choose password authentication.")
       return
     }
-    const request = ++connecting
+    const request = onboarding.current()
     setBusy(true)
     setError("")
     setPreflight()
@@ -402,15 +439,12 @@ export function SshConnect(props: Props) {
         saveCredentials: true,
       })
       if (result.status === "host_key_required") {
-        if (request !== connecting || profile !== selectedProfile()) return
+        if (!active(request, profile)) return
         setPendingKey({ profile, fingerprint: result.fingerprint, type: result.type })
         setError("Verify the SSH host-key fingerprint below before trusting this host.")
         return
       }
-      if (request !== connecting || profile !== selectedProfile()) {
-        await props.ssh.disconnect().catch(() => undefined)
-        return
-      }
+      if (!active(request, profile)) return
       setPendingKey()
       setConnected(true)
       setConnectedProfile(result.profile)
@@ -419,76 +453,84 @@ export function SshConnect(props: Props) {
       setQuery("")
       setShowHidden(false)
       const home = await props.ssh.home()
-      if (request !== connecting || profile !== selectedProfile()) {
-        await props.ssh.disconnect().catch(() => undefined)
-        return
-      }
+      if (!active(request, profile)) return
       setHomePath(home)
       setDirectory(home)
       setConnectedDirectory(home)
       await browse(home, false)
     } catch (cause) {
-      if (request === connecting) setError(cause instanceof Error ? cause.message : "SSH connection failed.")
+      if (active(request, profile)) setError(cause instanceof Error ? cause.message : "SSH connection failed.")
     } finally {
-      if (request === connecting) setBusy(false)
+      if (active(request, profile)) setBusy(false)
     }
   }
 
   const trust = async () => {
     const pending = pendingKey()
     if (!pending || pending.profile !== selectedProfile() || busy()) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     setBusy(true)
     setError("")
     try {
       await props.ssh.trustHostKey(pending.profile, pending.fingerprint)
+      if (!active(request, profile) || pendingKey() !== pending) return
       setPendingKey()
       setBusy(false)
       await connect()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Host-key confirmation failed.")
+      if (active(request, profile)) setError(cause instanceof Error ? cause.message : "Host-key confirmation failed.")
     } finally {
-      setBusy(false)
+      if (active(request, profile)) setBusy(false)
     }
   }
 
   const selectFolder = async (path: string) => {
     const next = validSshPath(path)
     if (!next || browseBusy()) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     setBrowseBusy(true)
     setError("")
     try {
       const canonical = await props.ssh.selectWorkspace(next)
+      if (!active(request, profile)) return
       setDirectory(canonical)
       setConnectedDirectory(canonical)
       setStep("agent")
       setBrowseOpen(false)
       setQuery("")
-      await refreshAgentStatuses(canonical)
+      await refreshAgentStatuses(canonical, request, profile)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not select the remote workspace.")
+      if (active(request, profile))
+        setError(cause instanceof Error ? cause.message : "Could not select the remote workspace.")
     } finally {
-      setBrowseBusy(false)
+      if (active(request, profile)) setBrowseBusy(false)
     }
   }
 
   const leave = async () => {
+    const request = onboarding.current()
     await props.ssh.disconnect().catch(() => undefined)
+    if (!onboarding.matches(request)) return
     clearOnboarding()
     setStarted(false)
   }
 
-  const checkPreflight = async (offerLogin = true) => {
-    if (!connected()) return false
+  const checkPreflight = async (offerLogin = true, request = onboarding.current(), profile = selectedProfile()) => {
+    if (!active(request, profile) || !connected()) return false
     const folder = validSshPath(directory())
+    const selected = agent()
     if (!folder) {
       setError("Choose a valid remote folder before continuing.")
       return false
     }
     try {
-      const result = await props.ssh.execVersion(agent(), folder)
+      const result = await props.ssh.execVersion(selected, folder)
+      if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
       setAgentStatuses((current) => ({
         ...current,
-        [agent()]: result.ok ? "Ready" : result.exitCode === 127 ? "Not installed" : "Needs setup",
+        [selected]: result.ok ? "Ready" : result.exitCode === 127 ? "Not installed" : "Needs setup",
       }))
       setPreflight(result.output || result.error || `${result.executable} exited with ${result.exitCode}.`)
       if (result.exitCode === 127) {
@@ -500,7 +542,8 @@ export function SshConnect(props: Props) {
         setError(result.error ?? `The ${agentName(agent())} preflight failed.`)
         return false
       }
-      const auth = await props.ssh.execAuthStatus(agent(), folder)
+      const auth = await props.ssh.execAuthStatus(selected, folder)
+      if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
       setPreflight(
         [
           result.output,
@@ -512,21 +555,22 @@ export function SshConnect(props: Props) {
       )
       if (auth.loggedIn) {
         setSetup()
-        setAgentStatuses((current) => ({ ...current, [agent()]: "Ready" }))
+        setAgentStatuses((current) => ({ ...current, [selected]: "Ready" }))
         setError("")
         return true
       }
-      setAgentStatuses((current) => ({ ...current, [agent()]: "Needs setup" }))
+      setAgentStatuses((current) => ({ ...current, [selected]: "Needs setup" }))
       setSetup({ action: "login", state: "available", output: "" })
       setError(`Sign in to ${agentName(agent())} on the remote computer to continue.`)
       return false
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Remote CLI preflight failed.")
+      if (active(request, profile)) setError(cause instanceof Error ? cause.message : "Remote CLI preflight failed.")
       return false
     }
   }
 
-  const saveWorkspace = async () => {
+  const saveWorkspace = async (request = onboarding.current(), profile = selectedProfile()) => {
+    if (!active(request, profile)) return false
     const current = workspace()
     const normalized = current?.target
     const parsed = normalized ? parseSshTarget(normalized) : undefined
@@ -550,27 +594,36 @@ export function SshConnect(props: Props) {
         recentFolders: [folder, ...recentFolders().filter((item) => item !== folder)].slice(0, 3),
       }
       await persistSshWorkspace(state)
+      if (!active(request, profile) || workspace()?.directory !== state.directory || agent() !== state.agent)
+        return false
       setRecentTargets(state.recentTargets)
       setRecentFolders(state.recentFolders)
       props.onConnected(state)
       return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save the remote workspace.")
+      if (active(request, profile))
+        setError(cause instanceof Error ? cause.message : "Could not save the remote workspace.")
       return false
     }
   }
 
   const startSetup = async (action: SshSetupAction) => {
     if (busy() || !connected()) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
+    const selected = agent()
+    const folder = directory()
     setBusy(true)
     setError("")
     setSetupInput("")
     setCheckingLogin(false)
     setSetup({ action, state: "running", output: "" })
     try {
-      const result = await props.ssh.start({ operation: action, agent: agent(), directory: directory() })
+      const result = await props.ssh.start({ operation: action, agent: selected, directory: folder })
+      if (!active(request, profile) || agent() !== selected || directory() !== folder) return
       setSetup((current) => current && { ...current, id: result.id })
     } catch (cause) {
+      if (!active(request, profile) || agent() !== selected || directory() !== folder) return
       const message = cause instanceof Error ? cause.message : `Could not start ${agentName(agent())} ${action}.`
       setSetup({ action, state: "failed", output: `${message}\n` })
       setError(message)
@@ -582,22 +635,29 @@ export function SshConnect(props: Props) {
     const current = setup()
     const value = setupInput()
     if (!current || current.action !== "login" || current.state !== "running" || !value) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     try {
       await props.ssh.input(`${value}\n`)
+      if (!active(request, profile) || setup() !== current) return
       setSetupInput("")
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not send login input.")
+      if (active(request, profile) && setup() === current)
+        setError(cause instanceof Error ? cause.message : "Could not send login input.")
     }
   }
 
   const checkLogin = async () => {
     const current = setup()
     if (!current || current.action !== "login" || current.state !== "running" || checkingLogin()) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     setCheckingLogin(true)
     setBusy(true)
     try {
       await props.ssh.interrupt()
     } catch (cause) {
+      if (!active(request, profile) || setup() !== current) return
       setCheckingLogin(false)
       setBusy(false)
       setError(cause instanceof Error ? cause.message : "Could not stop the login prompt.")
@@ -607,25 +667,31 @@ export function SshConnect(props: Props) {
   const cancelSetup = async () => {
     const current = setup()
     if (!current || current.state !== "running") return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     setBusy(true)
     try {
       await props.ssh.interrupt()
+      if (!active(request, profile) || setup() !== current) return
       setSetup({ ...current, state: "failed", output: appendOutput(current.output, "\nCancelled.\n") })
       setError("")
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Could not cancel ${current.action}.`)
+      if (active(request, profile) && setup() === current)
+        setError(cause instanceof Error ? cause.message : `Could not cancel ${current.action}.`)
     } finally {
-      setBusy(false)
+      if (active(request, profile)) setBusy(false)
     }
   }
 
   const finish = async () => {
     if (busy() || !connected()) return
+    const request = onboarding.current()
+    const profile = selectedProfile()
     setBusy(true)
     setError("")
-    const ready = await checkPreflight()
-    if (ready && !setup()) await saveWorkspace()
-    setBusy(false)
+    const ready = await checkPreflight(true, request, profile)
+    if (ready && !setup()) await saveWorkspace(request, profile)
+    if (active(request, profile)) setBusy(false)
   }
 
   return (
@@ -831,7 +897,7 @@ export function SshConnect(props: Props) {
                   type="password"
                   autocomplete="current-password"
                   value={password()}
-                  onInput={(event) => setPassword(event.currentTarget.value)}
+                  onInput={(event) => changePassword(event.currentTarget.value)}
                   class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
                 />
               </label>
@@ -863,7 +929,7 @@ export function SshConnect(props: Props) {
                   type="password"
                   autocomplete="current-password"
                   value={passphrase()}
-                  onInput={(event) => setPassphrase(event.currentTarget.value)}
+                  onInput={(event) => changePassphrase(event.currentTarget.value)}
                   class="rounded-md border border-border-weak-base bg-surface-base px-3 py-3"
                 />
               </label>
@@ -1116,12 +1182,7 @@ export function SshConnect(props: Props) {
                   <button
                     type="button"
                     aria-pressed={agent() === value}
-                    onClick={() => {
-                      setAgent(value)
-                      setSetup()
-                      setPreflight()
-                      setError("")
-                    }}
+                    onClick={() => chooseAgent(value)}
                     class={`flex items-center gap-3 rounded-lg border px-3 py-3 text-left ${agent() === value ? "border-border-brand-base bg-surface-base" : "border-border-weak-base"}`}
                   >
                     <span

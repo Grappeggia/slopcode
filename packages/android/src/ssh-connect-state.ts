@@ -76,3 +76,20 @@ export function createSshCredentialLoader(store: CredentialStore) {
     },
   }
 }
+
+export function createSshOnboardingGeneration() {
+  let value = 0
+
+  return {
+    current() {
+      return value
+    },
+    advance() {
+      value += 1
+      return value
+    },
+    matches(request: number) {
+      return request === value
+    },
+  }
+}

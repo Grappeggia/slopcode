@@ -222,3 +222,23 @@ Validation from `packages/app`:
 Remaining concerns:
 
 - Installed-desktop interaction testing remains scoped to Task 8.
+
+
+## Android SSH harness remediation
+
+### Delivered
+
+- Replaced skipped live SSH instrumentation with a required, actionable fixture gate. It accepts only staged private files for the private key and password; no credential payload is accepted through Gradle or instrumentation arguments.
+- Added ordered adb orchestration for host-key first use and mismatch, private-key and password login, SFTP browsing/path validation/dotfile default, one intentionally missing allowlisted CLI install, all five preflight/auth/one-shot runs, PTY input/resize/Ctrl-C, reconnect, force-stop persistence, session deep-link smoke, optional real network isolation, and deterministic persisted-job/notification-action model checks.
+- Restricted remote workspace activity to `/home/agent/temp`, required explicit installation acknowledgement, and made the runner parse Android's test result code instead of trusting adb's process exit status.
+
+### Validation
+
+- `bun test src` — 95 passing tests.
+- `bun run typecheck` and `bun run build` — passed.
+- `./gradlew :app:compileDebugAndroidTestKotlin :app:testDebugUnitTest --tests dev.slopcode.android.SshModelsTest --tests dev.slopcode.android.RemoteJobModelsTest` — passed.
+- Connected emulator: built/installed debug and test APKs, then verified an unconfigured instrumentation invocation fails with protected-fixture instructions instead of skipping or passing.
+
+### Blocker
+
+No protected SSH host, private-key file, password file, and deliberately missing but installable configured CLI were provided in this environment. No live SSH, SFTP, or remote-agent success is claimed; run `packages/android/scripts/run-ssh-e2e-all-agents.sh` with its required protected environment inputs to execute the live release-candidate run.
