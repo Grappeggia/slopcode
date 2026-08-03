@@ -138,6 +138,34 @@ describe("SSH onboarding transitions", () => {
     expect(calls).toEqual(["disconnect"])
   })
 
+  test("clears connected workspace state before a pending disconnect can observe a folder change", async () => {
+    const closing = deferred<undefined>()
+    const gate = createSshConnectionGate({
+      status: async () => ({ connected: true, profile: "marcos@mac.example.com:22" }),
+      disconnect: async () => closing.promise,
+    })
+    const disconnect = gate.close(gate.start())
+    const state = resetSshOnboarding()
+    const folder = "/Users/marcos/another-workspace"
+
+    expect(
+      connectedSshWorkspace({
+        connected: state.connected,
+        connectedProfile: state.connectedProfile,
+        connectedDirectory: folder,
+        target: "marcos@mac.example.com",
+        directory: folder,
+        agent: "slopcode-cli",
+      }),
+    ).toBeUndefined()
+    closing.resolve(undefined)
+    expect(await disconnect).toBeTrue()
+
+    const source = await Bun.file(`${import.meta.dir}/ssh-connect.tsx`).text()
+    const leave = source.slice(source.indexOf("const leave"), source.indexOf("const checkPreflight"))
+    expect(leave.indexOf("clearOnboarding()")).toBeLessThan(leave.indexOf("await connections.close"))
+  })
+
   test("does not expose a draft computer or mismatched folder in shell navigation", () => {
     const input = {
       connected: true,

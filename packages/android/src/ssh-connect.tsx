@@ -526,14 +526,11 @@ export function SshConnect(props: Props) {
   }
 
   const leave = async () => {
-    const profile = connectedProfile()
-    const directory = connectedDirectory()
     const attempt = connections.start()
     onboarding.advance()
-    const closed = await connections.close(attempt)
-    if (!closed || connectedProfile() !== profile || connectedDirectory() !== directory) return
     clearOnboarding()
     setStarted(false)
+    await connections.close(attempt)
   }
 
   const checkPreflight = async (offerLogin = true, request = onboarding.current(), profile = selectedProfile()) => {

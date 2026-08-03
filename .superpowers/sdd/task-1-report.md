@@ -13,13 +13,14 @@
 - Bind shell navigation and saved workspace persistence to the active native connection profile and canonical selected directory.
 - Follow-up review fixes: manual password, passphrase, and key selection now invalidate saved-credential reads even for the same profile; a monotonic onboarding generation fences host trust, SFTP, agent checks, preflight, setup, persistence continuation, and disconnect completions.
 - Cleanup follow-up: stale connect/home completions serialize a profile-checked native disconnect that cannot affect a newer attempt; intentional disconnect clears its captured local connection identity even if an unrelated transition advanced onboarding state.
+- Leave follow-up: local connected/profile/workspace state is reset synchronously before awaiting native disconnect, so a late folder result cannot leave the UI claiming an unavailable transport.
 
 ## Verification
 
-- `bun test src/ssh-connect-state.test.ts src/ssh-workspace-state.test.ts` — 10 pass.
+- `bun test src/ssh-connect-state.test.ts src/ssh-workspace-state.test.ts` — 12 pass.
 - `bun run typecheck` — pass.
 - `bun run build` — pass (web and Android debug APK).
-- `bun test src` — 98 pass.
+- `bun test src` — 100 pass.
 
 ## Commit
 
@@ -28,6 +29,8 @@
 Follow-up race-fix commit: `9bb2c7599142c4ac1548902c4e2f70e68b1bc320` (`test(android): gate live SSH E2E fixture`; shared-index commit containing the reviewed Task 1 race fix).
 
 Cleanup follow-up commit: `b8011da164507fb6c885d9d6f31675e91952f019` (`fix(android): clean stale SSH connections safely`).
+
+Leave follow-up commit: pending.
 
 ## Blockers
 
