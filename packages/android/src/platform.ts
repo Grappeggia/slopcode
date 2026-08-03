@@ -1,6 +1,5 @@
 import {
   canOpenExternalUrl,
-  ANDROID_TRUSTED_ORIGIN,
   detectAndroidCapabilities,
   getAndroidBridge,
   parseDeepLinkMessage,
@@ -8,6 +7,8 @@ import {
   parseSupportedDeepLinks,
   parseStringArray,
   remoteJobsBridge,
+  sshTransportBridge,
+  trustedAndroidMessage,
   type AndroidNativeBridge,
 } from "./bridge"
 import {
@@ -24,6 +25,7 @@ import {
 } from "./remote-workspace-state"
 import type { AndroidSecureStorage } from "./types"
 import { notificationDecision } from "./notification-permission"
+import { readSshWorkspace, writeSshWorkspace, type SshWorkspaceState } from "./ssh-workspace-state"
 
 type AsyncStorage = {
   getItem(key: string): Promise<string | null>
@@ -133,10 +135,23 @@ export async function persistRemoteWorkspace(
 
 export type AndroidWorkspaceBootstrap = Awaited<ReturnType<typeof readInitialWorkspaceState>>
 
+export async function readInitialSshWorkspace(bridge: Bridge = getAndroidBridge()) {
+  const secure = secureStorage(bridge)
+  if (!secure) return
+  return readSshWorkspace(secure)
+}
+
+export async function persistSshWorkspace(state: SshWorkspaceState, bridge: Bridge = getAndroidBridge()) {
+  const secure = secureStorage(bridge)
+  if (!secure) throw new Error("Android secure storage is unavailable")
+  await writeSshWorkspace(secure, state)
+}
+
 export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
   const native = bridge ?? undefined
   const capabilities = await detectAndroidCapabilities(native)
   const remoteJobs = remoteJobsBridge(native, capabilities.backgroundExecution && capabilities.remoteJobs)
+  const ssh = sshTransportBridge(native)
   const nonce = native && capabilities.deepLinks ? crypto.randomUUID().replaceAll("-", "") : undefined
   let ready: Promise<boolean> | undefined
   const prepareDeepLinks = () => {
@@ -159,7 +174,7 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
       if (!bridge || !nonce) return () => undefined
       const handler = (event: Event) => {
         const message = event as MessageEvent
-        if (message.origin !== ANDROID_TRUSTED_ORIGIN || message.source !== window) return
+        if (!trustedAndroidMessage(message)) return
         const urls = parseDeepLinkMessage(message.data, nonce)
         if (urls.length > 0) listener(urls)
       }
@@ -193,5 +208,6 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
       return typeof value === "string" && value ? value : null
     },
     remoteJobs,
+    ssh,
   }
 }

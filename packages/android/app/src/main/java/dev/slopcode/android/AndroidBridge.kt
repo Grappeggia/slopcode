@@ -22,6 +22,8 @@ import androidx.webkit.WebViewCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.io.ByteArrayOutputStream
 
 class AndroidBridge(
   private val activity: MainActivity,
@@ -35,10 +37,17 @@ class AndroidBridge(
   private val manager = activity.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as NotificationManager
   private val key = MasterKey.Builder(activity).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
   private val jobs = RemoteJobStore(activity)
+  private val sshEvents = CopyOnWriteArrayList<String>()
+  private val ssh = SshTransport(activity, ::queueSshEvent)
+  private val sshExecutor = Executors.newSingleThreadExecutor()
+  @Volatile private var privateKeyReply: ((String?) -> Unit)? = null
   @Volatile private var rendererReady = false
   @Volatile private var rendererNonce: String? = null
   @Volatile private var jobsReady = false
   @Volatile private var jobsNonce: String? = null
+  @Volatile private var sshReady = false
+  @Volatile private var sshNonce: String? = null
+  @Volatile private var sshGeneration = 0L
   private val jobReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       if (!jobsReady || jobsNonce == null) return
@@ -145,6 +154,42 @@ class AndroidBridge(
     return value
   }
 
+  private fun argPayload(args: JSONArray, index: Int, limit: Int, required: Boolean = true): String? {
+    val value = args.opt(index) as? String ?: return null
+    if (value.toByteArray(Charsets.UTF_8).size > limit || value.contains('\u0000')) return null
+    if (required && value.isBlank()) return null
+    return value
+  }
+
+  private fun argInt(args: JSONArray, index: Int): Int? {
+    val value = args.opt(index) as? Number ?: return null
+    val next = value.toLong()
+    if (next !in Int.MIN_VALUE..Int.MAX_VALUE || value.toDouble() != next.toDouble()) return null
+    return next.toInt()
+  }
+
+  private fun argBoolean(args: JSONArray, index: Int): Boolean? = args.opt(index) as? Boolean
+
+  private fun sshAsync(id: String, proxy: JavaScriptReplyProxy, work: () -> Any?) {
+    sshExecutor.execute {
+      runCatching { work() }
+        .onSuccess { result -> reply(proxy, bridgeResult(id, result)) }
+        .onFailure { cause -> replyFailure(proxy, id, cause) }
+    }
+  }
+
+  private fun replyFailure(proxy: JavaScriptReplyProxy, id: String?, cause: Throwable) {
+    val error = cause as? SshTransportException
+    reply(
+      proxy,
+      bridgeError(
+        id,
+        error?.code ?: "bridge_failed",
+        (error?.message ?: cause.message ?: "Android bridge request was rejected").take(MAX_ERROR_BYTES),
+      ),
+    )
+  }
+
   private fun requestText(request: JSONObject, name: String, limit: Int): String? {
     val value = request.opt(name) as? String ?: return null
     if (value.toByteArray(Charsets.UTF_8).size > limit) return null
@@ -237,6 +282,44 @@ class AndroidBridge(
     rendererNonce = null
     jobsReady = false
     jobsNonce = null
+    sshReady = false
+    sshNonce = null
+    synchronized(sshEvents) {
+      sshGeneration += 1
+      sshEvents.clear()
+    }
+    ssh.disconnect()
+  }
+
+  fun onPrivateKeyResult(uri: Uri?) {
+    val done = privateKeyReply
+    privateKeyReply = null
+    done?.invoke(uri?.let(::readPrivateKey))
+  }
+
+  private fun readPrivateKey(uri: Uri): String? {
+    val output = ByteArrayOutputStream()
+    return runCatching {
+      activity.contentResolver.openInputStream(uri)?.use { input ->
+        val buffer = ByteArray(8 * 1024)
+        while (true) {
+          val count = input.read(buffer)
+          if (count < 0) break
+          output.write(buffer, 0, count)
+          check(output.size() <= MAX_PRIVATE_KEY_BYTES) { "Private key file is too large" }
+        }
+      } ?: return null
+      val value = output.toString(Charsets.UTF_8.name())
+      check(value.startsWith("-----BEGIN ") && value.contains("PRIVATE KEY-----")) { "Selected file is not an SSH private key" }
+      check(value.none { it == '\u0000' || it == '\r' }) { "Selected private key is invalid" }
+      value
+    }.getOrNull()
+  }
+
+  private fun pickPrivateKey(done: (String?) -> Unit) {
+    check(privateKeyReply == null) { "A private-key picker is already open" }
+    privateKeyReply = done
+    activity.pickPrivateKey()
   }
 
   fun flushDeepLinks() {
@@ -274,7 +357,7 @@ class AndroidBridge(
       .put("qrPairing", false)
       .put("notifications", true)
       .put("deepLinks", true)
-      .put("remoteTransport", false)
+      .put("remoteTransport", ssh.isConnected())
       .put("backgroundExecution", true)
       .put("remoteJobs", true)
 
@@ -394,6 +477,149 @@ class AndroidBridge(
           jobsReady = true
           reply(replyProxy, bridgeResult(id, true))
         }
+        "sshEventsReady" -> {
+          arity(args, 1)
+          synchronized(sshEvents) {
+            sshGeneration += 1
+            sshEvents.clear()
+          }
+          sshNonce = deepLinkNonce(args, 0)
+          sshReady = true
+          flushSshEvents()
+          reply(replyProxy, bridgeResult(id, true))
+        }
+        "sshConnect" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH configuration")
+          sshAsync(id, replyProxy) { ssh.connect(raw) }
+        }
+        "sshTrustHostKey" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid host-key confirmation")
+          sshAsync(id, replyProxy) { ssh.trust(raw) }
+        }
+        "sshStatus" -> {
+          arity(args, 0)
+          sshAsync(id, replyProxy) { ssh.status() }
+        }
+        "sshDisconnect", "sshCleanup" -> {
+          arity(args, 0)
+          sshAsync(id, replyProxy) {
+            ssh.disconnect()
+            ssh.status()
+          }
+        }
+        "sshHome" -> {
+          arity(args, 0)
+          sshAsync(id, replyProxy) { ssh.home() }
+        }
+        "sshList" -> {
+          arity(args, 1, 2)
+          val path = argText(args, 0, MAX_DIRECTORY_CHARS) ?: error("Invalid remote folder")
+          val showHidden = if (args.length() == 2) argBoolean(args, 1) ?: error("Invalid hidden-entry setting") else false
+          sshAsync(id, replyProxy) { ssh.list(path, showHidden) }
+        }
+        "sshExec" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH exec request")
+          sshAsync(id, replyProxy) { ssh.version(raw) }
+        }
+        "sshAuthStatus" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH authentication check")
+          sshAsync(id, replyProxy) { ssh.authStatus(raw) }
+        }
+        "sshStart" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH session request")
+          sshAsync(id, replyProxy) { ssh.start(raw) }
+        }
+        "sshOrchestratorStart" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH orchestrator request")
+          sshAsync(id, replyProxy) { ssh.orchestratorStart(raw) }
+        }
+        "sshOrchestratorInput" -> {
+          arity(args, 1)
+          val value = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH orchestrator frame")
+          sshAsync(id, replyProxy) {
+            ssh.orchestratorInput(value)
+            true
+          }
+        }
+        "sshOrchestratorStop" -> {
+          arity(args, 0)
+          sshAsync(id, replyProxy) {
+            ssh.orchestratorStop()
+            true
+          }
+        }
+        "sshInput" -> {
+          arity(args, 1)
+          val value = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH input")
+          sshAsync(id, replyProxy) {
+            ssh.input(value)
+            true
+          }
+        }
+        "sshResize" -> {
+          arity(args, 4)
+          val cols = argInt(args, 0) ?: error("Invalid terminal columns")
+          val rows = argInt(args, 1) ?: error("Invalid terminal rows")
+          val width = argInt(args, 2) ?: error("Invalid terminal width")
+          val height = argInt(args, 3) ?: error("Invalid terminal height")
+          sshAsync(id, replyProxy) {
+            ssh.resize(
+              cols,
+              rows,
+              width,
+              height,
+            )
+            true
+          }
+        }
+        "sshInterrupt" -> {
+          arity(args, 0)
+          sshAsync(id, replyProxy) {
+            ssh.interrupt()
+            true
+          }
+        }
+        "sshCredentialGet" -> {
+          arity(args, 1)
+          val profile = argText(args, 0, MAX_PROFILE_BYTES) ?: error("Invalid SSH credential profile")
+          check(validProfile(profile)) { "Invalid SSH credential profile" }
+          sshAsync(id, replyProxy) { ssh.credentials.get(profile) ?: JSONObject.NULL }
+        }
+        "sshCredentialSet" -> {
+          arity(args, 2)
+          val profile = argText(args, 0, MAX_PROFILE_BYTES) ?: error("Invalid SSH credential profile")
+          check(validProfile(profile)) { "Invalid SSH credential profile" }
+          val raw = argPayload(args, 1, MAX_VALUE_BYTES) ?: error("Invalid SSH credentials")
+          val value = JSONObject(raw)
+          val auth = value.optString("auth")
+          check(auth == "password" || auth == "privateKey") { "Invalid SSH authentication method" }
+          check(value.optString("password").length <= MAX_SECRET_BYTES) { "SSH password is too long" }
+          check(value.optString("privateKey").toByteArray(Charsets.UTF_8).size <= MAX_PRIVATE_KEY_BYTES) { "SSH private key is too large" }
+          check(value.optString("passphrase").length <= MAX_SECRET_BYTES) { "SSH key passphrase is too long" }
+          sshAsync(id, replyProxy) {
+            ssh.credentials.save(profile, value)
+            true
+          }
+        }
+        "sshCredentialClear" -> {
+          arity(args, 1)
+          val profile = argText(args, 0, MAX_PROFILE_BYTES) ?: error("Invalid SSH credential profile")
+          check(validProfile(profile)) { "Invalid SSH credential profile" }
+          sshAsync(id, replyProxy) {
+            ssh.credentials.clear(profile)
+            true
+          }
+        }
+        "sshPickPrivateKey" -> {
+          arity(args, 0)
+          pickPrivateKey { value -> reply(replyProxy, bridgeResult(id, value ?: JSONObject.NULL)) }
+        }
         "remoteJobList" -> {
           arity(args, 0)
           val list = JSONArray()
@@ -419,9 +645,7 @@ class AndroidBridge(
         }
         else -> reply(replyProxy, bridgeError(id, "unknown_method", "Unsupported bridge method"))
       }
-    }.onFailure {
-      reply(replyProxy, bridgeError(id, "bridge_failed", "Android bridge request was rejected"))
-    }
+    }.onFailure { cause -> replyFailure(replyProxy, id, cause) }
   }
 
   fun showNotification(title: String, description: String?, href: String?) {
@@ -481,13 +705,54 @@ class AndroidBridge(
     }
   }
 
+  private fun queueSshEvent(event: JSONObject) {
+    synchronized(sshEvents) {
+      while (sshEvents.size >= MAX_SSH_EVENTS) sshEvents.removeAt(0)
+      sshEvents += JSONObject(event.toString()).put("generation", sshGeneration).toString()
+    }
+    flushSshEvents()
+  }
+
+  private fun flushSshEvents() {
+    if (!sshReady) return
+    val nonce = sshNonce ?: return
+    val generation = sshGeneration
+    val events = synchronized(sshEvents) {
+      val next = sshEvents.toList()
+      sshEvents.clear()
+      next
+    }
+    if (events.isEmpty()) return
+    webView.post {
+      if (!sshReady || sshNonce != nonce || sshGeneration != generation) {
+        synchronized(sshEvents) {
+          events.forEach { sshEvents.add(0, it) }
+        }
+        return@post
+      }
+      events.forEach { event ->
+        if (JSONObject(event).optLong("generation", -1) != generation) return@forEach
+        val payload = JSONObject()
+          .put("type", "slopcode.ssh")
+          .put("channel", SSH_CHANNEL)
+          .put("nonce", nonce)
+          .put("event", JSONObject(event))
+          .toString()
+        WebViewCompat.postWebMessage(webView, WebMessageCompat(payload), Uri.parse(TRUSTED_ORIGIN))
+      }
+    }
+  }
+
   fun close() {
+    sshExecutor.shutdownNow()
+    ssh.close()
     runCatching { activity.unregisterReceiver(jobReceiver) }
   }
 
   companion object {
     private const val TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
     private const val REMOTE_JOB_CHANNEL = "slopcode.android.remote-jobs"
+    private const val SSH_CHANNEL = "slopcode.android.ssh"
     private const val DEEP_LINK_CHANNEL = "slopcode.android.deep-links"
     private const val MAX_MESSAGE_BYTES = 256 * 1024
     private const val MAX_ID_BYTES = 128
@@ -495,9 +760,14 @@ class AndroidBridge(
     private const val MAX_NAMESPACE_BYTES = 128
     private const val MAX_KEY_BYTES = 256
     private const val MAX_VALUE_BYTES = 192 * 1024
+    private const val MAX_PROFILE_BYTES = 320
+    private const val MAX_SECRET_BYTES = 16 * 1024
+    private const val MAX_PRIVATE_KEY_BYTES = 128 * 1024
+    private const val MAX_DIRECTORY_CHARS = 4_096
+    private const val MAX_ERROR_BYTES = 2 * 1024
+    private const val MAX_SSH_EVENTS = 128
     private const val MAX_TEXT_BYTES = 16 * 1024
     private const val MAX_URL_BYTES = 8 * 1024
-    private const val MAX_DIRECTORY_CHARS = 4 * 1024
     private const val MAX_PROMPT_CHARS = 16 * 1024
     private const val MAX_NONCE_BYTES = 128
     private const val MAX_ARGS = 8

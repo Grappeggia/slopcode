@@ -48,7 +48,7 @@ const fingerprint = (frame: AgentOrchestrationRequest) => {
 
 type Stored = {
   adapter: Session
-  agent: "slopcode" | "opencode"
+  agent: AgentOrchestrationAgentID
   workspaceID: string
   workspace: string
   activeTurnID?: string
@@ -79,6 +79,8 @@ type RequestRecord = {
 }
 
 const maxRequests = 256
+const isSupportedAgent = (value: AgentOrchestrationAgentID) =>
+  value === "slopcode" || value === "opencode" || value === "codex" || value === "claude"
 
 export class Bridge {
   readonly workspaces = new Map<string, string>()
@@ -357,11 +359,12 @@ export class Bridge {
       })
       return
     }
+    if (event.type === "unsupported" && ["available_commands_update", "usage_update"].includes(event.feature)) return
     const message =
       event.type === "unsupported"
         ? `Unsupported ACP capability: ${event.feature}`
         : `Dropped ACP ${event.type} update outside the active workspace.`
-    if (turnID) this.event(sessionID, { type: "turn.output", turnID, text: message })
+    if (turnID) this.event(sessionID, { type: "turn.reasoning", turnID, text: message })
   }
 
   private enqueue(sessionID: string, session: Stored, event: ACPEvent) {
@@ -379,7 +382,7 @@ export class Bridge {
     if (!record) return
     try {
       if (frame.type === "workspace.open") {
-        if (frame.agent.id !== "slopcode" && frame.agent.id !== "opencode")
+        if (!isSupportedAgent(frame.agent.id))
           return this.fail(record, "unsupported_agent", `${frame.agent.id} is not available in the ACP bridge`, frame)
         const workspace = await contained(this.root, frame.workspace.path)
         this.workspaces.set(frame.workspace.id, workspace)
@@ -394,7 +397,7 @@ export class Bridge {
         return
       }
       if (frame.type === "session.create") {
-        if (frame.agent !== "slopcode" && frame.agent !== "opencode")
+        if (!isSupportedAgent(frame.agent))
           return this.fail(record, "unsupported_agent", `${frame.agent} does not support the ACP bridge`, frame)
         const workspace = this.workspaces.get(frame.workspaceID)
         if (!workspace) return this.fail(record, "not_found", "workspace was not opened", frame)
@@ -443,10 +446,21 @@ export class Bridge {
           sessionID: frame.sessionID,
           turnID,
         })
+        let message: string | undefined
         void session.adapter
           .turn(frame.prompt)
-          .catch((error: unknown) => this.error("internal", error instanceof Error ? error.message : "ACP turn failed"))
-          .finally(() => {
+          .catch((error: unknown) => {
+            message = error instanceof Error ? error.message : "ACP turn failed"
+            this.error("internal", message)
+          })
+          .then(async () => {
+            await session.queue
+            this.event(frame.sessionID, {
+              type: "turn.completed",
+              turnID,
+              status: message ? "failed" : "completed",
+              ...(message ? { message: clean(message, 2 * 1024) } : {}),
+            })
             if (session.activeTurnID === turnID) session.activeTurnID = undefined
           })
         return

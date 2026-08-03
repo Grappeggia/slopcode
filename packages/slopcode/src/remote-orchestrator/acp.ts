@@ -15,6 +15,7 @@ import {
   type AgentOrchestrationCapability,
 } from "@slopcode-ai/protocol"
 import { approvalCwd, contained } from "./workspace"
+import { connect as connectCli } from "./cli"
 
 export type ACPEvent =
   | { type: "output"; text: string; nativeID?: string }
@@ -138,6 +139,8 @@ export async function connect(input: {
   emit: (event: ACPEvent) => void
   start?: Launch
 }): Promise<Session> {
+  if (input.agent === "codex" || input.agent === "claude")
+    return connectCli({ agent: input.agent, cwd: input.cwd, emit: input.emit })
   if (input.agent !== "slopcode" && input.agent !== "opencode")
     throw new Error(`agent ${input.agent} does not support ACP`)
   const child = (input.start ?? launch)(input.agent, input.cwd)
@@ -174,7 +177,8 @@ export async function connect(input: {
   const client: Client = {
     async sessionUpdate(params: SessionNotification) {
       const update = params.update
-      if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "user_message_chunk") {
+      if (update.sessionUpdate === "user_message_chunk") return Promise.resolve()
+      if (update.sessionUpdate === "agent_message_chunk") {
         const item = content(update.content)
         if (item && "text" in item && item.text)
           emit({ type: "output", text: item.text, nativeID: update.messageId ?? undefined })

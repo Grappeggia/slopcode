@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-02T17:55:00-07:00",
+  "build": "android debug",
+  "requiredAgents": ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code"],
+  "shared": [
+    {
+      "id": "appearance",
+      "title": "Light and dark navigation drawer",
+      "caption": "The Android-native drawer exposes appearance and active-session context without leaving the SSH flow.",
+      "src": "latest-00-dark-drawer.png",
+      "alt": "Dark navigation drawer with active sessions and appearance control"
+    },
+    {
+      "id": "choose-computer",
+      "title": "Choose a computer",
+      "caption": "Start with one simple user@host field and saved computers.",
+      "src": "latest-01-choose-computer.png",
+      "alt": "Choose a computer screen"
+    },
+    {
+      "id": "sign-in",
+      "title": "Sign in securely",
+      "caption": "Choose password or Android's private-key document picker.",
+      "src": "latest-08-key-selected.png",
+      "alt": "SSH sign-in choices"
+    },
+    {
+      "id": "host-key",
+      "title": "Verify the computer",
+      "caption": "Review the host identity before trusting a new SSH key.",
+      "src": "latest-09-host-key.png",
+      "alt": "Confirm this is your computer"
+    },
+    {
+      "id": "workspace",
+      "title": "Choose a workspace",
+      "caption": "Use the compact SFTP browser, breadcrumbs, recent folders, and hidden files off by default.",
+      "src": "latest-10-workspace.png",
+      "alt": "Remote workspace folder browser"
+    }
+  ],
+  "agents": {
+    "slopcode-cli": {
+      "label": "Slopcode",
+      "status": "blocked",
+      "runId": "emulator-2026-08-02-slopcode",
+      "screenshots": [
+        {
+          "id": "complete",
+          "title": "Native session reaches complete",
+          "caption": "SSH, workspace, session creation, and turn completion passed; this host emitted no assistant text for the Slopcode ACP turn, so the run is not marked release-passed.",
+          "src": "slopcode-01-complete-no-output.png",
+          "alt": "Slopcode remote session complete without assistant output"
+        }
+      ]
+    },
+    "codex-cli": {
+      "label": "Codex",
+      "status": "passed",
+      "runId": "emulator-2026-08-02-codex",
+      "screenshots": [
+        {
+          "id": "working",
+          "title": "Codex is working",
+          "caption": "Codex was already authenticated, so Android skipped login and streamed the live agent activity over SSH.",
+          "src": "codex-01-working.png",
+          "alt": "Codex remote agent working in the selected workspace"
+        },
+        {
+          "id": "complete",
+          "title": "Codex completes the task",
+          "caption": "Codex created the small app files in the remote temp workspace and returned a complete result.",
+          "src": "codex-02-complete.png",
+          "alt": "Codex remote agent session complete"
+        }
+      ]
+    },
+    "opencode-cli": {
+      "label": "OpenCode",
+      "status": "blocked",
+      "runId": "emulator-2026-08-02-opencode",
+      "screenshots": [
+        {
+          "id": "ready",
+          "title": "OpenCode session ready",
+          "caption": "OpenCode passed binary and auth preflight and opened the native SSH ACP session.",
+          "src": "opencode-01-ready.png",
+          "alt": "OpenCode remote agent session ready"
+        },
+        {
+          "id": "working",
+          "title": "OpenCode backend still working",
+          "caption": "The prompt reached OpenCode, but this host's configured local model did not emit a response within the validation window; direct opencode run also timed out.",
+          "src": "opencode-02-working-backend-blocked.png",
+          "alt": "OpenCode remote agent waiting on the host backend"
+        }
+      ]
+    },
+    "claude-code": {
+      "label": "Claude Code",
+      "status": "setup-required",
+      "runId": "emulator-2026-08-02-claude",
+      "screenshots": [
+        {
+          "id": "setup",
+          "title": "Claude Code sign-in is required",
+          "caption": "The CLI is installed, but claude auth status reported loggedIn=false, so Android shows the visual sign-in checklist instead of opening a session.",
+          "src": "claude-01-setup-required.png",
+          "alt": "Claude Code sign-in required checklist"
+        }
+      ]
+    }
+  }
+}

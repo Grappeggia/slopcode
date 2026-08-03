@@ -11,6 +11,11 @@
 - `bun run release` prepares version changes and build artifacts locally, uploads the prebuilt assets to the GitHub release, then dispatches `.github/workflows/publish.yml` on `dev` for npm trusted publishing.
 - Do not use local `npm publish` as the normal release path. GitHub Actions should only handle the publish/finalize step, using the prebuilt assets and npm trusted publishing without OTP.
 
+## GitHub push identity
+
+- Any push to GitHub must be authenticated and performed as `grappeggia@`.
+- Do not push using Codex's GitHub account or credentials. Before a push, verify the active GitHub identity; if it is not `grappeggia@`, stop and ask the user to switch credentials.
+
 ## Style Guide
 
 ### General Principles

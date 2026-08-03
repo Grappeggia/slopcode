@@ -1,5 +1,5 @@
 import { HashRouter } from "@solidjs/router"
-import { createSignal } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import { render } from "solid-js/web"
 import { AppBaseProviders, AppInterface, type Platform, PlatformProvider, ServerConnection } from "@slopcode-ai/app"
 import "@slopcode-ai/app/index.css"
@@ -8,6 +8,7 @@ import {
   appStorage,
   persistRemoteWorkspace,
   persistServerSelection,
+  readInitialSshWorkspace,
   readInitialWorkspaceState,
   shellBridge,
 } from "./platform"
@@ -16,6 +17,9 @@ import type { RemoteCommandCatalog } from "./remote-workspace-state"
 import { RemoteConnect } from "./remote-connect"
 import { remoteCapabilityEnabled } from "./remote-workspace-state"
 import { parseRemoteSessionDeepLink, type RemoteSessionDeepLink } from "./remote-jobs"
+import { SshConnect } from "./ssh-connect"
+import { SshAgenticSession } from "./ssh-agentic-session"
+import type { SshWorkspaceState } from "./ssh-workspace-state"
 
 function emitDeepLinks(urls: string[]) {
   if (urls.length === 0) return
@@ -30,7 +34,11 @@ export async function mountAndroidApp() {
   if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
 
   const [remoteSession, setRemoteSession] = createSignal<RemoteSessionDeepLink>()
-  const [shell, initial] = await Promise.all([shellBridge(), readInitialWorkspaceState()])
+  const [shell, initial, sshWorkspace] = await Promise.all([
+    shellBridge(),
+    readInitialWorkspaceState(),
+    readInitialSshWorkspace(),
+  ])
   if (shell.capabilities.deepLinks)
     shell.subscribeDeepLinks((urls) => {
       const session = urls
@@ -39,6 +47,28 @@ export async function mountAndroidApp() {
       if (session) setRemoteSession(session)
       emitDeepLinks(urls)
     })
+  if (shell.ssh) {
+    const status = await shell.ssh.status().catch(() => ({ connected: false, remoteTransport: false, profile: undefined }))
+    if (!sshWorkspace || !status.connected || status.profile !== sshWorkspace.profile) {
+      render(() => {
+        const [workspace, setWorkspace] = createSignal<SshWorkspaceState>()
+        return (
+          <Show
+            when={workspace()}
+            fallback={<SshConnect ssh={shell.ssh!} initial={sshWorkspace} onConnected={setWorkspace} />}
+          >
+            {(value) => <SshAgenticSession ssh={shell.ssh!} workspace={value()} onDisconnected={() => window.location.reload()} />}
+          </Show>
+        )
+      }, root)
+      return
+    }
+    render(
+      () => <SshAgenticSession ssh={shell.ssh!} workspace={sshWorkspace} onDisconnected={() => window.location.reload()} />,
+      root,
+    )
+    return
+  }
   const workspace = initial.state.workspace?.workspace
   if (
     !initial.state.serverUrl ||

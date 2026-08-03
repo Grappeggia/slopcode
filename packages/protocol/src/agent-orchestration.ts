@@ -431,6 +431,17 @@ export const AgentOrchestrationTurnRetryEvent = exact(
 ).annotate({ identifier: "AgentOrchestrationV1.TurnRetryEvent" })
 export type AgentOrchestrationTurnRetryEvent = typeof AgentOrchestrationTurnRetryEvent.Type
 
+export const AgentOrchestrationTurnCompletedEvent = exact(
+  Schema.Struct({
+    ...eventFields,
+    type: Schema.Literal("turn.completed"),
+    turnID: AgentOrchestrationTurnID,
+    status: Schema.Literals(["completed", "failed", "stopped"]),
+    message: Schema.optional(body(2 * 1024, "turn completion message is too large")),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.TurnCompletedEvent" })
+export type AgentOrchestrationTurnCompletedEvent = typeof AgentOrchestrationTurnCompletedEvent.Type
+
 export const AgentOrchestrationApprovalRequestedEvent = exact(
   Schema.Struct({
     ...eventFields,
@@ -484,6 +495,7 @@ export const AgentOrchestrationEvent = Schema.Union([
   AgentOrchestrationTurnReasoningEvent,
   AgentOrchestrationToolUpdatedEvent,
   AgentOrchestrationTurnRetryEvent,
+  AgentOrchestrationTurnCompletedEvent,
   AgentOrchestrationApprovalRequestedEvent,
   AgentOrchestrationQuestionRequestedEvent,
   AgentOrchestrationPlanAvailableEvent,

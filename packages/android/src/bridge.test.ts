@@ -50,7 +50,7 @@ describe("android bridge capability detection", () => {
       qrPairing: false,
       notifications: true,
       deepLinks: true,
-      remoteTransport: false,
+      remoteTransport: true,
       backgroundExecution: true,
       remoteJobs: true,
     })

@@ -9,12 +9,39 @@ import {
   type RemoteJobActionPayload,
   type RemoteJobStartInput,
 } from "./remote-jobs"
+import {
+  parseSshConnectResult,
+  parseSshCredential,
+  parseSshEventMessage,
+  parseSshHome,
+  parseSshListing,
+  parseSshAuthStatus,
+  parseSshPreflight,
+  parseSshOrchestratorEventMessage,
+  parseSshOrchestratorStart,
+  parseSshStart,
+  parseSshStatus,
+  type SshAgent,
+  type SshConnectionInput,
+  type SshCredential,
+  type SshEvent,
+  type SshOrchestratorEvent,
+  type SshTransport,
+} from "./ssh"
 
 export type NotificationPermission = "granted" | "denied" | "prompt"
 
 export const ANDROID_TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
 export const ANDROID_DEEP_LINK_CHANNEL = "slopcode.android.deep-links"
 export const ANDROID_REMOTE_JOB_CHANNEL = "slopcode.android.remote-jobs"
+export const ANDROID_SSH_CHANNEL = "slopcode.android.ssh"
+
+export function trustedAndroidMessage(message: MessageEvent) {
+  return (
+    (message.origin === ANDROID_TRUSTED_ORIGIN && message.source === window) ||
+    (message.origin === "" && message.source === null)
+  )
+}
 
 type AndroidBridgePort = {
   postMessage(message: string): void
@@ -63,6 +90,27 @@ export type AndroidNativeBridge = {
   remoteJobList(): Promise<unknown>
   remoteJobStart(input: string): Promise<unknown>
   remoteJobAction(jobID: string, action: RemoteJobAction, payload?: string): Promise<unknown>
+  sshEventsReady?(nonce: string): Promise<unknown>
+  sshConnect?(input: string): Promise<unknown>
+  sshTrustHostKey?(input: string): Promise<unknown>
+  sshStatus?(): Promise<unknown>
+  sshDisconnect?(): Promise<unknown>
+  sshCleanup?(): Promise<unknown>
+  sshHome?(): Promise<unknown>
+  sshList?(path: string, showHidden?: boolean): Promise<unknown>
+  sshExec?(input: string): Promise<unknown>
+  sshAuthStatus?(input: string): Promise<unknown>
+  sshStart?(input: string): Promise<unknown>
+  sshOrchestratorStart?(input: string): Promise<unknown>
+  sshOrchestratorInput?(value: string): Promise<unknown>
+  sshOrchestratorStop?(): Promise<unknown>
+  sshInput?(value: string): Promise<unknown>
+  sshResize?(cols: number, rows: number, width: number, height: number): Promise<unknown>
+  sshInterrupt?(): Promise<unknown>
+  sshCredentialGet?(profile: string): Promise<unknown>
+  sshCredentialSet?(profile: string, value: string): Promise<unknown>
+  sshCredentialClear?(profile: string): Promise<unknown>
+  sshPickPrivateKey?(): Promise<unknown>
 }
 
 const ports = new WeakMap<AndroidBridgePort, AndroidNativeBridge>()
@@ -138,10 +186,145 @@ export function getAndroidBridge(
     remoteJobList: () => call("remoteJobList"),
     remoteJobStart: (input) => call("remoteJobStart", input),
     remoteJobAction: (jobID, action, payload) => call("remoteJobAction", jobID, action, payload),
+    sshEventsReady: (nonce) => call("sshEventsReady", nonce),
+    sshConnect: (input) => call("sshConnect", input),
+    sshTrustHostKey: (input) => call("sshTrustHostKey", input),
+    sshStatus: () => call("sshStatus"),
+    sshDisconnect: () => call("sshDisconnect"),
+    sshCleanup: () => call("sshCleanup"),
+    sshHome: () => call("sshHome"),
+    sshList: (path, showHidden = false) => call("sshList", path, showHidden),
+    sshExec: (input) => call("sshExec", input),
+    sshAuthStatus: (input) => call("sshAuthStatus", input),
+    sshStart: (input) => call("sshStart", input),
+    sshOrchestratorStart: (input) => call("sshOrchestratorStart", input),
+    sshOrchestratorInput: (value) => call("sshOrchestratorInput", value),
+    sshOrchestratorStop: () => call("sshOrchestratorStop"),
+    sshInput: (value) => call("sshInput", value),
+    sshResize: (cols, rows, width, height) => call("sshResize", cols, rows, width, height),
+    sshInterrupt: () => call("sshInterrupt"),
+    sshCredentialGet: (profile) => call("sshCredentialGet", profile),
+    sshCredentialSet: (profile, value) => call("sshCredentialSet", profile, value),
+    sshCredentialClear: (profile) => call("sshCredentialClear", profile),
+    sshPickPrivateKey: () => call("sshPickPrivateKey"),
   } satisfies AndroidNativeBridge
 
   ports.set(port, bridge)
   return bridge
+}
+
+export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): SshTransport | undefined {
+  if (
+    !bridge?.sshConnect ||
+    !bridge.sshTrustHostKey ||
+    !bridge.sshStatus ||
+    !bridge.sshDisconnect ||
+    !bridge.sshCleanup ||
+    !bridge.sshHome ||
+    !bridge.sshList ||
+    !bridge.sshExec ||
+    !bridge.sshAuthStatus ||
+    !bridge.sshStart ||
+    !bridge.sshInput ||
+    !bridge.sshResize ||
+    !bridge.sshInterrupt ||
+    !bridge.sshCredentialGet ||
+    !bridge.sshCredentialSet ||
+    !bridge.sshCredentialClear ||
+    !bridge.sshEventsReady
+  ) return
+
+  let nonce = ""
+  let ready: Promise<boolean> | undefined
+  const prepare = () => {
+    if (!nonce) return Promise.resolve(false)
+    ready ??= bridge.sshEventsReady!(nonce).then((value) => value === true)
+    return ready
+  }
+  const result = async <T>(value: Promise<unknown>, parse: (raw: unknown) => T | undefined, message: string) => {
+    const parsed = parse(await value)
+    if (parsed === undefined) throw new Error(message)
+    return parsed
+  }
+  return {
+    connect: (input: SshConnectionInput) =>
+      result(bridge.sshConnect!(JSON.stringify(input)), parseSshConnectResult, "Android returned an invalid SSH connection result."),
+    trustHostKey: (profile, fingerprint) =>
+      result(
+        bridge.sshTrustHostKey!(JSON.stringify({ profile, fingerprint })),
+        parseSshConnectResult,
+        "Android returned an invalid host-key result.",
+      ),
+    status: () => result(bridge.sshStatus!(), parseSshStatus, "Android returned an invalid SSH status."),
+    disconnect: () => bridge.sshDisconnect!(),
+    cleanup: () => bridge.sshCleanup!(),
+    home: () => result(bridge.sshHome!(), parseSshHome, "Android returned an invalid SFTP home."),
+    list: (path, showHidden = false) =>
+      result(bridge.sshList!(path, showHidden), parseSshListing, "Android returned an invalid SFTP listing."),
+    execVersion: (agent: SshAgent, directory: string) =>
+      result(
+        bridge.sshExec!(JSON.stringify({ agent, directory })),
+        parseSshPreflight,
+        "Android returned an invalid SSH preflight result.",
+      ),
+    execAuthStatus: (agent: SshAgent, directory: string) =>
+      result(
+        bridge.sshAuthStatus!(JSON.stringify({ agent, directory })),
+        parseSshAuthStatus,
+        "Android returned an invalid SSH authentication result.",
+      ),
+    start: (input) =>
+      result(bridge.sshStart!(JSON.stringify(input)), parseSshStart, "Android returned an invalid SSH session result."),
+    orchestratorStart: async (directory) => {
+      if (!bridge.sshOrchestratorStart) throw new Error("Native SSH orchestration is unavailable.")
+      return result(
+        bridge.sshOrchestratorStart(JSON.stringify({ directory })),
+        parseSshOrchestratorStart,
+        "Android returned an invalid SSH orchestrator result.",
+      )
+    },
+    orchestratorInput: (value) => {
+      if (!bridge.sshOrchestratorInput) return Promise.reject(new Error("Native SSH orchestration is unavailable."))
+      return bridge.sshOrchestratorInput(value)
+    },
+    orchestratorStop: () => {
+      if (!bridge.sshOrchestratorStop) return Promise.reject(new Error("Native SSH orchestration is unavailable."))
+      return bridge.sshOrchestratorStop()
+    },
+    input: (value) => bridge.sshInput!(value),
+    resize: (cols, rows, width = 0, height = 0) => bridge.sshResize!(cols, rows, width, height),
+    interrupt: () => bridge.sshInterrupt!(),
+    credentialGet: async (profile) => parseSshCredential(await bridge.sshCredentialGet!(profile)),
+    credentialSet: (profile, credential: SshCredential) => bridge.sshCredentialSet!(profile, JSON.stringify(credential)),
+    credentialClear: (profile) => bridge.sshCredentialClear!(profile),
+    subscribe(listener: (event: SshEvent) => void) {
+      nonce = crypto.randomUUID().replaceAll("-", "")
+      ready = undefined
+      const handler = (event: Event) => {
+        const message = event as MessageEvent
+        if (!trustedAndroidMessage(message)) return
+        const parsed = parseSshEventMessage(parseJson<unknown>(message.data, null), nonce)
+        if (parsed) listener(parsed)
+      }
+      window.addEventListener("message", handler)
+      void prepare()
+      return () => window.removeEventListener("message", handler)
+    },
+    subscribeOrchestrator(listener: (event: SshOrchestratorEvent) => void) {
+      if (!bridge.sshOrchestratorStart || !bridge.sshOrchestratorInput || !bridge.sshOrchestratorStop) return () => undefined
+      nonce = crypto.randomUUID().replaceAll("-", "")
+      ready = undefined
+      const handler = (event: Event) => {
+        const message = event as MessageEvent
+        if (!trustedAndroidMessage(message)) return
+        const parsed = parseSshOrchestratorEventMessage(parseJson<unknown>(message.data, null), nonce)
+        if (parsed) listener(parsed)
+      }
+      window.addEventListener("message", handler)
+      void prepare()
+      return () => window.removeEventListener("message", handler)
+    },
+  }
 }
 
 export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Promise<AndroidCapabilities> {
@@ -161,7 +344,7 @@ export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Pr
     qrPairing: enabled(raw.qrPairing),
     notifications: enabled(raw.notifications),
     deepLinks: enabled(raw.deepLinks),
-    remoteTransport: false,
+    remoteTransport: enabled(raw.remoteTransport),
     backgroundExecution: enabled(raw.backgroundExecution),
     remoteJobs: enabled(raw.remoteJobs),
   }
@@ -212,7 +395,7 @@ export function remoteJobsBridge(
       ready = undefined
       const handler = (event: Event) => {
         const message = event as MessageEvent
-        if (message.origin !== ANDROID_TRUSTED_ORIGIN || message.source !== window) return
+        if (!trustedAndroidMessage(message)) return
         const parsed = parseRemoteJobMessage(message.data, nonce, ANDROID_REMOTE_JOB_CHANNEL)
         if (parsed) listener(parsed)
       }

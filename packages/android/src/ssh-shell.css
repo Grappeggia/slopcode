@@ -1,0 +1,65 @@
+[data-ssh-theme="dark"] {
+  color-scheme: dark;
+  --background-base: #101010;
+  --background-weak: #1e1e1e;
+  --background-strong: #121212;
+  --background-stronger: #151515;
+  --surface-base: rgba(255, 255, 255, 0.031);
+  --surface-base-hover: rgba(255, 255, 255, 0.039);
+  --surface-base-active: rgba(255, 255, 255, 0.059);
+  --surface-inset-base: rgba(0, 0, 0, 0.5);
+  --surface-inset-strong: rgba(0, 0, 0, 0.8);
+  --surface-raised-base: rgba(255, 255, 255, 0.059);
+  --surface-raised-base-hover: rgba(255, 255, 255, 0.078);
+  --surface-raised-base-active: rgba(255, 255, 255, 0.102);
+  --surface-raised-strong: rgba(255, 255, 255, 0.078);
+  --surface-raised-stronger: rgba(255, 255, 255, 0.129);
+  --surface-raised-stronger-non-alpha: #1c1c1c;
+  --surface-weak: rgba(255, 255, 255, 0.078);
+  --surface-weaker: rgba(255, 255, 255, 0.102);
+  --surface-strong: rgba(255, 255, 255, 0.169);
+  --surface-brand-base: #fab283;
+  --surface-brand-hover: #eda779;
+  --surface-success-base: #062d04;
+  --surface-success-weak: #0a1e08;
+  --surface-critical-base: #1f0603;
+  --surface-critical-weak: #28110c;
+  --input-base: #1c1c1c;
+  --input-hover: #1c1c1c;
+  --input-active: #091123;
+  --input-disabled: #282828;
+  --text-base: rgba(255, 255, 255, 0.618);
+  --text-weak: rgba(255, 255, 255, 0.422);
+  --text-weaker: rgba(255, 255, 255, 0.284);
+  --text-strong: rgba(255, 255, 255, 0.936);
+  --text-invert-base: #a0a0a0;
+  --text-invert-strong: #ededed;
+  --text-on-brand-base: rgba(255, 255, 255, 0.603);
+  --text-on-critical-base: #fc533a;
+  --border-base: rgba(255, 255, 255, 0.195);
+  --border-weak-base: #282828;
+  --border-strong-base: rgba(255, 255, 255, 0.266);
+  --border-critical-base: #6a1206;
+  --icon-base: #7e7e7e;
+  --icon-weak-base: #343434;
+  --icon-strong-base: #ededed;
+}
+
+[data-ssh-theme="light"] {
+  color-scheme: light;
+}
+
+[data-ssh-shell] {
+  background: var(--background-base);
+  color: var(--text-strong);
+}
+
+[data-ssh-drawer] {
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ssh-drawer] {
+    transition: none;
+  }
+}

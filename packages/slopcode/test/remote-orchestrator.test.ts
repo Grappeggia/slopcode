@@ -6,6 +6,7 @@ import { spawn } from "node:child_process"
 import { Schema } from "effect"
 import { AgentOrchestrationFrame } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
+import { connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
 import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
 
@@ -77,6 +78,28 @@ describe("remote orchestrator", () => {
     )
     expect(events.find((event) => event.type === "output")).toMatchObject({ nativeID: "native-message" })
     await session.close()
+  })
+
+  test("wraps Codex and Claude one-shot CLIs through stdin with reduced capabilities", async () => {
+    const cwd = await temp()
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-cli-agent.ts")
+    for (const agent of ["codex", "claude"] as const) {
+      const events: ACPEvent[] = []
+      const session = await connectCli({
+        agent,
+        cwd,
+        emit: (event) => events.push(event),
+        start: () => spawn(process.execPath, [fixture, agent], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+      })
+      await session.turn("safe prompt")
+      expect(session.capabilities).toEqual(["workspace", "sessions", "turns"])
+      expect(events).toContainEqual(expect.objectContaining({ type: "output", text: `${agent}:safe prompt` }))
+      expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"thread.started"') }))
+      expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"turn.completed"') }))
+      expect(session.approval("unknown", true)).toBe(false)
+      expect(session.question("unknown", "answer")).toBe(false)
+      await session.close()
+    }
   })
 
   test("omits invalid ACP approval locations without stranding permission requests", async () => {
@@ -584,8 +607,8 @@ describe("remote orchestrator", () => {
       output.filter((item) => item.kind === "event" && item.sessionID === sessionID),
     )
     expect(scoped.map((items) => items.map((item) => item.type))).toEqual([
-      ["artifact.created", "tool.updated", "plan.available", "turn.output"],
-      ["artifact.created", "tool.updated", "plan.available", "turn.output"],
+      ["artifact.created", "tool.updated", "plan.available", "turn.output", "turn.completed"],
+      ["artifact.created", "tool.updated", "plan.available", "turn.output", "turn.completed"],
     ])
     for (const items of scoped) {
       const tool = items.find((item) => item.kind === "event" && item.type === "tool.updated")

@@ -83,6 +83,24 @@ class MainActivity : AppCompatActivity() {
     handleIntent(intent, true)
   }
 
+  fun pickPrivateKey() {
+    startActivityForResult(
+      Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "application/octet-stream"
+        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "text/plain", "application/x-pem-file"))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+      },
+      PRIVATE_KEY_REQUEST,
+    )
+  }
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode != PRIVATE_KEY_REQUEST) return
+    bridge.onPrivateKeyResult(if (resultCode == RESULT_OK) data?.data else null)
+  }
+
   override fun onDestroy() {
     if (::bridge.isInitialized) bridge.close()
     if (::webView.isInitialized) webView.destroy()
@@ -137,6 +155,7 @@ class MainActivity : AppCompatActivity() {
     private const val TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
     private const val TRUSTED_PATH_PREFIX = "/site/"
     private const val NOTIFICATION_PERMISSION_REQUEST = 1001
+    private const val PRIVATE_KEY_REQUEST = 1002
     private const val MAX_INTENT_LINKS = 2
   }
 }
