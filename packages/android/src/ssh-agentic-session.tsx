@@ -81,7 +81,7 @@ export function SshAgenticSession(props: Props) {
     setState((current) => reduceOrchestratorEvent(current, value))
   }
 
-  const start = async () => {
+  const start = async (lastPrompt?: string) => {
     if (!isOrchestratorAvailable(props.ssh)) {
       showError(
         new Error("Native SSH orchestration is unavailable on this device."),
@@ -92,7 +92,7 @@ export function SshAgenticSession(props: Props) {
     stopped = false
     setBusy(true)
     setError("")
-    setState({ ...initialOrchestratorState(), phase: "opening" })
+    setState({ ...initialOrchestratorState(), phase: "opening", ...(lastPrompt ? { lastPrompt } : {}) })
     closeWire()
     const next = wire(props.ssh)
     setWireState(next)
@@ -190,18 +190,20 @@ export function SshAgenticSession(props: Props) {
   }
 
   const retry = () => {
-    const value = state().lastPrompt
-    if (!value || busy() || !canRetry(state().phase)) return
+    const current = state()
+    const value = current.lastPrompt
+    if (!value || busy() || !canRetry(current.phase, current.sessionID, !!wireState())) return
     setPrompt(value)
     queueMicrotask(() => void send())
   }
 
   const reconnect = async () => {
     if (busy()) return
+    const lastPrompt = state().lastPrompt
     setBusy(true)
     setError("")
     try {
-      await reconnectAgentic(props.ssh, closeWire, start)
+      await reconnectAgentic(props.ssh, closeWire, lastPrompt, start)
     } catch (cause) {
       showError(cause, "Could not reconnect the remote agent session.")
     } finally {
@@ -497,6 +499,22 @@ export function SshAgenticSession(props: Props) {
             </button>
             <Show when={state().phase === "completed"}>
               <span class="text-12-regular text-text-weak">Turn complete. Ask for the next outcome when ready.</span>
+            </Show>
+            <Show
+              when={
+                state().phase === "ready" &&
+                state().lastPrompt &&
+                canRetry(state().phase, state().sessionID, !!wireState())
+              }
+            >
+              <button
+                type="button"
+                disabled={busy()}
+                onClick={retry}
+                class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+              >
+                Retry last request
+              </button>
             </Show>
             <Show when={state().phase === "stopped"}>
               <div class="flex flex-wrap items-center gap-2">

@@ -98,3 +98,53 @@ $ bun run build:web
 $ git diff --check && git diff --cached --check
 (no output; pass)
 ```
+
+## Second review blocker fix
+
+### Root cause and fix
+
+Reconnect previously called `start()` without the stopped/error state's retained prompt. Startup then reset the state to its initial value, so the fresh ready session had no `lastPrompt` and could not present the retry action.
+
+- Reconnect captures `lastPrompt` before closing the stopped bridge and passes it into startup.
+- Startup seeds the new opening/ready state with that prompt while creating a fresh wire and session ID.
+- Retry now requires a non-stopped phase plus the fresh session ID and wire; the ready view exposes **Retry last request** only after those are present.
+- The deterministic session-flow test passes `review the diff` through reconnect and asserts retry is available only with a fresh ready session/wire.
+
+### Exact validation output
+
+```text
+$ bun test src/ssh-session-flow.test.ts
+5 pass
+0 fail
+10 expect() calls
+Ran 5 tests across 1 file.
+
+$ bun test src && bun run typecheck
+81 pass
+0 fail
+388 expect() calls
+Ran 81 tests across 12 files.
+$ tsgo --noEmit
+
+$ ./gradlew :app:testDebugUnitTest
+BUILD SUCCESSFUL in 486ms
+24 actionable tasks: 24 up-to-date
+
+$ bun test test/remote-orchestrator.test.ts && bun run typecheck
+16 pass
+0 fail
+102 expect() calls
+Ran 16 tests across 1 file.
+$ tsgo --noEmit
+
+$ bunx prettier --write src/ssh-session-flow.ts src/ssh-session-flow.test.ts src/ssh-agentic-session.tsx
+src/ssh-session-flow.ts 39ms (unchanged)
+src/ssh-session-flow.test.ts 12ms (unchanged)
+src/ssh-agentic-session.tsx 61ms
+
+$ bun run build:web
+✓ built in 13.09s
+
+$ git diff --check && git diff --cached --check
+(no output; pass)
+```

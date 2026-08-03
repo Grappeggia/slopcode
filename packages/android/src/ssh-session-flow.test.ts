@@ -36,6 +36,7 @@ describe("SSH session handoff", () => {
     await reconnectAgentic(
       { orchestratorStop: async () => void calls.push("stop") },
       () => void calls.push("close"),
+      undefined,
       async () => void calls.push("start"),
     )
     await returnToAgentic({ cleanup: async () => void calls.push("cleanup") }, (view) => void calls.push(view))
@@ -44,8 +45,20 @@ describe("SSH session handoff", () => {
 
   test("requires reconnect before stopped sessions can submit or retry", () => {
     expect(canSubmit("stopped")).toBe(false)
-    expect(canRetry("stopped")).toBe(false)
+    expect(canRetry("stopped", "ses_stopped", true)).toBe(false)
     expect(canSubmit("ready")).toBe(true)
-    expect(canRetry("error")).toBe(true)
+    expect(canRetry("error", "ses_error", true)).toBe(true)
+  })
+
+  test("preserves the stopped prompt through reconnect before retry becomes available", async () => {
+    const calls: string[] = []
+    await reconnectAgentic(
+      { orchestratorStop: async () => void calls.push("stop") },
+      () => void calls.push("close"),
+      "review the diff",
+      async (prompt) => void calls.push(`start:${prompt}`),
+    )
+    expect(calls).toEqual(["stop", "close", "start:review the diff"])
+    expect(canRetry("ready", "ses_fresh", true)).toBe(true)
   })
 })

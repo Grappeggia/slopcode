@@ -7,8 +7,8 @@ export function canSubmit(phase: OrchestratorState["phase"]) {
   return phase !== "waiting" && phase !== "stopped"
 }
 
-export function canRetry(phase: OrchestratorState["phase"]) {
-  return phase !== "stopped"
+export function canRetry(phase: OrchestratorState["phase"], sessionID: string | undefined, connected: boolean) {
+  return phase !== "stopped" && !!sessionID && connected
 }
 
 export async function stopAgentic(ssh: Pick<SshTransport, "orchestratorStop">, close: () => void) {
@@ -19,10 +19,11 @@ export async function stopAgentic(ssh: Pick<SshTransport, "orchestratorStop">, c
 export async function reconnectAgentic(
   ssh: Pick<SshTransport, "orchestratorStop">,
   close: () => void,
-  start: () => Promise<void>,
+  prompt: string | undefined,
+  start: (prompt: string | undefined) => Promise<void>,
 ) {
   await stopAgentic(ssh, close)
-  await start()
+  await start(prompt)
 }
 
 export async function handoffToInteractive(
