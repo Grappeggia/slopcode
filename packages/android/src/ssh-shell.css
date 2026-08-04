@@ -168,6 +168,33 @@
   box-shadow: 0 8px 20px color-mix(in srgb, var(--ssh-canvas) 72%, transparent);
 }
 
+[data-ssh-shell] main[data-agent-workspace] {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;
+  padding-right: max(12px, calc(var(--android-inset-right) + 12px)) !important;
+  padding-left: max(12px, calc(var(--android-inset-left) + 12px)) !important;
+  padding-bottom: max(12px, calc(var(--android-inset-bottom) + var(--android-ime-bottom) + 12px)) !important;
+}
+
+[data-agent-panel] {
+  min-height: 0;
+  max-height: 100%;
+}
+
+[data-agent-scroll] {
+  scroll-padding-block: 16px;
+}
+
+[data-agent-composer] {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  flex: none;
+  box-shadow: 0 -10px 24px color-mix(in srgb, var(--ssh-canvas) 78%, transparent);
+}
+
 [data-ssh-shell] :is(button, [role="button"], input:not([type="checkbox"]), textarea, select, summary) {
   min-height: 48px;
 }

@@ -3,6 +3,9 @@ import { describe, expect, test } from "bun:test"
 const shell = await Bun.file(new URL("./ssh-shell.tsx", import.meta.url)).text()
 const session = await Bun.file(new URL("./ssh-session.tsx", import.meta.url)).text()
 const durable = await Bun.file(new URL("./ssh-durable-job.tsx", import.meta.url)).text()
+const agentic = await Bun.file(new URL("./ssh-agentic-session.tsx", import.meta.url)).text()
+const state = await Bun.file(new URL("./ssh-agent-session-state.ts", import.meta.url)).text()
+const css = await Bun.file(new URL("./ssh-shell.css", import.meta.url)).text()
 
 describe("SSH shell accessibility regressions", () => {
   test("makes a closed drawer hidden and inert while the open modal hides the shell content", () => {
@@ -32,5 +35,38 @@ describe("SSH shell accessibility regressions", () => {
   test("keeps exact durable-job links on the shared Android Back path", () => {
     expect(durable).toContain("installAndroidBack")
     expect(durable).toContain("props.onContinue()")
+  })
+
+  test("exposes the message-first agent DOM, live semantics, persistent labels, focus, and honest review tabs", () => {
+    expect(agentic).toContain("data-agent-workspace")
+    expect(agentic).toContain("data-agent-composer")
+    expect(agentic).toContain('for="agent-prompt"')
+    expect(agentic).toContain('aria-label="Conversation"')
+    expect(agentic).toContain('aria-live="polite"')
+    expect(agentic).toContain('data-agent-entry="reasoning"')
+    expect(agentic).toContain("data-agent-interaction-active")
+    expect(agentic).toContain("?.focus()")
+    expect(agentic).toContain('role="tablist"')
+    expect(agentic).toContain('role="tabpanel"')
+    expect(agentic).toContain("Changes")
+    expect(agentic).toContain("Files")
+    expect(agentic).toContain("Tests")
+    expect(agentic).toContain("Screenshots")
+    expect(agentic).toContain("No screenshots were reported")
+    expect(agentic).not.toContain("Connection progress")
+    expect(css).toContain("[data-agent-composer]")
+    expect(css).toContain("var(--android-ime-bottom)")
+  })
+
+  test("wires session-bound redacted persistence into the production agent screen", () => {
+    expect(agentic).toContain("readAgentSession(storage, props.workspace)")
+    expect(agentic).toContain("writeAgentSession(storage, props.workspace, value)")
+    expect(agentic).toContain("value.sessionID !== state().sessionID")
+    expect(agentic).toContain("Local session snapshot restored")
+    expect(agentic).toContain("It is not attached")
+    expect(agentic).toContain("Start new session")
+    expect(state).toContain("MAX_PERSISTED_AGENT_SESSION_BYTES = 96 * 1024")
+    expect(state).toContain("redactAgentSessionText")
+    expect(state).not.toContain("MAX_PERSISTED_AGENT_SESSION_BYTES = 192 * 1024")
   })
 })

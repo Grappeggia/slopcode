@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  MAX_PERSISTED_AGENT_SESSION_BYTES,
   initialAgentSessionState,
   normalizeAgentSession,
   readAgentSession,
@@ -9,30 +10,75 @@ import {
   writeAgentSession,
 } from "./ssh-agent-session-state"
 
+const workspace = {
+  profile: "agent@fixture.test:22",
+  directory: "/work/project",
+  agent: "codex-cli",
+} as const
+
+const frame = (sequence: number, type: string, value: Record<string, unknown> = {}) => ({
+  version: "v1",
+  kind: "event",
+  cursor: `cur_${sequence}`,
+  sequence,
+  sessionID: "ses_android_1",
+  turnID: "trn_android_1",
+  type,
+  ...value,
+})
+
+function memory() {
+  const values = new Map<string, string>()
+  return {
+    values,
+    storage: {
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async (key: string, value: string) => void values.set(key, value),
+      removeItem: async (key: string) => void values.delete(key),
+    },
+  }
+}
+
 describe("Android agent session projection", () => {
-  test("projects prompts and typed stream events while preserving stable tool order", () => {
-    let state = reduceAgentSession(initialAgentSessionState(), {
+  test("projects protocol events and keeps stable tool progress bound to one remote session", () => {
+    let state = reduceAgentSession(initialAgentSessionState("ses_android_1"), {
       type: "prompt.submitted",
-      id: "user_1",
+      id: "usr_android_1",
       text: "Build the fixture",
     })
-    expect(state.transcript).toEqual([{ id: "user_1", type: "user", text: "Build the fixture" }])
+    expect(state.transcript).toEqual([{ id: "usr_android_1", type: "user", text: "Build the fixture" }])
 
     ;[
-      { type: "turn.output", cursor: "cur_1", text: "I’ll inspect the workspace." },
-      { type: "turn.reasoning", cursor: "cur_2", text: "Finding the smallest change." },
-      { type: "plan.available", cursor: "cur_3", plan: { id: "plan_1", content: "1. Inspect\n2. Build" } },
-      {
-        type: "tool.updated",
-        cursor: "cur_4",
-        tool: { id: "tool_1", title: "Run tests", status: "in_progress", kind: "execute" },
-      },
-      { type: "turn.retry", cursor: "cur_5", reason: "The first check timed out." },
-      {
-        type: "artifact.created",
-        cursor: "cur_6",
-        artifact: { id: "artifact_1", name: "result.png", path: "/work/result.png", kind: "image", size: 42 },
-      },
+      frame(1, "turn.output", { text: "I’ll inspect the workspace." }),
+      frame(2, "turn.reasoning", { text: "Finding the smallest change." }),
+      frame(3, "plan.available", {
+        plan: {
+          id: "pln_android_1",
+          path: "/work/project/.slopcode/plans/current.md",
+          revision: 1,
+          content: "1. Inspect\n2. Build",
+        },
+      }),
+      frame(4, "tool.updated", {
+        tool: {
+          id: "tol_android_1",
+          title: "Run tests",
+          status: "in_progress",
+          kind: "execute",
+          metadata: { progress: "1/2", path: "/work/project", test: "unit", result: "running" },
+        },
+      }),
+      frame(5, "turn.retry", { reason: "The first check timed out." }),
+      frame(6, "artifact.created", {
+        artifact: {
+          id: "art_android_1",
+          name: "result.png",
+          path: "/work/project/result.png",
+          kind: "image",
+          size: 42,
+          mime: "image/png",
+        },
+      }),
     ].forEach((value) => {
       state = reduceAgentSession(state, { type: "event.received", value })
     })
@@ -40,45 +86,61 @@ describe("Android agent session projection", () => {
     const before = state.transcript.map((item) => item.id)
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: {
-        type: "tool.updated",
-        cursor: "cur_7",
-        tool: { id: "tool_1", title: "Run tests", status: "completed", kind: "execute" },
-      },
+      value: frame(7, "tool.updated", {
+        tool: {
+          id: "tol_android_1",
+          title: "Run tests",
+          status: "completed",
+          kind: "execute",
+          metadata: { progress: "2/2", path: "/work/project", test: "unit", result: "passed", exitCode: "0" },
+        },
+      }),
     })
     expect(state.transcript.map((item) => item.id)).toEqual(before)
-    expect(state.transcript.find((item) => item.id === "tool_1")).toMatchObject({ status: "completed" })
+    expect(state.transcript.find((item) => item.id === "tol_android_1")).toMatchObject({
+      status: "completed",
+      metadata: { progress: "2/2", test: "unit", result: "passed", exitCode: "0" },
+    })
     expect(state.lastCursor).toBe("cur_7")
+
+    const crossed = reduceAgentSession(state, {
+      type: "event.received",
+      value: { ...frame(8, "turn.output", { text: "Wrong session" }), sessionID: "ses_android_2" },
+    })
+    expect(crossed).toEqual(state)
   })
 
   test("projects approval, question, completion, and local failure as typed entries", () => {
-    let state = initialAgentSessionState()
+    let state = initialAgentSessionState("ses_android_1")
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: {
-        type: "interaction.approval.requested",
-        cursor: "cur_1",
-        interaction: { id: "approval_1", revision: 1, title: "Write files", command: "mkdir fixture", risk: "low" },
-      },
-    })
-    state = reduceAgentSession(state, { type: "interaction.resolved", id: "approval_1" })
-    state = reduceAgentSession(state, {
-      type: "event.received",
-      value: {
-        type: "interaction.question.requested",
-        cursor: "cur_2",
+      value: frame(1, "interaction.approval.requested", {
         interaction: {
-          id: "question_1",
+          id: "int_approval_1",
+          revision: 1,
+          title: "Write files",
+          command: "mkdir fixture",
+          cwd: "/work/project",
+          risk: "low",
+        },
+      }),
+    })
+    state = reduceAgentSession(state, { type: "interaction.resolved", id: "int_approval_1" })
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(2, "interaction.question.requested", {
+        interaction: {
+          id: "int_question_1",
           revision: 1,
           prompt: "Use TypeScript?",
           options: ["Yes", "No"],
           allowFreeform: true,
         },
-      },
+      }),
     })
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: { type: "turn.completed", cursor: "cur_3", status: "completed", message: "Done" },
+      value: frame(3, "turn.completed", { status: "completed", message: "Done" }),
     })
     state = reduceAgentSession(state, { type: "failure.added", id: "failure_1", message: "Connection lost" })
 
@@ -89,58 +151,174 @@ describe("Android agent session projection", () => {
 
   test("derives honest review metadata without manufacturing unavailable content", () => {
     const transcript = [
-      { id: "edit_1", type: "tool" as const, title: "Edit app.ts", status: "completed", kind: "edit" },
-      { id: "test_1", type: "tool" as const, title: "Run unit tests", status: "completed", kind: "execute" },
-      { id: "diff_1", type: "artifact" as const, name: "changes.diff", path: "/work/changes.diff", kind: "diff" },
-      { id: "file_1", type: "artifact" as const, name: "app.ts", path: "/work/app.ts", kind: "file" },
-      { id: "image_1", type: "artifact" as const, name: "result.png", path: "/work/result.png", kind: "image" },
+      {
+        id: "tol_edit_1",
+        type: "tool" as const,
+        title: "Edit app.ts",
+        status: "completed",
+        kind: "edit",
+        metadata: { path: "/work/project/app.ts", progress: "done" },
+      },
+      {
+        id: "tol_test_1",
+        type: "tool" as const,
+        title: "Run unit tests",
+        status: "completed",
+        kind: "execute",
+        metadata: { test: "unit", result: "passed", exitCode: "0" },
+      },
+      {
+        id: "art_diff_1",
+        type: "artifact" as const,
+        name: "changes.diff",
+        path: "/work/project/changes.diff",
+        kind: "diff",
+        size: 128,
+      },
+      {
+        id: "art_file_1",
+        type: "artifact" as const,
+        name: "app.ts",
+        path: "/work/project/app.ts",
+        kind: "file",
+        size: 256,
+      },
+      {
+        id: "art_image_1",
+        type: "artifact" as const,
+        name: "result.png",
+        path: "/work/project/result.png",
+        kind: "image",
+        size: 512,
+        mime: "image/png",
+      },
     ]
 
-    expect(reviewItems(transcript, "changes").map((item) => item.id)).toEqual(["edit_1", "diff_1"])
-    expect(reviewItems(transcript, "files").map((item) => item.id)).toEqual(["diff_1", "file_1"])
-    expect(reviewItems(transcript, "tests").map((item) => item.id)).toEqual(["test_1"])
-    expect(reviewItems(transcript, "screenshots").map((item) => item.id)).toEqual(["image_1"])
+    expect(reviewItems(transcript, "changes").map((item) => item.id)).toEqual(["tol_edit_1", "art_diff_1"])
+    expect(reviewItems(transcript, "files").map((item) => item.id)).toEqual(["tol_edit_1", "art_diff_1", "art_file_1"])
+    expect(reviewItems(transcript, "tests").map((item) => item.id)).toEqual(["tol_test_1"])
+    expect(reviewItems(transcript, "screenshots").map((item) => item.id)).toEqual(["art_image_1"])
+    expect(reviewItems([], "changes")).toEqual([])
   })
 })
 
 describe("Android agent session persistence", () => {
-  test("round trips the bounded allowlisted projection and strips unknown credential fields", async () => {
-    const values = new Map<string, string>()
-    const storage = {
-      getItem: async (key: string) => values.get(key) ?? null,
-      setItem: async (key: string, value: string) => void values.set(key, value),
-      removeItem: async (key: string) => void values.delete(key),
-    }
-    const restored = normalizeAgentSession({
-      version: 1,
-      draft: "Follow up",
-      selectedReview: "files",
-      lastCursor: "cur_9",
-      transcript: [{ id: "user_1", type: "user", text: "Review the app", metadata: { apiKey: "placeholder" } }],
-      password: "placeholder",
-      privateKey: "placeholder",
+  test("persists a session-bound redacted projection without interaction commands", async () => {
+    const data = memory()
+    let state = reduceAgentSession(initialAgentSessionState("ses_android_1"), {
+      type: "draft.changed",
+      value: "password=draft-secret",
     })
-    expect(restored).toEqual({
-      version: 1,
-      draft: "Follow up",
-      selectedReview: "files",
-      lastCursor: "cur_9",
-      transcript: [{ id: "user_1", type: "user", text: "Review the app" }],
+    state = reduceAgentSession(state, {
+      type: "prompt.submitted",
+      id: "usr_android_1",
+      text: "Use api_key=prompt-secret and continue",
+    })
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(1, "turn.output", {
+        text: "Authorization: Bearer output-secret-token and ghp_123456789012345678901234567890123456",
+      }),
+    })
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(2, "turn.reasoning", {
+        text: "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key-secret\n-----END OPENSSH PRIVATE KEY-----",
+      }),
+    })
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(3, "tool.updated", {
+        tool: {
+          id: "tol_android_1",
+          title: "Deploy token=tool-secret",
+          status: "in_progress",
+          kind: "execute",
+          metadata: { summary: "password: metadata-secret", progress: "1/3", command: "unsafe-secret" },
+        },
+      }),
+    })
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(4, "interaction.approval.requested", {
+        interaction: {
+          id: "int_approval_1",
+          revision: 1,
+          title: "Deploy apiKey=approval-secret",
+          command: "deploy --token command-secret",
+          cwd: "/work/project",
+          reason: "Use password=reason-secret",
+          risk: "high",
+        },
+      }),
     })
 
-    await writeAgentSession(storage, "scope", restored)
-    expect(values.get("scope")).not.toContain("password")
-    expect(values.get("scope")).not.toContain("privateKey")
-    expect(values.get("scope")).not.toContain("apiKey")
-    await expect(readAgentSession(storage, "scope")).resolves.toEqual(restored)
+    await writeAgentSession(data.storage, workspace, state)
+    const raw = data.values.get(sessionKey(workspace, "ses_android_1")) ?? ""
+    ;[
+      "draft-secret",
+      "prompt-secret",
+      "output-secret-token",
+      "ghp_123456789012345678901234567890123456",
+      "private-key-secret",
+      "tool-secret",
+      "metadata-secret",
+      "unsafe-secret",
+      "approval-secret",
+      "command-secret",
+      "reason-secret",
+    ].forEach((secret) => expect(raw).not.toContain(secret))
+    expect(raw).toContain("[REDACTED")
+    expect(raw).not.toContain("deploy --token")
+
+    const restored = await readAgentSession(data.storage, workspace)
+    expect(restored).toMatchObject({ version: 2, sessionID: "ses_android_1" })
+    expect(restored?.transcript.find((item) => item.type === "approval")).toMatchObject({ detailsOmitted: true })
+    expect(
+      normalizeAgentSession({
+        ...restored,
+        password: "structural-secret",
+        privateKey: "structural-secret",
+        transcript: [{ id: "usr_safe", type: "user", text: "Safe", credential: "structural-secret" }],
+      }),
+    ).not.toHaveProperty("password")
   })
 
-  test("uses an opaque stable workspace scope key", () => {
-    const workspace = { profile: "agent@fixture.test:22", directory: "/work/project", agent: "codex-cli" } as const
-    const first = sessionKey(workspace)
-    expect(sessionKey(workspace)).toBe(first)
-    expect(sessionKey({ ...workspace, directory: "/work/other" })).not.toBe(first)
+  test("enforces a total UTF-8 serialized bound below the Android bridge value limit", async () => {
+    const data = memory()
+    let state = initialAgentSessionState("ses_android_1")
+    Array.from({ length: 220 }, (_, index) => index + 1).forEach((sequence) => {
+      state = reduceAgentSession(state, {
+        type: "event.received",
+        value: frame(sequence, sequence % 2 ? "turn.output" : "turn.reasoning", {
+          text: `${sequence}:${"🙂".repeat(4_000)}`,
+        }),
+      })
+    })
+
+    await writeAgentSession(data.storage, workspace, state)
+    const raw = data.values.get(sessionKey(workspace, "ses_android_1")) ?? ""
+    expect(new TextEncoder().encode(raw).byteLength).toBeLessThanOrEqual(MAX_PERSISTED_AGENT_SESSION_BYTES)
+    expect(MAX_PERSISTED_AGENT_SESSION_BYTES).toBeLessThan(192 * 1024)
+    expect((await readAgentSession(data.storage, workspace))?.transcript.at(-1)?.id).toBe(
+      state.transcript.at(-1)?.id,
+    )
+  })
+
+  test("uses opaque workspace and remote-session scope and refuses a different expected session", async () => {
+    const data = memory()
+    const first = sessionKey(workspace, "ses_android_1")
+    expect(sessionKey(workspace, "ses_android_1")).toBe(first)
+    expect(sessionKey({ ...workspace, directory: "/work/other" }, "ses_android_1")).not.toBe(first)
+    expect(sessionKey(workspace, "ses_android_2")).not.toBe(first)
     expect(first).not.toContain(workspace.profile)
     expect(first).not.toContain(workspace.directory)
+    expect(first).not.toContain("ses_android_1")
+
+    await writeAgentSession(data.storage, workspace, initialAgentSessionState("ses_android_1"))
+    await expect(readAgentSession(data.storage, workspace, "ses_android_2")).resolves.toBeUndefined()
+    await expect(readAgentSession(data.storage, workspace, "ses_android_1")).resolves.toMatchObject({
+      sessionID: "ses_android_1",
+    })
   })
 })

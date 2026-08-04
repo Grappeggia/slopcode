@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import type { SshTransport } from "./ssh"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import {
@@ -15,8 +15,21 @@ import {
   type OrchestratorState,
   type OrchestratorWire,
 } from "./ssh-orchestrator"
+import {
+  AGENT_SESSION_STORAGE,
+  REVIEW_TABS,
+  initialAgentSessionState,
+  lastPrompt,
+  readAgentSession,
+  reduceAgentSession,
+  reviewItems,
+  writeAgentSession,
+  type AgentSessionEntry,
+  type ReviewTab,
+} from "./ssh-agent-session-state"
 import { SshShell } from "./ssh-shell"
 import { installAndroidBack } from "./android-back"
+import { appStorage } from "./platform"
 import {
   canRetry,
   canSubmit,
@@ -57,49 +70,243 @@ function responseID(value: unknown, key: "sessionID" | "turnID") {
   return typeof next === "string" && next.length > 0 && next.length <= 256 ? next : undefined
 }
 
-function itemLabel(value: OrchestratorState["items"][number]) {
-  if (value.type === "output") return "Agent"
-  if (value.type === "reasoning") return "Thinking"
-  if (value.type === "retry") return "Retrying"
-  if (value.type === "tool") return value.title
-  if (value.type === "plan") return "Plan"
-  if (value.type === "artifact") return value.name
-  return "Activity"
+function reviewLabel(value: ReviewTab) {
+  return value[0]!.toUpperCase() + value.slice(1)
+}
+
+function emptyReview(value: ReviewTab) {
+  if (value === "changes") return "No change metadata was reported for this session."
+  if (value === "files") return "No file metadata was reported for this session."
+  if (value === "tests") return "No test runs were reported for this session."
+  return "No screenshots were reported. Previews are unavailable unless the agent reports an image artifact."
+}
+
+function ReviewItem(props: { entry: AgentSessionEntry; tab: ReviewTab }) {
+  if (props.entry.type === "tool")
+    return (
+      <article class="rounded-lg border border-border-weak-base bg-surface-base p-3" data-review-item="tool">
+        <div class="flex items-start justify-between gap-3">
+          <p class="text-14-medium">{props.entry.title}</p>
+          <span class="text-12-regular text-text-weak">{props.entry.status.replaceAll("_", " ")}</span>
+        </div>
+        <Show when={props.entry.metadata?.path}>
+          <p class="mt-2 break-all text-12-regular text-text-weak">{props.entry.metadata?.path}</p>
+        </Show>
+        <Show when={props.entry.metadata?.progress || props.entry.metadata?.result || props.entry.metadata?.exitCode}>
+          <p class="mt-2 text-12-regular text-text-weak">
+            {[props.entry.metadata?.progress, props.entry.metadata?.result, props.entry.metadata?.exitCode && `exit ${props.entry.metadata.exitCode}`]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </Show>
+      </article>
+    )
+  if (props.entry.type === "artifact")
+    return (
+      <article class="rounded-lg border border-border-weak-base bg-surface-base p-3" data-review-item="artifact">
+        <div class="flex items-start justify-between gap-3">
+          <p class="text-14-medium">{props.entry.name}</p>
+          <span class="text-12-regular text-text-weak">{props.entry.kind}</span>
+        </div>
+        <p class="mt-2 break-all text-12-regular text-text-weak">{props.entry.path}</p>
+        <p class="mt-2 text-12-regular text-text-weak">
+          {props.entry.size !== undefined ? `${props.entry.size} bytes` : "Size not reported"}
+          {props.entry.mime ? ` · ${props.entry.mime}` : ""}
+        </p>
+        <p class="mt-2 text-12-regular text-text-weak">
+          {props.tab === "screenshots" ? "Screenshot metadata only; preview unavailable." : "Metadata only; content not loaded."}
+        </p>
+      </article>
+    )
+  return null
+}
+
+function Entry(props: {
+  entry: AgentSessionEntry
+  active?: OrchestratorInteraction
+  busy: boolean
+  answer: string
+  onAnswer: (value: string) => void
+  onRespond: (interaction: OrchestratorInteraction, decision?: "approved" | "rejected", answer?: string) => void
+}) {
+  const item = props.entry
+  if (item.type === "user")
+    return (
+      <article data-agent-entry="user" aria-label="You" class="ml-auto max-w-[88%] rounded-2xl bg-surface-brand-base px-4 py-3 text-text-on-brand-base">
+        <p class="whitespace-pre-wrap break-words text-14-regular">{item.text}</p>
+      </article>
+    )
+  if (item.type === "output")
+    return (
+      <article data-agent-entry="output" aria-label="Agent response" class="max-w-[94%] rounded-2xl border border-border-weak-base bg-surface-base px-4 py-3">
+        <p class="text-12-medium text-text-weak">Agent</p>
+        <p class="mt-1 whitespace-pre-wrap break-words text-14-regular">{item.text}</p>
+      </article>
+    )
+  if (item.type === "reasoning")
+    return (
+      <details data-agent-entry="reasoning" class="rounded-xl border border-border-weak-base bg-surface-base px-3">
+        <summary class="cursor-pointer text-12-medium text-text-weak">Reasoning</summary>
+        <p class="pb-3 whitespace-pre-wrap break-words text-12-regular text-text-weak">{item.text}</p>
+      </details>
+    )
+  if (item.type === "retry")
+    return (
+      <aside data-agent-entry="retry" role="status" aria-live="polite" class="rounded-xl border border-border-weak-base bg-surface-weak-base p-3">
+        <p class="text-12-medium">Retrying</p>
+        <p class="mt-1 whitespace-pre-wrap text-12-regular text-text-weak">{item.text}</p>
+      </aside>
+    )
+  if (item.type === "plan")
+    return (
+      <section data-agent-entry="plan" aria-label="Agent plan" class="rounded-xl border border-border-weak-base bg-surface-base p-4">
+        <p class="text-12-medium text-text-weak">Plan</p>
+        <pre class="mt-2 whitespace-pre-wrap break-words text-12-regular">{item.content}</pre>
+      </section>
+    )
+  if (item.type === "tool")
+    return (
+      <article data-agent-entry="tool" role="status" aria-live="polite" class="rounded-xl border border-border-weak-base bg-surface-base p-4">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="text-12-medium text-text-weak">Tool</p>
+            <p class="mt-1 text-14-medium">{item.title}</p>
+          </div>
+          <span class="rounded-full bg-surface-weak-base px-2 py-1 text-12-regular">{item.status.replaceAll("_", " ")}</span>
+        </div>
+        <Show when={item.metadata?.progress || item.metadata?.summary || item.metadata?.path}>
+          <p class="mt-2 break-all text-12-regular text-text-weak">
+            {[item.metadata?.progress, item.metadata?.summary, item.metadata?.path].filter(Boolean).join(" · ")}
+          </p>
+        </Show>
+      </article>
+    )
+  if (item.type === "artifact")
+    return (
+      <article data-agent-entry="artifact" class="rounded-xl border border-border-weak-base bg-surface-base p-4">
+        <p class="text-12-medium text-text-weak">Reported {item.kind}</p>
+        <p class="mt-1 text-14-medium">{item.name}</p>
+        <p class="mt-1 break-all text-12-regular text-text-weak">{item.path}</p>
+      </article>
+    )
+  if (item.type === "approval" || item.type === "question") {
+    const active = () => !item.resolved && props.active?.id === item.id
+    const title = item.type === "approval" ? item.interaction.title : item.interaction.prompt
+    return (
+      <section
+        data-agent-entry={item.type}
+        data-agent-interaction-active={active() ? "true" : undefined}
+        data-interaction-id={item.id}
+        role={active() ? "alert" : "group"}
+        aria-label={item.type === "approval" ? "Approval required" : "Question from agent"}
+        class={`rounded-xl border p-4 ${active() ? "border-border-brand-base bg-surface-base" : "border-border-weak-base bg-surface-base"}`}
+      >
+        <p class="text-12-medium text-text-weak">{item.type === "approval" ? "Approval required" : "Question"}</p>
+        <h2 class="mt-1 text-16-medium">{title}</h2>
+        <Show when={item.interaction.command}>
+          <pre class="mt-3 rounded-lg bg-surface-raised-base p-3 whitespace-pre-wrap break-words text-12-regular">{item.interaction.command}</pre>
+        </Show>
+        <Show when={item.detailsOmitted}>
+          <p class="mt-2 text-12-regular text-text-weak">Command details were not saved in the local snapshot.</p>
+        </Show>
+        <Show when={item.interaction.reason || item.interaction.cwd}>
+          <p class="mt-2 text-12-regular text-text-weak">{[item.interaction.reason, item.interaction.cwd].filter(Boolean).join(" · ")}</p>
+        </Show>
+        <Show when={active() && item.type === "approval"}>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button type="button" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "approved")} class="min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Approve</button>
+            <button type="button" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "rejected")} class="min-h-12 rounded-md border border-border-weak-base px-4 py-2 text-12-medium disabled:opacity-50">Reject</button>
+          </div>
+        </Show>
+        <Show when={active() && item.type === "question"}>
+          <div class="mt-3 flex flex-col gap-3">
+            <Show when={item.interaction.options?.length}>
+              <div class="flex flex-wrap gap-2">
+                <For each={item.interaction.options ?? []}>
+                  {(option) => <button type="button" disabled={props.busy} onClick={() => props.onRespond(item.interaction, undefined, option)} class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">{option}</button>}
+                </For>
+              </div>
+            </Show>
+            <Show when={item.interaction.allowFreeform !== false}>
+              <div class="flex flex-col gap-2">
+                <label for={`agent-answer-${item.id}`} class="text-12-medium">Your answer</label>
+                <div class="flex gap-2">
+                  <input id={`agent-answer-${item.id}`} value={props.answer} onInput={(event) => props.onAnswer(event.currentTarget.value)} class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-14-regular" />
+                  <button type="button" disabled={props.busy || !props.answer.trim()} onClick={() => props.onRespond(item.interaction, undefined, props.answer)} class="min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Send answer</button>
+                </div>
+              </div>
+            </Show>
+          </div>
+        </Show>
+        <Show when={item.resolved}><p class="mt-3 text-12-regular text-text-weak">Response sent</p></Show>
+      </section>
+    )
+  }
+  if (item.type === "completion")
+    return (
+      <section data-agent-entry="completion" role="status" aria-live="polite" class="rounded-xl border border-border-weak-base bg-surface-success-weak p-4">
+        <p class="text-14-medium">{item.status === "completed" ? "Turn complete" : item.status === "stopped" ? "Turn stopped" : "Turn failed"}</p>
+        <Show when={item.message}><p class="mt-1 text-12-regular">{item.message}</p></Show>
+      </section>
+    )
+  return (
+    <section data-agent-entry="failure" role="alert" class="rounded-xl border border-border-critical-base bg-surface-critical-weak p-4">
+      <p class="text-14-medium">Session problem</p>
+      <p class="mt-1 text-12-regular">{item.type === "failure" ? item.message : "The session could not continue."}</p>
+    </section>
+  )
 }
 
 export function SshAgenticSession(props: Props) {
   const [state, setState] = createSignal<OrchestratorState>(initialOrchestratorState())
-  const [prompt, setPrompt] = createSignal("")
+  const [session, setSession] = createSignal(initialAgentSessionState())
   const [answer, setAnswer] = createSignal("")
-  const [busy, setBusy] = createSignal(false)
+  const [busy, setBusy] = createSignal(true)
   const [error, setError] = createSignal("")
+  const [restored, setRestored] = createSignal(false)
   const [wireState, setWireState] = createSignal<OrchestratorWire>()
+  const storage = appStorage()(AGENT_SESSION_STORAGE)
   let closeWire: () => void = () => undefined
   let stopped = false
+  let active = false
+  let hydrated = false
+  let saves = Promise.resolve()
+
+  createEffect(() => {
+    const value = session()
+    if (!hydrated || !value.sessionID) return
+    saves = saves.then(() => writeAgentSession(storage, props.workspace, value)).catch(() => undefined)
+  })
+
+  const project = (action: Parameters<typeof reduceAgentSession>[1]) => setSession((current) => reduceAgentSession(current, action))
 
   const showError = (cause: unknown, fallback: string) => {
     const message = cause instanceof Error ? cause.message : fallback
     setError(message)
     setState((current) => ({ ...current, phase: "error", error: message }))
+    if (session().sessionID) project({ type: "failure.added", id: `failure:${crypto.randomUUID()}`, message })
   }
 
   const event = (value: Record<string, unknown>) => {
-    if (stopped) return
+    if (stopped || value.sessionID !== state().sessionID) return
     setState((current) => reduceOrchestratorEvent(current, value))
+    project({ type: "event.received", value })
+    if (value.type === "interaction.approval.requested" || value.type === "interaction.question.requested")
+      queueMicrotask(() => document.querySelector<HTMLElement>("[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input")?.focus())
   }
 
-  const start = async (lastPrompt?: string) => {
+  const start = async (last?: string) => {
     if (!isOrchestratorAvailable(props.ssh)) {
-      showError(
-        new Error("Native SSH orchestration is unavailable on this device."),
-        "Native SSH orchestration is unavailable.",
-      )
+      showError(new Error("Native SSH orchestration is unavailable on this device."), "Native SSH orchestration is unavailable.")
+      setBusy(false)
       return
     }
     stopped = false
+    setRestored(false)
+    setSession(initialAgentSessionState())
     setBusy(true)
     setError("")
-    setState({ ...initialOrchestratorState(), phase: "opening", ...(lastPrompt ? { lastPrompt } : {}) })
+    setState({ ...initialOrchestratorState(), phase: "opening", ...(last ? { lastPrompt: last } : {}) })
     closeWire()
     const next = wire(props.ssh)
     setWireState(next)
@@ -109,20 +316,19 @@ export function SshAgenticSession(props: Props) {
       const channel = await props.ssh.orchestratorStart(props.workspace.directory)
       next.scope(channel.id)
       started = true
-      const workspace = await next.send(workspaceFrame(props.workspace.directory, props.workspace.agent))
-      const workspaceValue = workspace.workspace
-      const workspaceObject =
-        workspaceValue && typeof workspaceValue === "object" && !Array.isArray(workspaceValue)
-          ? (workspaceValue as { id?: unknown })
-          : undefined
-      const workspaceID = workspaceObject && typeof workspaceObject.id === "string" ? workspaceObject.id : ""
-      if (workspaceID !== "wrk_android") throw new Error("The remote workspace response was invalid.")
-      const session = await next.send(sessionFrame(props.workspace.agent))
-      const sessionID = responseID(session, "sessionID")
+      active = true
+      const opened = await next.send(workspaceFrame(props.workspace.directory, props.workspace.agent))
+      const workspace = opened.workspace
+      if (!workspace || typeof workspace !== "object" || Array.isArray(workspace) || (workspace as { id?: unknown }).id !== "wrk_android")
+        throw new Error("The remote workspace response was invalid.")
+      const created = await next.send(sessionFrame(props.workspace.agent))
+      const sessionID = responseID(created, "sessionID")
       if (!sessionID) throw new Error("The remote agent did not return a session.")
+      setSession(initialAgentSessionState(sessionID))
       setState((current) => ({ ...current, phase: "ready", sessionID }))
     } catch (cause) {
       await cleanupAgenticStart(props.ssh, () => setWireState(), closeWire, started)
+      active = false
       closeWire = () => undefined
       showError(cause, "Could not start the remote agent session.")
     } finally {
@@ -130,34 +336,45 @@ export function SshAgenticSession(props: Props) {
     }
   }
 
-  onMount(() => void start())
+  onMount(() => {
+    void readAgentSession(storage, props.workspace)
+      .then((saved) => {
+        if (stopped) return
+        hydrated = true
+        if (!saved) return start()
+        setSession(saved)
+        setRestored(true)
+        setState({ ...initialOrchestratorState(), phase: "stopped", lastPrompt: lastPrompt(saved) })
+        setBusy(false)
+      })
+      .catch(() => {
+        hydrated = true
+        return start()
+      })
+  })
 
   onMount(() => {
-    const releaseBack = installAndroidBack(() => {
-      if (busy()) return true
-      return false
-    })
+    const releaseBack = installAndroidBack(() => busy())
     onCleanup(releaseBack)
   })
 
   onCleanup(() => {
     stopped = true
     closeWire()
-    void props.ssh.orchestratorStop().catch(() => undefined)
+    if (active) void props.ssh.orchestratorStop().catch(() => undefined)
   })
 
   const send = async () => {
-    const value = prompt().trim()
+    const value = session().draft.trim()
     const currentState = state()
-    const sessionID = currentState.sessionID
     const current = wireState()
-    if (!value || !sessionID || !current || busy() || !canSubmit(currentState.phase)) return
-    setPrompt("")
+    if (!value || !currentState.sessionID || !current || busy() || !canSubmit(currentState.phase) || restored()) return
+    project({ type: "prompt.submitted", id: `usr_${crypto.randomUUID().replaceAll("-", "")}`, text: value })
     setError("")
     setBusy(true)
     setState((previous) => ({ ...previous, phase: "running", lastPrompt: value, error: undefined }))
     try {
-      const response = await current.send(turnFrame(sessionID, value, props.workspace.agent))
+      const response = await current.send(turnFrame(currentState.sessionID, value, props.workspace.agent))
       const turnID = responseID(response, "turnID")
       if (turnID) setState((previous) => ({ ...previous, turnID }))
     } catch (cause) {
@@ -167,18 +384,19 @@ export function SshAgenticSession(props: Props) {
     }
   }
 
-  const respond = async (interaction: OrchestratorInteraction, decision?: "approved" | "rejected") => {
+  const respond = async (interaction: OrchestratorInteraction, decision?: "approved" | "rejected", supplied?: string) => {
     const sessionID = state().sessionID
     const current = wireState()
-    if (!sessionID || !current || busy()) return
-    const value = answer().trim()
-    if (interaction.kind === "question" && !value) return
+    const value = (supplied ?? answer()).trim()
+    if (!sessionID || !current || busy() || (interaction.kind === "question" && !value)) return
     setBusy(true)
     setError("")
     try {
       await current.send(replyFrame(sessionID, interaction, value, decision))
       setAnswer("")
+      project({ type: "interaction.resolved", id: interaction.id })
       setState((previous) => ({ ...previous, phase: "running", interaction: undefined, error: undefined }))
+      queueMicrotask(() => document.querySelector<HTMLTextAreaElement>("#agent-prompt")?.focus())
     } catch (cause) {
       showError(cause, "The remote agent did not accept that response.")
     } finally {
@@ -191,6 +409,7 @@ export function SshAgenticSession(props: Props) {
     setBusy(true)
     try {
       await stopAgentic(props.ssh, closeWire)
+      active = false
       setWireState()
       setState({ ...initialOrchestratorState(), phase: "stopped", lastPrompt: state().lastPrompt })
     } catch (cause) {
@@ -203,26 +422,27 @@ export function SshAgenticSession(props: Props) {
     setBusy(true)
     stopped = true
     closeWire()
+    active = false
     await props.ssh.orchestratorStop().catch(() => undefined)
     await props.ssh.disconnect().catch(() => undefined)
     props.onDisconnected()
   }
 
   const retry = () => {
-    const current = state()
-    const value = current.lastPrompt
-    if (!value || busy() || !canRetry(current.phase, current.sessionID, !!wireState())) return
-    setPrompt(value)
+    const value = state().lastPrompt ?? lastPrompt(session())
+    if (!value || busy() || !canRetry(state().phase, state().sessionID, !!wireState())) return
+    project({ type: "draft.changed", value })
     queueMicrotask(() => void send())
   }
 
   const reconnect = async () => {
     if (busy()) return
-    const lastPrompt = state().lastPrompt
+    const value = state().lastPrompt ?? lastPrompt(session())
     setBusy(true)
     setError("")
     try {
-      await reconnectAgentic(props.ssh, closeWire, lastPrompt, start)
+      await reconnectAgentic(props.ssh, closeWire, value, start)
+      active = true
     } catch (cause) {
       showError(cause, "Could not reconnect the remote agent session.")
     } finally {
@@ -231,346 +451,128 @@ export function SshAgenticSession(props: Props) {
   }
 
   const interactive = async () => {
-    if (busy()) return
+    if (busy() || restored()) return
     setBusy(true)
     setError("")
     try {
       await handoffToInteractive(props.ssh, closeWire, props.onInteractive)
+      active = false
     } catch (cause) {
       showError(cause, "Could not stop the remote agent before opening the interactive CLI.")
       setBusy(false)
     }
   }
 
-  const choose = (value: string) => {
-    setAnswer(value)
-    const interaction = state().interaction
-    if (interaction?.kind === "question") void respond(interaction)
+  const selectReview = (value: ReviewTab, focus = false) => {
+    project({ type: "review.selected", value })
+    if (focus) queueMicrotask(() => document.querySelector<HTMLButtonElement>(`[data-review-tab='${value}']`)?.focus())
   }
 
+  const reviewKey = (event: KeyboardEvent, value: ReviewTab) => {
+    const index = REVIEW_TABS.indexOf(value)
+    const next = event.key === "ArrowRight" ? REVIEW_TABS[(index + 1) % REVIEW_TABS.length] : event.key === "ArrowLeft" ? REVIEW_TABS[(index - 1 + REVIEW_TABS.length) % REVIEW_TABS.length] : event.key === "Home" ? REVIEW_TABS[0] : event.key === "End" ? REVIEW_TABS.at(-1) : undefined
+    if (!next) return
+    event.preventDefault()
+    selectReview(next, true)
+  }
+
+  const status = () => (restored() ? "Local snapshot" : phaseLabel(state().phase))
+  const reviewed = () => reviewItems(session().transcript, session().selectedReview)
+
   return (
-    <SshShell workspace={props.workspace} sessionID={state().sessionID} sessionState={phaseLabel(state().phase)}>
-      <main class="min-h-screen bg-surface-base text-text-strong flex items-start justify-center p-4 pt-20 sm:p-6 sm:pt-20">
-        <section class="w-full max-w-3xl rounded-2xl border border-border-weak-base bg-surface-raised-base p-4 sm:p-6 flex flex-col gap-5">
-          <header class="flex items-start justify-between gap-4">
-            <div class="flex flex-col gap-1">
-              <p class="text-12-regular text-text-weak uppercase tracking-wide">Remote agent session</p>
-              <h1 class="text-20-medium">Your agent is in control</h1>
-              <p class="text-14-regular text-text-weak">
-                Ask for an outcome. Slopcode will plan, act, and show you what changed.
-              </p>
+    <SshShell workspace={props.workspace} sessionID={restored() ? undefined : state().sessionID} sessionState={status()}>
+      <main data-agent-workspace class="min-h-screen bg-surface-base text-text-strong">
+        <section data-agent-panel class="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border-weak-base bg-surface-raised-base">
+          <header data-agent-app-bar class="flex items-center justify-between gap-3 border-b border-border-weak-base px-4 py-3">
+            <div class="min-w-0 pl-12">
+              <p class="truncate text-14-medium">{agentName(props.workspace.agent)} · {status()}</p>
+              <p class="truncate text-12-regular text-text-weak">{props.workspace.directory}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => void disconnect()}
-              class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular"
-            >
-              Disconnect
-            </button>
+            <button type="button" onClick={() => void disconnect()} class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular">Disconnect</button>
           </header>
 
-          <section class="grid grid-cols-1 sm:grid-cols-3 gap-2" aria-label="Remote session summary">
-            <div class="rounded-xl border border-border-weak-base bg-surface-base p-3">
-              <p class="text-12-regular text-text-weak">Computer</p>
-              <p class="text-14-medium mt-1 break-all">{props.workspace.target}</p>
-            </div>
-            <div class="rounded-xl border border-border-weak-base bg-surface-base p-3">
-              <p class="text-12-regular text-text-weak">Workspace</p>
-              <p class="text-14-medium mt-1 break-all">{props.workspace.directory}</p>
-            </div>
-            <div class="rounded-xl border border-border-weak-base bg-surface-base p-3">
-              <p class="text-12-regular text-text-weak">Agent</p>
-              <p class="text-14-medium mt-1">{agentName(props.workspace.agent)}</p>
-            </div>
-          </section>
+          <div data-agent-scroll class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+            <details data-agent-context class="mb-4 rounded-xl border border-border-weak-base bg-surface-base px-3">
+              <summary class="cursor-pointer text-12-medium">Remote agent session context</summary>
+              <dl class="grid gap-2 pb-3 text-12-regular">
+                <div><dt class="text-text-weak">Computer</dt><dd class="break-all">{props.workspace.target}</dd></div>
+                <div><dt class="text-text-weak">Workspace</dt><dd class="break-all">{props.workspace.directory}</dd></div>
+                <div><dt class="text-text-weak">Agent</dt><dd>{agentName(props.workspace.agent)}</dd></div>
+              </dl>
+            </details>
 
-          <section
-            class="rounded-xl border border-border-weak-base bg-surface-base p-4"
-            aria-label="Connection progress"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <p class="text-12-regular text-text-weak">Connection progress</p>
-                <p class="text-16-medium mt-1">{phaseLabel(state().phase)}</p>
-              </div>
-              <Show when={busy()}>
-                <span class="text-12-regular text-text-weak" aria-live="polite">
-                  Working…
-                </span>
-              </Show>
-            </div>
-            <div class="grid grid-cols-4 gap-2 mt-4">
-              <For each={["Connecting", "Workspace", "Agent", "Session"]}>
-                {(label, index) => (
-                  <div class="flex flex-col gap-2" aria-label={label}>
-                    <div
-                      class={`h-2 rounded-full ${index() <= (state().phase === "connecting" ? 0 : state().phase === "opening" ? 1 : state().phase === "ready" ? 2 : 3) ? "bg-surface-brand-base" : "bg-surface-weak-base"}`}
-                    />
-                    <span class="text-12-regular text-text-weak">{label}</span>
-                  </div>
-                )}
-              </For>
-            </div>
-          </section>
+            <div role="status" aria-live="polite" aria-atomic="true" class="sr-only">Remote agent status: {status()}</div>
 
-          <Show when={error() || state().error}>
-            <div
-              role="alert"
-              class="rounded-xl border border-border-critical-base bg-surface-critical-weak p-4 flex flex-col gap-3"
-            >
-              <p class="text-14-regular">{error() || state().error}</p>
-              <p class="text-12-regular text-text-weak">
-                {props.workspace.agent === "antigravity-cli"
-                  ? "Check the SSH connection, Antigravity sign-in, and workspace access, then reconnect."
-                  : "Check the SSH connection and workspace access, then reconnect."}
-              </p>
-              <div class="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void reconnect()}
-                  class="min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium"
-                >
-                  Reconnect
-                </button>
-                <Show when={state().lastPrompt && canRetry(state().phase, state().sessionID, !!wireState())}>
-                  <button
-                    type="button"
-                    onClick={retry}
-                    class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
-                  >
-                    Retry last request
-                  </button>
-                </Show>
-              </div>
-            </div>
-          </Show>
-
-          <Show when={props.workspace.agent === "antigravity-cli"}>
-            <section
-              class="rounded-xl border border-border-weak-base bg-surface-base p-4"
-              aria-label="Antigravity limitations"
-            >
-              <p class="text-14-medium">Antigravity headless session</p>
-              <p class="mt-1 text-12-regular text-text-weak">
-                Antigravity runs in a sandboxed project scoped to this workspace. Its one-shot CLI does not expose
-                structured approvals, so this mode automatically accepts its in-project actions.
-              </p>
-            </section>
-          </Show>
-
-          <Show when={state().items.length > 0}>
-            <section class="flex flex-col gap-3" aria-label="Agent activity">
-              <h2 class="text-16-medium">Activity</h2>
-              <For each={state().items}>
-                {(item) => (
-                  <article class="rounded-xl border border-border-weak-base bg-surface-base p-4 flex flex-col gap-2">
-                    <p class="text-12-regular text-text-weak">{itemLabel(item)}</p>
-                    <Show when={item.type === "output" || item.type === "reasoning" || item.type === "retry"}>
-                      <p class="text-14-regular whitespace-pre-wrap break-words">
-                        {item.type === "output" || item.type === "reasoning" || item.type === "retry" ? item.text : ""}
-                      </p>
-                    </Show>
-                    <Show when={item.type === "tool"}>
-                      <div class="flex items-center justify-between gap-3">
-                        <span class="text-14-regular">{item.type === "tool" ? item.title : ""}</span>
-                        <span class="text-12-regular text-text-weak">{item.type === "tool" ? item.status : ""}</span>
-                      </div>
-                    </Show>
-                    <Show when={item.type === "plan"}>
-                      <pre class="text-12-regular whitespace-pre-wrap">{item.type === "plan" ? item.content : ""}</pre>
-                    </Show>
-                    <Show when={item.type === "artifact"}>
-                      <div class="flex items-center justify-between gap-3">
-                        <span class="text-14-regular">{item.type === "artifact" ? item.name : ""}</span>
-                        <span class="text-12-regular text-text-weak">{item.type === "artifact" ? item.kind : ""}</span>
-                      </div>
-                      <p class="text-12-regular text-text-weak break-all">
-                        {item.type === "artifact" ? item.path : ""}
-                      </p>
-                    </Show>
-                  </article>
-                )}
-              </For>
-            </section>
-          </Show>
-
-          <Show when={state().interaction}>
-            {(interaction) => (
-              <section
-                class="rounded-xl border border-border-brand-base bg-surface-base p-4 flex flex-col gap-3"
-                aria-label={interaction().kind === "approval" ? "Approval required" : "Question from agent"}
-              >
-                <div>
-                  <p class="text-12-regular text-text-weak">
-                    {interaction().kind === "approval" ? "Approval required" : "Question"}
-                  </p>
-                  <h2 class="text-16-medium mt-1">{interaction().title ?? interaction().prompt}</h2>
-                </div>
-                <Show when={interaction().command}>
-                  <pre class="rounded-lg bg-surface-raised-base p-3 text-12-regular whitespace-pre-wrap break-words">
-                    {interaction().command}
-                  </pre>
-                </Show>
-                <Show when={interaction().reason || interaction().cwd}>
-                  <p class="text-12-regular text-text-weak">
-                    {interaction().reason ?? ""}
-                    {interaction().cwd ? ` · ${interaction().cwd}` : ""}
-                  </p>
-                </Show>
-                <Show when={interaction().kind === "approval"}>
-                  <div class="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      disabled={busy()}
-                      onClick={() => void respond(interaction(), "approved")}
-                      class="rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-2 text-12-medium disabled:opacity-50"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy()}
-                      onClick={() => void respond(interaction(), "rejected")}
-                      class="rounded-md border border-border-weak-base px-4 py-2 text-12-medium disabled:opacity-50"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </Show>
-                <Show when={interaction().kind === "question"}>
-                  <Show when={interaction().options?.length}>
-                    <div class="flex flex-wrap gap-2">
-                      <For each={interaction().options ?? []}>
-                        {(option) => (
-                          <button
-                            type="button"
-                            disabled={busy()}
-                            onClick={() => choose(option)}
-                            class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
-                          >
-                            {option}
-                          </button>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <Show when={interaction().allowFreeform !== false}>
-                    <div class="flex gap-2">
-                      <input
-                        value={answer()}
-                        onInput={(event) => setAnswer(event.currentTarget.value)}
-                        placeholder="Your answer"
-                        class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-14-regular"
-                      />
-                      <button
-                        type="button"
-                        disabled={busy() || !answer().trim()}
-                        onClick={() => void respond(interaction())}
-                        class="min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-3 py-2 text-12-medium disabled:opacity-50"
-                      >
-                        Send
-                      </button>
-                    </div>
-                  </Show>
-                </Show>
+            <Show when={restored()}>
+              <section role="status" class="mb-4 rounded-xl border border-border-brand-base bg-surface-base p-4" data-agent-restored>
+                <h1 class="text-16-medium">Local session snapshot restored</h1>
+                <p class="mt-1 text-12-regular text-text-weak">This transcript is bound to the previous remote session. It is not attached and cannot receive replies or events.</p>
+                <button type="button" disabled={busy()} onClick={() => void start(lastPrompt(session()))} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new session</button>
               </section>
-            )}
-          </Show>
-
-          <form
-            class="flex flex-col gap-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void send()
-            }}
-          >
-            <label class="text-14-medium" for="agent-prompt">
-              What should the agent do?
-            </label>
-            <div class="flex gap-2">
-              <textarea
-                id="agent-prompt"
-                rows="3"
-                value={prompt()}
-                on:input={(event) => setPrompt(event.currentTarget.value)}
-                on:change={(event) => setPrompt(event.currentTarget.value)}
-                placeholder="e.g. Review the latest changes and summarize any risks"
-                disabled={busy() || !canSubmit(state().phase)}
-                class="min-w-0 flex-1 resize-y rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50"
-              />
-              <button
-                type="submit"
-                disabled={busy() || !prompt().trim() || !state().sessionID || !canSubmit(state().phase)}
-                class="self-end min-h-12 rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 text-12-medium disabled:opacity-50"
-              >
-                Send
-              </button>
-            </div>
-          </form>
-
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              disabled={busy() || state().phase !== "running"}
-              onClick={() => void stop()}
-              class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
-            >
-              Stop
-            </button>
-            <Show when={state().phase === "completed"}>
-              <span class="text-12-regular text-text-weak">Turn complete. Ask for the next outcome when ready.</span>
             </Show>
-            <Show
-              when={
-                state().phase === "ready" &&
-                state().lastPrompt &&
-                canRetry(state().phase, state().sessionID, !!wireState())
-              }
-            >
-              <button
-                type="button"
-                disabled={busy()}
-                onClick={retry}
-                class="rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
-              >
-                Retry last request
-              </button>
+
+            <Show when={error() || state().error}>
+              <section role="alert" class="mb-4 rounded-xl border border-border-critical-base bg-surface-critical-weak p-4">
+                <p class="text-14-medium">{error() || state().error}</p>
+                <p class="mt-1 text-12-regular text-text-weak">Check the SSH connection and workspace access, then reconnect.</p>
+                <button type="button" onClick={() => void reconnect()} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base">Reconnect</button>
+              </section>
             </Show>
-            <Show when={state().phase === "stopped"}>
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-12-regular text-text-weak">Stopped. Reconnect, then retry the last request.</span>
-                <button
-                  type="button"
-                  onClick={() => void reconnect()}
-                  class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium"
-                >
-                  Reconnect
-                </button>
+
+            <Show when={props.workspace.agent === "antigravity-cli"}>
+              <aside class="mb-4 rounded-xl border border-border-weak-base bg-surface-base p-3 text-12-regular text-text-weak">Antigravity runs in a sandboxed project scoped to this workspace. Its one-shot CLI does not expose structured approvals, so this mode automatically accepts its in-project actions.</aside>
+            </Show>
+
+            <section aria-label="Conversation" aria-live="polite" aria-relevant="additions text" class="flex flex-col gap-3" data-agent-transcript>
+              <Show when={session().transcript.length === 0 && !restored()}>
+                <div class="py-6 text-center">
+                  <h1 class="text-20-medium">What should the agent do?</h1>
+                  <p class="mt-2 text-14-regular text-text-weak">Ask for an outcome. Progress, decisions, and reported results will appear here.</p>
+                </div>
+              </Show>
+              <For each={session().transcript}>
+                {(entry) => <Entry entry={entry} active={restored() ? undefined : state().interaction} busy={busy()} answer={answer()} onAnswer={setAnswer} onRespond={(interaction, decision, value) => void respond(interaction, decision, value)} />}
+              </For>
+            </section>
+
+            <section class="mt-6 border-t border-border-weak-base pt-4" aria-labelledby="review-title" data-agent-review>
+              <div class="flex items-center justify-between gap-3"><h2 id="review-title" class="text-16-medium">Review</h2><span class="text-12-regular text-text-weak">Reported metadata only</span></div>
+              <div role="tablist" aria-label="Session review" class="mt-3 flex gap-1 overflow-x-auto pb-1">
+                <For each={REVIEW_TABS}>
+                  {(tab) => <button id={`review-tab-${tab}`} type="button" role="tab" data-review-tab={tab} aria-selected={session().selectedReview === tab} aria-controls={`review-panel-${tab}`} tabIndex={session().selectedReview === tab ? 0 : -1} onClick={() => selectReview(tab)} onKeyDown={(event) => reviewKey(event, tab)} class={`min-h-12 shrink-0 rounded-md px-3 py-2 text-12-medium ${session().selectedReview === tab ? "bg-surface-brand-base text-text-on-brand-base" : "border border-border-weak-base"}`}>{reviewLabel(tab)}</button>}
+                </For>
               </div>
-            </Show>
+              <div id={`review-panel-${session().selectedReview}`} role="tabpanel" aria-labelledby={`review-tab-${session().selectedReview}`} tabIndex={0} class="mt-3 flex flex-col gap-2 rounded-xl bg-surface-raised-base p-3">
+                <Show when={reviewed().length > 0} fallback={<p class="py-4 text-12-regular text-text-weak" data-review-empty>{emptyReview(session().selectedReview)}</p>}>
+                  <For each={reviewed()}>{(entry) => <ReviewItem entry={entry} tab={session().selectedReview} />}</For>
+                </Show>
+              </div>
+            </section>
+
+            <details class="mt-4 rounded-xl border border-border-weak-base bg-surface-base px-3">
+              <summary class="cursor-pointer text-12-medium">Diagnostics</summary>
+              <div class="pb-3 text-12-regular text-text-weak">
+                <p>Transport: native SSH · backend: {agentID(props.workspace.agent)}</p>
+                <p>Session: {restored() ? "not attached" : state().sessionID ?? "starting"}</p>
+                <p>Cursor: {session().lastCursor ?? state().cursor ?? "none"}</p>
+                <p>Raw PTY output is kept out of the primary experience. Use Interactive CLI for terminal prompts and sign-in.</p>
+                <button type="button" disabled={busy() || restored()} onClick={() => void interactive()} class="mt-3 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Open Interactive CLI</button>
+                <p class="mt-2">Opening it stops this agentic session and keeps this SSH workspace connected.</p>
+              </div>
+            </details>
           </div>
 
-          <details class="rounded-xl border border-border-weak-base bg-surface-base p-3">
-            <summary class="flex min-h-12 cursor-pointer items-center text-12-medium">Diagnostics</summary>
-            <div class="mt-3 flex flex-col gap-2 text-12-regular text-text-weak">
-              <p>Transport: native SSH · backend: {agentID(props.workspace.agent)}</p>
-              <p>Session: {state().sessionID ?? "starting"}</p>
-              <p>Cursor: {state().cursor ?? "none"}</p>
-              <p>
-                Raw PTY output is kept out of the primary experience. Use Interactive CLI for terminal prompts and
-                sign-in.
-              </p>
-              <button
-                type="button"
-                disabled={busy()}
-                onClick={() => void interactive()}
-                class="min-h-12 w-fit rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
-              >
-                Open Interactive CLI
-              </button>
-              <p>Opening it stops this agentic session and keeps this SSH workspace connected.</p>
+          <form data-agent-composer class="border-t border-border-weak-base bg-surface-raised-base p-3" onSubmit={(event) => { event.preventDefault(); void send() }}>
+            <label class="text-12-medium" for="agent-prompt">Message the agent</label>
+            <div class="mt-2 flex items-end gap-2">
+              <textarea id="agent-prompt" rows="2" value={session().draft} onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })} placeholder="Describe the outcome you want" disabled={busy() || restored() || !state().sessionID || !canSubmit(state().phase)} class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50" />
+              <button type="submit" aria-label="Send message" disabled={busy() || restored() || !session().draft.trim() || !state().sessionID || !canSubmit(state().phase)} class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">Send</button>
+              <button type="button" aria-label="Stop agent" disabled={busy() || state().phase !== "running"} onClick={() => void stop()} class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50">Stop</button>
             </div>
-          </details>
+            <Show when={state().phase === "ready" && state().lastPrompt && canRetry(state().phase, state().sessionID, !!wireState())}>
+              <button type="button" disabled={busy()} onClick={retry} class="mt-2 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Retry last request</button>
+            </Show>
+          </form>
         </section>
       </main>
     </SshShell>
