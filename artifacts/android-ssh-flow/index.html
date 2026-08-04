@@ -571,7 +571,9 @@
         const sharedItems = data.shared.filter((value) => screenshotTheme(value) === selectedTheme)
         const agentItems = selected.screenshots.filter((value) => screenshotTheme(value) === selectedTheme)
         shared.replaceChildren(
-          ...(sharedItems.length ? sharedItems.map(item) : [empty(`No ${selectedTheme} shared-flow screenshots are available.`)]),
+          ...(sharedItems.length
+            ? sharedItems.map(item)
+            : [empty(`No ${selectedTheme} shared-flow screenshots are available.`)]),
         )
         heading.textContent = `${selected.label} flow · ${selectedTheme}`
         flow.replaceChildren(

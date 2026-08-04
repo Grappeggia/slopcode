@@ -44,13 +44,7 @@ import {
 import { SshShell } from "./ssh-shell"
 import { installAndroidBack } from "./android-back"
 import { appStorage } from "./platform"
-import {
-  canRetry,
-  canSubmit,
-  cleanupAgenticStart,
-  handoffToInteractive,
-  reconnectAgentic,
-} from "./ssh-session-flow"
+import { canRetry, canSubmit, cleanupAgenticStart, handoffToInteractive, reconnectAgentic } from "./ssh-session-flow"
 
 type Props = {
   ssh: SshTransport
@@ -106,7 +100,8 @@ function emptyReview(value: ReviewTab) {
 function activity(value: AgentSessionEntry) {
   if (value.type === "user" || value.type === "output" || value.type === "reasoning" || value.type === "retry")
     return `${value.id}:${value.type}:${value.text.length}`
-  if (value.type === "tool") return `${value.id}:${value.status}:${value.metadata?.progress ?? ""}:${value.metadata?.result ?? ""}`
+  if (value.type === "tool")
+    return `${value.id}:${value.status}:${value.metadata?.progress ?? ""}:${value.metadata?.result ?? ""}`
   if (value.type === "approval") return `${value.id}:${value.resolved}:${value.decision ?? ""}`
   if (value.type === "question") return `${value.id}:${value.resolved}:${value.answer ?? ""}`
   if (value.type === "completion") return `${value.id}:${value.status}:${value.message ?? ""}`
@@ -122,12 +117,16 @@ function announcement(value: AgentSessionEntry | undefined, status: string) {
   if (value.type === "output") return `Agent: ${value.text.slice(-180)}`
   if (value.type === "reasoning") return "Agent reasoning updated."
   if (value.type === "retry") return `Retrying: ${value.text.slice(-160)}`
-  if (value.type === "tool") return `${value.title}: ${value.status.replaceAll("_", " ")}${value.metadata?.progress ? `, ${value.metadata.progress}` : ""}`
+  if (value.type === "tool")
+    return `${value.title}: ${value.status.replaceAll("_", " ")}${value.metadata?.progress ? `, ${value.metadata.progress}` : ""}`
   if (value.type === "plan") return "Agent plan updated."
   if (value.type === "artifact") return `${value.name} was added to the review.`
   if (value.type === "approval")
-    return value.resolved ? `Request ${value.decision === "approved" ? "approved" : "rejected"}.` : `Approval required: ${value.interaction.title}`
-  if (value.type === "question") return value.resolved ? "Answer sent." : `Question from agent: ${value.interaction.prompt}`
+    return value.resolved
+      ? `Request ${value.decision === "approved" ? "approved" : "rejected"}.`
+      : `Approval required: ${value.interaction.title}`
+  if (value.type === "question")
+    return value.resolved ? "Answer sent." : `Question from agent: ${value.interaction.prompt}`
   if (value.type === "completion") return `Turn ${value.status}${value.message ? `: ${value.message}` : ""}`
   if (value.type === "failure") return `Session problem: ${value.message}`
   return `Remote agent status: ${status}`
@@ -146,7 +145,11 @@ function ReviewItem(props: { entry: AgentSessionEntry; tab: ReviewTab }) {
         </Show>
         <Show when={props.entry.metadata?.progress || props.entry.metadata?.result || props.entry.metadata?.exitCode}>
           <p class="mt-2 text-12-regular text-text-weak">
-            {[props.entry.metadata?.progress, props.entry.metadata?.result, props.entry.metadata?.exitCode && `exit ${props.entry.metadata.exitCode}`]
+            {[
+              props.entry.metadata?.progress,
+              props.entry.metadata?.result,
+              props.entry.metadata?.exitCode && `exit ${props.entry.metadata.exitCode}`,
+            ]
               .filter(Boolean)
               .join(" · ")}
           </p>
@@ -166,7 +169,9 @@ function ReviewItem(props: { entry: AgentSessionEntry; tab: ReviewTab }) {
           {props.entry.mime ? ` · ${props.entry.mime}` : ""}
         </p>
         <p class="mt-2 text-12-regular text-text-weak">
-          {props.tab === "screenshots" ? "Screenshot metadata only; preview unavailable." : "Metadata only; content not loaded."}
+          {props.tab === "screenshots"
+            ? "Screenshot metadata only; preview unavailable."
+            : "Metadata only; content not loaded."}
         </p>
       </article>
     )
@@ -184,13 +189,21 @@ function Entry(props: {
   const item = props.entry
   if (item.type === "user")
     return (
-      <article data-agent-entry="user" aria-label="You" class="ml-auto max-w-[88%] rounded-2xl bg-surface-brand-base px-4 py-3 text-text-on-brand-base">
+      <article
+        data-agent-entry="user"
+        aria-label="You"
+        class="ml-auto max-w-[88%] rounded-2xl bg-surface-brand-base px-4 py-3 text-text-on-brand-base"
+      >
         <p class="whitespace-pre-wrap break-words text-14-regular">{item.text}</p>
       </article>
     )
   if (item.type === "output")
     return (
-      <article data-agent-entry="output" aria-label="Agent response" class="max-w-[94%] rounded-2xl border border-border-weak-base bg-surface-base px-4 py-3">
+      <article
+        data-agent-entry="output"
+        aria-label="Agent response"
+        class="max-w-[94%] rounded-2xl border border-border-weak-base bg-surface-base px-4 py-3"
+      >
         <p class="text-12-medium text-text-weak">Agent</p>
         <p class="mt-1 whitespace-pre-wrap break-words text-14-regular">{item.text}</p>
       </article>
@@ -211,7 +224,11 @@ function Entry(props: {
     )
   if (item.type === "plan")
     return (
-      <section data-agent-entry="plan" aria-label="Agent plan" class="rounded-xl border border-border-weak-base bg-surface-base p-4">
+      <section
+        data-agent-entry="plan"
+        aria-label="Agent plan"
+        class="rounded-xl border border-border-weak-base bg-surface-base p-4"
+      >
         <p class="text-12-medium text-text-weak">Plan</p>
         <pre class="mt-2 whitespace-pre-wrap break-words text-12-regular">{item.content}</pre>
       </section>
@@ -224,7 +241,9 @@ function Entry(props: {
             <p class="text-12-medium text-text-weak">Tool</p>
             <p class="mt-1 text-14-medium">{item.title}</p>
           </div>
-          <span class="rounded-full bg-surface-weak-base px-2 py-1 text-12-regular">{item.status.replaceAll("_", " ")}</span>
+          <span class="rounded-full bg-surface-weak-base px-2 py-1 text-12-regular">
+            {item.status.replaceAll("_", " ")}
+          </span>
         </div>
         <Show when={item.metadata?.progress || item.metadata?.summary || item.metadata?.path}>
           <p class="mt-2 break-all text-12-regular text-text-weak">
@@ -250,7 +269,15 @@ function Entry(props: {
         data-agent-interaction-active={active() ? "true" : undefined}
         data-interaction-id={item.id}
         role="group"
-        aria-label={item.type === "approval" ? (item.resolved ? "Approval response" : "Approval required") : item.resolved ? "Question response" : "Question from agent"}
+        aria-label={
+          item.type === "approval"
+            ? item.resolved
+              ? "Approval response"
+              : "Approval required"
+            : item.resolved
+              ? "Question response"
+              : "Question from agent"
+        }
         class={`rounded-xl border p-4 ${active() ? "border-border-brand-base bg-surface-base" : "border-border-weak-base bg-surface-base"}`}
       >
         <p class="text-12-medium text-text-weak">
@@ -258,18 +285,38 @@ function Entry(props: {
         </p>
         <h2 class="mt-1 text-16-medium">{title}</h2>
         <Show when={item.interaction.command}>
-          <pre class="mt-3 rounded-lg bg-surface-raised-base p-3 whitespace-pre-wrap break-words text-12-regular">{item.interaction.command}</pre>
+          <pre class="mt-3 rounded-lg bg-surface-raised-base p-3 whitespace-pre-wrap break-words text-12-regular">
+            {item.interaction.command}
+          </pre>
         </Show>
         <Show when={item.detailsOmitted}>
           <p class="mt-2 text-12-regular text-text-weak">Command details were not saved in the local snapshot.</p>
         </Show>
         <Show when={item.interaction.reason || item.interaction.cwd}>
-          <p class="mt-2 text-12-regular text-text-weak">{[item.interaction.reason, item.interaction.cwd].filter(Boolean).join(" · ")}</p>
+          <p class="mt-2 text-12-regular text-text-weak">
+            {[item.interaction.reason, item.interaction.cwd].filter(Boolean).join(" · ")}
+          </p>
         </Show>
         <Show when={active() && item.type === "approval"}>
           <div class="mt-3 flex flex-wrap gap-2">
-            <button type="button" data-agent-action="approve" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "approved")} class="min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Approve</button>
-            <button type="button" data-agent-action="reject" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "rejected")} class="min-h-12 rounded-md border border-border-weak-base px-4 py-2 text-12-medium disabled:opacity-50">Reject</button>
+            <button
+              type="button"
+              data-agent-action="approve"
+              disabled={props.busy}
+              onClick={() => props.onRespond(item.interaction, "approved")}
+              class="min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              data-agent-action="reject"
+              disabled={props.busy}
+              onClick={() => props.onRespond(item.interaction, "rejected")}
+              class="min-h-12 rounded-md border border-border-weak-base px-4 py-2 text-12-medium disabled:opacity-50"
+            >
+              Reject
+            </button>
           </div>
         </Show>
         <Show when={active() && item.type === "question"}>
@@ -277,16 +324,42 @@ function Entry(props: {
             <Show when={item.interaction.options?.length}>
               <div class="flex flex-wrap gap-2">
                 <For each={item.interaction.options ?? []}>
-                  {(option) => <button type="button" data-agent-action="option" disabled={props.busy} onClick={() => props.onRespond(item.interaction, undefined, option)} class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">{option}</button>}
+                  {(option) => (
+                    <button
+                      type="button"
+                      data-agent-action="option"
+                      disabled={props.busy}
+                      onClick={() => props.onRespond(item.interaction, undefined, option)}
+                      class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+                    >
+                      {option}
+                    </button>
+                  )}
                 </For>
               </div>
             </Show>
             <Show when={item.interaction.allowFreeform !== false}>
               <div class="flex flex-col gap-2">
-                <label for={`agent-answer-${item.id}`} class="text-12-medium">Your answer</label>
+                <label for={`agent-answer-${item.id}`} class="text-12-medium">
+                  Your answer
+                </label>
                 <div class="flex gap-2">
-                  <input id={`agent-answer-${item.id}`} data-agent-answer={item.id} value={props.answer} onInput={(event) => props.onAnswer(event.currentTarget.value)} class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-14-regular" />
-                  <button type="button" data-agent-action="answer" disabled={props.busy || !props.answer.trim()} onClick={() => props.onRespond(item.interaction, undefined, props.answer)} class="min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Send answer</button>
+                  <input
+                    id={`agent-answer-${item.id}`}
+                    data-agent-answer={item.id}
+                    value={props.answer}
+                    onInput={(event) => props.onAnswer(event.currentTarget.value)}
+                    class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-14-regular"
+                  />
+                  <button
+                    type="button"
+                    data-agent-action="answer"
+                    disabled={props.busy || !props.answer.trim()}
+                    onClick={() => props.onRespond(item.interaction, undefined, props.answer)}
+                    class="min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50"
+                  >
+                    Send answer
+                  </button>
                 </div>
               </div>
             </Show>
@@ -304,7 +377,7 @@ function Entry(props: {
                 ? `Your answer: ${item.answer}`
                 : item.answerOmitted
                   ? "Answer sent · not saved for security"
-                : "Answer sent"}
+                  : "Answer sent"}
           </p>
         </Show>
       </section>
@@ -312,13 +385,24 @@ function Entry(props: {
   }
   if (item.type === "completion")
     return (
-      <section data-agent-entry="completion" data-agent-completion-status={item.status} class="rounded-xl border border-border-weak-base bg-surface-success-weak p-4">
-        <p class="text-14-medium">{item.status === "completed" ? "Turn complete" : item.status === "stopped" ? "Turn stopped" : "Turn failed"}</p>
-        <Show when={item.message}><p class="mt-1 text-12-regular">{item.message}</p></Show>
+      <section
+        data-agent-entry="completion"
+        data-agent-completion-status={item.status}
+        class="rounded-xl border border-border-weak-base bg-surface-success-weak p-4"
+      >
+        <p class="text-14-medium">
+          {item.status === "completed" ? "Turn complete" : item.status === "stopped" ? "Turn stopped" : "Turn failed"}
+        </p>
+        <Show when={item.message}>
+          <p class="mt-1 text-12-regular">{item.message}</p>
+        </Show>
       </section>
     )
   return (
-    <section data-agent-entry="failure" class="rounded-xl border border-border-critical-base bg-surface-critical-weak p-4">
+    <section
+      data-agent-entry="failure"
+      class="rounded-xl border border-border-critical-base bg-surface-critical-weak p-4"
+    >
       <p class="text-14-medium">Session problem</p>
       <p class="mt-1 text-12-regular">{item.type === "failure" ? item.message : "The session could not continue."}</p>
     </section>
@@ -350,13 +434,17 @@ export function SshAgenticSession(props: Props) {
     saves = saves.then(() => writeAgentSession(storage, props.workspace, value)).catch(() => undefined)
   })
 
-  const project = (action: Parameters<typeof reduceAgentSession>[1]) => setSession((current) => reduceAgentSession(current, action))
+  const project = (action: Parameters<typeof reduceAgentSession>[1]) =>
+    setSession((current) => reduceAgentSession(current, action))
 
   const showError = (cause: unknown, fallback: string) => {
     const message = cause instanceof Error ? cause.message : fallback
     setError(message)
     setState((current) => ({ ...current, phase: "error", error: message }))
-    if (session().sessionID && !/\b(?:ssh|transport|connection|network|orchestrator exited|transport closed)\b/i.test(message))
+    if (
+      session().sessionID &&
+      !/\b(?:ssh|transport|connection|network|orchestrator exited|transport closed)\b/i.test(message)
+    )
       project({ type: "failure.added", id: `failure:${crypto.randomUUID()}`, message })
   }
 
@@ -365,14 +453,26 @@ export function SshAgenticSession(props: Props) {
     setState((current) => reduceOrchestratorEvent(current, value))
     project({ type: "event.received", value })
     if (value.type === "interaction.approval.requested" || value.type === "interaction.question.requested")
-      queueMicrotask(() => document.querySelector<HTMLElement>("[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input")?.focus())
+      queueMicrotask(() =>
+        document
+          .querySelector<HTMLElement>(
+            "[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input",
+          )
+          ?.focus(),
+      )
   }
 
   const applySnapshot = (value: ReturnType<typeof parseSnapshot> & {}) => {
     const pending = value.pending.map((item) =>
       item.kind === "approval"
         ? ({ id: item.id, revision: item.revision, kind: "approval", title: item.title } as const)
-        : ({ id: item.id, revision: item.revision, kind: "question", prompt: item.title, allowFreeform: true } as const),
+        : ({
+            id: item.id,
+            revision: item.revision,
+            kind: "question",
+            prompt: item.title,
+            allowFreeform: true,
+          } as const),
     )
     setState((current) => ({
       ...current,
@@ -383,7 +483,12 @@ export function SshAgenticSession(props: Props) {
       interaction: pending.at(-1),
       error: undefined,
     }))
-    project({ type: "backend.connected", version: value.session.backendVersion, mode: value.session.backendMode, capabilities: value.session.capabilities })
+    project({
+      type: "backend.connected",
+      version: value.session.backendVersion,
+      mode: value.session.backendMode,
+      capabilities: value.session.capabilities,
+    })
     pending.forEach((interaction) =>
       project({
         type: "event.received",
@@ -395,10 +500,12 @@ export function SshAgenticSession(props: Props) {
         },
       }),
     )
-    value.artifacts.forEach((artifact) => project({
-      type: "event.received",
-      value: { kind: "event", type: "artifact.created", sessionID: value.session.id, artifact },
-    }))
+    value.artifacts.forEach((artifact) =>
+      project({
+        type: "event.received",
+        value: { kind: "event", type: "artifact.created", sessionID: value.session.id, artifact },
+      }),
+    )
   }
 
   const replay = async (current: OrchestratorWire, sessionID: string, after?: string) => {
@@ -409,7 +516,8 @@ export function SshAgenticSession(props: Props) {
       result.events.forEach(event)
       if (!result.hasMore) return
       const last = result.events.at(-1)
-      if (!last || typeof last.cursor !== "string" || last.cursor === cursor) throw new Error("The remote replay cursor did not advance.")
+      if (!last || typeof last.cursor !== "string" || last.cursor === cursor)
+        throw new Error("The remote replay cursor did not advance.")
       cursor = last.cursor
     }
     throw new Error("The remote event replay exceeded its safe page limit.")
@@ -437,7 +545,10 @@ export function SshAgenticSession(props: Props) {
 
   const start = async (saved?: AgentSessionState) => {
     if (!isOrchestratorAvailable(props.ssh)) {
-      showError(new Error("Native SSH orchestration is unavailable on this device."), "Native SSH orchestration is unavailable.")
+      showError(
+        new Error("Native SSH orchestration is unavailable on this device."),
+        "Native SSH orchestration is unavailable.",
+      )
       setBusy(false)
       return
     }
@@ -460,12 +571,23 @@ export function SshAgenticSession(props: Props) {
       started = true
       active = true
       const hello = parseHello(await next.send(helloFrame(props.workspace.agent)))
-      if (!hello || hello.agent !== agentID(props.workspace.agent)) throw new Error("The remote bridge does not support this agent with protocol v1.")
+      if (!hello || hello.agent !== agentID(props.workspace.agent))
+        throw new Error("The remote bridge does not support this agent with protocol v1.")
       const opened = await next.send(workspaceFrame(props.workspace.directory, props.workspace.agent))
       const workspace = opened.workspace
-      if (!workspace || typeof workspace !== "object" || Array.isArray(workspace) || (workspace as { id?: unknown }).id !== "wrk_android")
+      if (
+        !workspace ||
+        typeof workspace !== "object" ||
+        Array.isArray(workspace) ||
+        (workspace as { id?: unknown }).id !== "wrk_android"
+      )
         throw new Error("The remote workspace response was invalid.")
-      project({ type: "backend.connected", version: hello.backendVersion, mode: hello.backendMode, capabilities: hello.capabilities })
+      project({
+        type: "backend.connected",
+        version: hello.backendVersion,
+        mode: hello.backendMode,
+        capabilities: hello.capabilities,
+      })
       if (saved?.sessionID) {
         const attached = parseAttach(await next.send(sessionAttachFrame(saved.sessionID)))
         if (!attached) throw new Error("The remote session attach response was invalid.")
@@ -547,7 +669,11 @@ export function SshAgenticSession(props: Props) {
     }
   }
 
-  const respond = async (interaction: OrchestratorInteraction, decision?: "approved" | "rejected", supplied?: string) => {
+  const respond = async (
+    interaction: OrchestratorInteraction,
+    decision?: "approved" | "rejected",
+    supplied?: string,
+  ) => {
     const sessionID = state().sessionID
     const current = wireState()
     const value = (supplied ?? answer()).trim()
@@ -571,8 +697,11 @@ export function SshAgenticSession(props: Props) {
       }))
       queueMicrotask(() =>
         (next
-          ? document.querySelector<HTMLElement>("[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input")
-          : document.querySelector<HTMLTextAreaElement>("#agent-prompt"))?.focus(),
+          ? document.querySelector<HTMLElement>(
+              "[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input",
+            )
+          : document.querySelector<HTMLTextAreaElement>("#agent-prompt")
+        )?.focus(),
       )
     } catch (cause) {
       showError(cause, "The remote agent did not accept that response.")
@@ -655,7 +784,16 @@ export function SshAgenticSession(props: Props) {
 
   const reviewKey = (event: KeyboardEvent, value: ReviewTab) => {
     const index = REVIEW_TABS.indexOf(value)
-    const next = event.key === "ArrowRight" ? REVIEW_TABS[(index + 1) % REVIEW_TABS.length] : event.key === "ArrowLeft" ? REVIEW_TABS[(index - 1 + REVIEW_TABS.length) % REVIEW_TABS.length] : event.key === "Home" ? REVIEW_TABS[0] : event.key === "End" ? REVIEW_TABS.at(-1) : undefined
+    const next =
+      event.key === "ArrowRight"
+        ? REVIEW_TABS[(index + 1) % REVIEW_TABS.length]
+        : event.key === "ArrowLeft"
+          ? REVIEW_TABS[(index - 1 + REVIEW_TABS.length) % REVIEW_TABS.length]
+          : event.key === "Home"
+            ? REVIEW_TABS[0]
+            : event.key === "End"
+              ? REVIEW_TABS.at(-1)
+              : undefined
     if (!next) return
     event.preventDefault()
     selectReview(next, true)
@@ -664,7 +802,7 @@ export function SshAgenticSession(props: Props) {
   const status = () => (restored() ? "Local snapshot" : phaseLabel(state().phase))
   const reviewed = () => reviewItems(session().transcript, session().selectedReview)
   const revision = createMemo(() => session().transcript.map(activity).join("\u0000"))
-  const live = createMemo(() => error() || state().error ? "" : announcement(session().transcript.at(-1), status()))
+  const live = createMemo(() => (error() || state().error ? "" : announcement(session().transcript.at(-1), status())))
 
   createEffect(() => {
     revision()
@@ -697,84 +835,223 @@ export function SshAgenticSession(props: Props) {
   }
 
   return (
-    <SshShell workspace={props.workspace} sessionID={restored() ? undefined : state().sessionID} sessionState={status()}>
-      <main data-agent-workspace data-agent-phase={state().phase} data-agent-detached={restored() ? "true" : undefined} class="min-h-screen bg-surface-base text-text-strong">
-        <section data-agent-panel class="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border-weak-base bg-surface-raised-base">
-          <header data-agent-app-bar data-agent-status={status()} class="flex items-center justify-between gap-3 border-b border-border-weak-base px-4 py-3">
+    <SshShell
+      workspace={props.workspace}
+      sessionID={restored() ? undefined : state().sessionID}
+      sessionState={status()}
+    >
+      <main
+        data-agent-workspace
+        data-agent-phase={state().phase}
+        data-agent-detached={restored() ? "true" : undefined}
+        class="min-h-screen bg-surface-base text-text-strong"
+      >
+        <section
+          data-agent-panel
+          class="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border-weak-base bg-surface-raised-base"
+        >
+          <header
+            data-agent-app-bar
+            data-agent-status={status()}
+            class="flex items-center justify-between gap-3 border-b border-border-weak-base px-4 py-3"
+          >
             <div class="min-w-0 pl-12">
-              <p class="truncate text-14-medium">{agentName(props.workspace.agent)} · {status()}</p>
+              <p class="truncate text-14-medium">
+                {agentName(props.workspace.agent)} · {status()}
+              </p>
               <p class="truncate text-12-regular text-text-weak">{props.workspace.directory}</p>
             </div>
-            <button type="button" data-agent-action="disconnect" onClick={() => void disconnect()} class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular">Disconnect</button>
+            <button
+              type="button"
+              data-agent-action="disconnect"
+              onClick={() => void disconnect()}
+              class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular"
+            >
+              Disconnect
+            </button>
           </header>
 
-          <div ref={scroll} data-agent-scroll onScroll={scrolled} class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+          <div
+            ref={scroll}
+            data-agent-scroll
+            onScroll={scrolled}
+            class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4"
+          >
             <details data-agent-context class="mb-4 rounded-xl border border-border-weak-base bg-surface-base px-3">
               <summary class="cursor-pointer text-12-medium">Remote agent session context</summary>
               <dl class="grid gap-2 pb-3 text-12-regular">
-                <div><dt class="text-text-weak">Computer</dt><dd class="break-all">{props.workspace.target}</dd></div>
-                <div><dt class="text-text-weak">Workspace</dt><dd class="break-all">{props.workspace.directory}</dd></div>
-                <div><dt class="text-text-weak">Agent</dt><dd>{agentName(props.workspace.agent)}</dd></div>
+                <div>
+                  <dt class="text-text-weak">Computer</dt>
+                  <dd class="break-all">{props.workspace.target}</dd>
+                </div>
+                <div>
+                  <dt class="text-text-weak">Workspace</dt>
+                  <dd class="break-all">{props.workspace.directory}</dd>
+                </div>
+                <div>
+                  <dt class="text-text-weak">Agent</dt>
+                  <dd>{agentName(props.workspace.agent)}</dd>
+                </div>
               </dl>
             </details>
 
-            <div data-agent-status-live role="status" aria-live="polite" aria-atomic="true" class="sr-only">{live()}</div>
+            <div data-agent-status-live role="status" aria-live="polite" aria-atomic="true" class="sr-only">
+              {live()}
+            </div>
 
             <Show when={restored()}>
               <section class="mb-4 rounded-xl border border-border-brand-base bg-surface-base p-4" data-agent-restored>
                 <h1 class="text-16-medium">Local session snapshot restored</h1>
-                <p class="mt-1 text-12-regular text-text-weak">The remote session is detached. Its safe local transcript remains available, but it cannot receive replies or events.</p>
-                <button type="button" data-agent-action="start" disabled={busy()} onClick={() => void start()} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new session</button>
+                <p class="mt-1 text-12-regular text-text-weak">
+                  The remote session is detached. Its safe local transcript remains available, but it cannot receive
+                  replies or events.
+                </p>
+                <button
+                  type="button"
+                  data-agent-action="start"
+                  disabled={busy()}
+                  onClick={() => void start()}
+                  class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50"
+                >
+                  Start new session
+                </button>
               </section>
             </Show>
 
             <Show when={!restored() && (state().phase === "completed" || state().phase === "stopped")}>
-              <section class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-border-weak-base bg-surface-base p-4" data-agent-finished>
+              <section
+                class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-border-weak-base bg-surface-base p-4"
+                data-agent-finished
+              >
                 <div>
-                  <h1 class="text-14-medium">{state().phase === "completed" ? "Session complete" : "Session stopped"}</h1>
-                  <p class="mt-1 text-12-regular text-text-weak">Keep this result or begin with a clean conversation.</p>
+                  <h1 class="text-14-medium">
+                    {state().phase === "completed" ? "Session complete" : "Session stopped"}
+                  </h1>
+                  <p class="mt-1 text-12-regular text-text-weak">
+                    Keep this result or begin with a clean conversation.
+                  </p>
                 </div>
-                <button type="button" data-agent-action="new-session" disabled={busy()} onClick={() => void start()} class="min-h-12 shrink-0 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new</button>
+                <button
+                  type="button"
+                  data-agent-action="new-session"
+                  disabled={busy()}
+                  onClick={() => void start()}
+                  class="min-h-12 shrink-0 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50"
+                >
+                  Start new
+                </button>
               </section>
             </Show>
 
             <Show when={error() || state().error}>
-              <section role="alert" class="mb-4 rounded-xl border border-border-critical-base bg-surface-critical-weak p-4">
+              <section
+                role="alert"
+                class="mb-4 rounded-xl border border-border-critical-base bg-surface-critical-weak p-4"
+              >
                 <p class="text-14-medium">{error() || state().error}</p>
-                <p class="mt-1 text-12-regular text-text-weak">Check the SSH connection and workspace access, then reconnect.</p>
-                <button type="button" onClick={() => void reconnect()} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base">Reconnect</button>
+                <p class="mt-1 text-12-regular text-text-weak">
+                  Check the SSH connection and workspace access, then reconnect.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void reconnect()}
+                  class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base"
+                >
+                  Reconnect
+                </button>
               </section>
             </Show>
 
             <Show when={props.workspace.agent === "antigravity-cli"}>
-              <aside class="mb-4 rounded-xl border border-border-weak-base bg-surface-base p-3 text-12-regular text-text-weak">Antigravity runs in a sandboxed project scoped to this workspace. Its one-shot CLI does not expose structured approvals, so this mode automatically accepts its in-project actions.</aside>
+              <aside class="mb-4 rounded-xl border border-border-weak-base bg-surface-base p-3 text-12-regular text-text-weak">
+                Antigravity runs in a sandboxed project scoped to this workspace. Its one-shot CLI does not expose
+                structured approvals, so this mode automatically accepts its in-project actions.
+              </aside>
             </Show>
 
             <section aria-label="Conversation" class="flex flex-col gap-3" data-agent-transcript>
               <Show when={session().transcript.length === 0 && !restored()}>
                 <div class="py-6 text-center">
                   <h1 class="text-20-medium">What should the agent do?</h1>
-                  <p class="mt-2 text-14-regular text-text-weak">Ask for an outcome. Progress, decisions, and reported results will appear here.</p>
+                  <p class="mt-2 text-14-regular text-text-weak">
+                    Ask for an outcome. Progress, decisions, and reported results will appear here.
+                  </p>
                 </div>
               </Show>
               <For each={session().transcript}>
-                {(entry) => <Entry entry={entry} active={restored() ? undefined : state().interaction} busy={busy()} answer={answer()} onAnswer={setAnswer} onRespond={(interaction, decision, value) => void respond(interaction, decision, value)} />}
+                {(entry) => (
+                  <Entry
+                    entry={entry}
+                    active={restored() ? undefined : state().interaction}
+                    busy={busy()}
+                    answer={answer()}
+                    onAnswer={setAnswer}
+                    onRespond={(interaction, decision, value) => void respond(interaction, decision, value)}
+                  />
+                )}
               </For>
             </section>
 
             <Show when={newActivity()}>
-              <button type="button" data-agent-new-activity aria-label="Jump to new activity" onClick={latest} class="sticky bottom-2 z-10 mx-auto mt-3 block min-h-12 rounded-full bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base shadow-md">New activity</button>
+              <button
+                type="button"
+                data-agent-new-activity
+                aria-label="Jump to new activity"
+                onClick={latest}
+                class="sticky bottom-2 z-10 mx-auto mt-3 block min-h-12 rounded-full bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base shadow-md"
+              >
+                New activity
+              </button>
             </Show>
 
-            <section class="mt-6 border-t border-border-weak-base pt-4" aria-labelledby="review-title" data-agent-review>
-              <div class="flex items-center justify-between gap-3"><h2 id="review-title" class="text-16-medium">Review</h2><span class="text-12-regular text-text-weak">Reported metadata only</span></div>
+            <section
+              class="mt-6 border-t border-border-weak-base pt-4"
+              aria-labelledby="review-title"
+              data-agent-review
+            >
+              <div class="flex items-center justify-between gap-3">
+                <h2 id="review-title" class="text-16-medium">
+                  Review
+                </h2>
+                <span class="text-12-regular text-text-weak">Reported metadata only</span>
+              </div>
               <div role="tablist" aria-label="Session review" class="mt-3 flex gap-1 overflow-x-auto pb-1">
                 <For each={REVIEW_TABS}>
-                  {(tab) => <button id={`review-tab-${tab}`} type="button" role="tab" data-review-tab={tab} aria-selected={session().selectedReview === tab} aria-controls={`review-panel-${tab}`} tabIndex={session().selectedReview === tab ? 0 : -1} onClick={() => selectReview(tab)} onKeyDown={(event) => reviewKey(event, tab)} class={`min-h-12 shrink-0 rounded-md px-3 py-2 text-12-medium ${session().selectedReview === tab ? "bg-surface-brand-base text-text-on-brand-base" : "border border-border-weak-base"}`}>{reviewLabel(tab)}</button>}
+                  {(tab) => (
+                    <button
+                      id={`review-tab-${tab}`}
+                      type="button"
+                      role="tab"
+                      data-review-tab={tab}
+                      aria-selected={session().selectedReview === tab}
+                      aria-controls={`review-panel-${tab}`}
+                      tabIndex={session().selectedReview === tab ? 0 : -1}
+                      onClick={() => selectReview(tab)}
+                      onKeyDown={(event) => reviewKey(event, tab)}
+                      class={`min-h-12 shrink-0 rounded-md px-3 py-2 text-12-medium ${session().selectedReview === tab ? "bg-surface-brand-base text-text-on-brand-base" : "border border-border-weak-base"}`}
+                    >
+                      {reviewLabel(tab)}
+                    </button>
+                  )}
                 </For>
               </div>
-              <div id={`review-panel-${session().selectedReview}`} data-review-panel data-review-selected={session().selectedReview} role="tabpanel" aria-labelledby={`review-tab-${session().selectedReview}`} tabIndex={0} class="mt-3 flex flex-col gap-2 rounded-xl bg-surface-raised-base p-3">
-                <Show when={reviewed().length > 0} fallback={<p class="py-4 text-12-regular text-text-weak" data-review-empty>{emptyReview(session().selectedReview)}</p>}>
+              <div
+                id={`review-panel-${session().selectedReview}`}
+                data-review-panel
+                data-review-selected={session().selectedReview}
+                role="tabpanel"
+                aria-labelledby={`review-tab-${session().selectedReview}`}
+                tabIndex={0}
+                class="mt-3 flex flex-col gap-2 rounded-xl bg-surface-raised-base p-3"
+              >
+                <Show
+                  when={reviewed().length > 0}
+                  fallback={
+                    <p class="py-4 text-12-regular text-text-weak" data-review-empty>
+                      {emptyReview(session().selectedReview)}
+                    </p>
+                  }
+                >
                   <For each={reviewed()}>{(entry) => <ReviewItem entry={entry} tab={session().selectedReview} />}</For>
                 </Show>
               </div>
@@ -784,25 +1061,98 @@ export function SshAgenticSession(props: Props) {
               <summary class="cursor-pointer text-12-medium">Diagnostics</summary>
               <div class="pb-3 text-12-regular text-text-weak">
                 <p>Transport: native SSH · backend: {agentID(props.workspace.agent)}</p>
-                <p>Backend version: {session().backendVersion ?? "checking"} · mode: {session().backendMode ?? "unknown"}</p>
-                <p>Session: {restored() ? "not attached" : state().sessionID ?? "starting"}</p>
+                <p>
+                  Backend version: {session().backendVersion ?? "checking"} · mode: {session().backendMode ?? "unknown"}
+                </p>
+                <p>Session: {restored() ? "not attached" : (state().sessionID ?? "starting")}</p>
                 <p>Cursor: {session().lastCursor ?? state().cursor ?? "none"}</p>
-                <p>Raw PTY output is kept out of the primary experience. Use Interactive CLI for terminal prompts and sign-in.</p>
-                <button type="button" disabled={busy() || restored()} onClick={() => void interactive()} class="mt-3 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Open Interactive CLI</button>
+                <p>
+                  Raw PTY output is kept out of the primary experience. Use Interactive CLI for terminal prompts and
+                  sign-in.
+                </p>
+                <button
+                  type="button"
+                  disabled={busy() || restored()}
+                  onClick={() => void interactive()}
+                  class="mt-3 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+                >
+                  Open Interactive CLI
+                </button>
                 <p class="mt-2">Opening it stops this agentic session and keeps this SSH workspace connected.</p>
               </div>
             </details>
           </div>
 
-          <form data-agent-composer class="border-t border-border-weak-base bg-surface-raised-base p-3" onSubmit={(event) => { event.preventDefault(); void send() }}>
-            <label class="text-12-medium" for="agent-prompt">Message the agent</label>
+          <form
+            data-agent-composer
+            class="border-t border-border-weak-base bg-surface-raised-base p-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void send()
+            }}
+          >
+            <label class="text-12-medium" for="agent-prompt">
+              Message the agent
+            </label>
             <div class="mt-2 flex items-end gap-2">
-              <textarea id="agent-prompt" data-agent-prompt rows="2" value={session().draft} onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })} placeholder={state().phase === "running" ? "Steer the current turn" : "Describe the outcome you want"} disabled={busy() || restored() || !state().sessionID || (!canSubmit(state().phase) && !(state().phase === "running" && session().capabilities?.includes("steer")))} class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50" />
-              <button type="submit" data-agent-action="send" aria-label="Send message" disabled={busy() || restored() || !session().draft.trim() || !state().sessionID || (!canSubmit(state().phase) && !(state().phase === "running" && session().capabilities?.includes("steer")))} class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">{state().phase === "running" ? "Steer" : "Send"}</button>
-              <button type="button" data-agent-action="stop" aria-label="Stop agent" disabled={busy() || state().phase !== "running" || !session().capabilities?.includes("cancel")} onClick={() => void stop()} class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50">Stop</button>
+              <textarea
+                id="agent-prompt"
+                data-agent-prompt
+                rows="2"
+                value={session().draft}
+                onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })}
+                placeholder={state().phase === "running" ? "Steer the current turn" : "Describe the outcome you want"}
+                disabled={
+                  busy() ||
+                  restored() ||
+                  !state().sessionID ||
+                  (!canSubmit(state().phase) &&
+                    !(state().phase === "running" && session().capabilities?.includes("steer")))
+                }
+                class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                data-agent-action="send"
+                aria-label="Send message"
+                disabled={
+                  busy() ||
+                  restored() ||
+                  !session().draft.trim() ||
+                  !state().sessionID ||
+                  (!canSubmit(state().phase) &&
+                    !(state().phase === "running" && session().capabilities?.includes("steer")))
+                }
+                class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50"
+              >
+                {state().phase === "running" ? "Steer" : "Send"}
+              </button>
+              <button
+                type="button"
+                data-agent-action="stop"
+                aria-label="Stop agent"
+                disabled={busy() || state().phase !== "running" || !session().capabilities?.includes("cancel")}
+                onClick={() => void stop()}
+                class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50"
+              >
+                Stop
+              </button>
             </div>
-            <Show when={state().phase === "ready" && state().lastPrompt && canRetry(state().phase, state().sessionID, !!wireState())}>
-              <button type="button" disabled={busy() || !session().capabilities?.includes("retry")} onClick={() => void retry()} class="mt-2 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Retry last request</button>
+            <Show
+              when={
+                state().phase === "ready" &&
+                state().lastPrompt &&
+                canRetry(state().phase, state().sessionID, !!wireState())
+              }
+            >
+              <button
+                type="button"
+                disabled={busy() || !session().capabilities?.includes("retry")}
+                onClick={() => void retry()}
+                class="mt-2 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50"
+              >
+                Retry last request
+              </button>
             </Show>
           </form>
         </section>

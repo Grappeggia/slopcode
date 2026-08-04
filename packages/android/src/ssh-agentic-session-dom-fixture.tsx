@@ -27,7 +27,7 @@ function storage() {
       const key = `${String(args[0] ?? "")}:${String(args[1] ?? "")}`
       const result =
         request.method === "storageGet"
-          ? values.get(key) ?? null
+          ? (values.get(key) ?? null)
           : request.method === "systemInsets"
             ? { top: 0, right: 0, bottom: 0, left: 0, imeBottom: 0 }
             : null
@@ -96,10 +96,37 @@ function transport() {
     },
     orchestratorInput: async (raw) => {
       const value = JSON.parse(raw) as Record<string, unknown>
-      if (value.type === "bridge.hello") response(value, { type: "bridge.hello", bridgeVersion: "1.0.0", protocolVersion: "v1", agent: "codex", backendVersion: "codex fixture 1.0.0", backendMode: "app_server", capabilities: ["workspace", "sessions", "turns", "replay", "cancel", "retry", "steer"] })
+      if (value.type === "bridge.hello")
+        response(value, {
+          type: "bridge.hello",
+          bridgeVersion: "1.0.0",
+          protocolVersion: "v1",
+          agent: "codex",
+          backendVersion: "codex fixture 1.0.0",
+          backendMode: "app_server",
+          capabilities: ["workspace", "sessions", "turns", "replay", "cancel", "retry", "steer"],
+        })
       if (value.type === "workspace.open") response(value, { workspace: { id: "wrk_android" } })
       if (value.type === "session.create") response(value, { sessionID: "ses_dom_fixture" })
-      if (value.type === "session.attach") response(value, { type: "session.attach", attached: true, snapshot: { session: { id: "ses_dom_fixture", state: "completed", backendVersion: "codex fixture 1.0.0", backendMode: "app_server", capabilities: ["workspace", "sessions", "turns", "replay", "cancel", "retry", "steer"], lastTurnID: "trn_dom_fixture", lastCursor: "cur_31" }, pending: [], artifacts: [], authoritative: true } })
+      if (value.type === "session.attach")
+        response(value, {
+          type: "session.attach",
+          attached: true,
+          snapshot: {
+            session: {
+              id: "ses_dom_fixture",
+              state: "completed",
+              backendVersion: "codex fixture 1.0.0",
+              backendMode: "app_server",
+              capabilities: ["workspace", "sessions", "turns", "replay", "cancel", "retry", "steer"],
+              lastTurnID: "trn_dom_fixture",
+              lastCursor: "cur_31",
+            },
+            pending: [],
+            artifacts: [],
+            authoritative: true,
+          },
+        })
       if (value.type === "event.replay") response(value, { type: "event.replay", events: [], hasMore: false })
       if (value.type === "turn.create") turn = value
       if (value.type === "interaction.approval.reply" || value.type === "interaction.question.reply") {
@@ -220,7 +247,8 @@ async function journey() {
   for (const tab of tabs) {
     tab.click()
     await wait(
-      () => document.querySelector("[data-review-panel]")?.getAttribute("data-review-selected") === tab.dataset.reviewTab,
+      () =>
+        document.querySelector("[data-review-panel]")?.getAttribute("data-review-selected") === tab.dataset.reviewTab,
       `The ${tab.dataset.reviewTab} review tab did not activate`,
     )
     empty.push(document.querySelector("[data-review-empty]")?.textContent?.trim() ?? "")
@@ -240,7 +268,8 @@ async function journey() {
   mark(
     "immediate-prompt",
     remote.pending() &&
-      document.querySelector('[data-agent-entry="user"]')?.textContent?.includes("Build the rendered fixture") === true &&
+      document.querySelector('[data-agent-entry="user"]')?.textContent?.includes("Build the rendered fixture") ===
+        true &&
       !document.querySelector('[data-agent-entry="output"]'),
   )
   remote.release()
@@ -279,7 +308,8 @@ async function journey() {
   mark(
     "streamed-entries",
     document.querySelectorAll('[data-agent-entry="output"]').length === 1 &&
-      document.querySelector('[data-agent-entry="output"]')?.textContent?.includes("Inspecting the workspace.") === true &&
+      document.querySelector('[data-agent-entry="output"]')?.textContent?.includes("Inspecting the workspace.") ===
+        true &&
       document.querySelectorAll('[data-agent-entry="reasoning"]').length === 1 &&
       document.querySelectorAll('[data-agent-entry="tool"]').length === 1,
   )
@@ -334,7 +364,8 @@ async function journey() {
   await wait(
     () =>
       remote.replies.some((reply) => reply.type === "interaction.question.reply") &&
-      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Use the accessible style") === true,
+      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Use the accessible style") ===
+        true,
     "The question response was not sent",
   )
   mark(
@@ -342,7 +373,8 @@ async function journey() {
     label.textContent?.trim() === "Your answer" &&
       remote.replies.some(
         (reply) => reply.type === "interaction.question.reply" && reply.answer === "Use the accessible style",
-      ) && document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Your answer") === true,
+      ) &&
+      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Your answer") === true,
   )
 
   Array.from({ length: 18 }, (_, index) => index).forEach((index) => {
@@ -409,7 +441,8 @@ async function journey() {
   for (const tab of tabs) {
     tab.click()
     await wait(
-      () => document.querySelector("[data-review-panel]")?.getAttribute("data-review-selected") === tab.dataset.reviewTab,
+      () =>
+        document.querySelector("[data-review-panel]")?.getAttribute("data-review-selected") === tab.dataset.reviewTab,
       `The populated ${tab.dataset.reviewTab} tab did not activate`,
     )
     counts.push(`${tab.dataset.reviewTab}:${document.querySelectorAll("[data-review-item]").length}`)
@@ -423,13 +456,14 @@ async function journey() {
 
   remote.event("turn.completed", { sequence: 31, status: "completed", message: "Fixture verified." })
   await wait(
-    () => document.querySelector('[data-agent-entry="completion"]')?.textContent?.includes("Fixture verified.") === true,
+    () =>
+      document.querySelector('[data-agent-entry="completion"]')?.textContent?.includes("Fixture verified.") === true,
     "Completion was not rendered",
   )
   mark(
     "completion-live",
-    !document.querySelector('[data-agent-entry][aria-live]') &&
-      !document.querySelector('[data-agent-transcript][aria-live]') &&
+    !document.querySelector("[data-agent-entry][aria-live]") &&
+      !document.querySelector("[data-agent-transcript][aria-live]") &&
       document.querySelector("[data-agent-status-live]")?.getAttribute("role") === "status" &&
       document.querySelector("[data-agent-status-live]")?.getAttribute("aria-live") === "polite",
   )
@@ -441,7 +475,10 @@ async function journey() {
   const before = document.querySelectorAll("[data-agent-entry]").length
   dispose()
   const restore = mount()
-  await wait(() => document.querySelector("[data-agent-workspace]")?.getAttribute("data-agent-phase") === "completed", "The remote session was not reattached")
+  await wait(
+    () => document.querySelector("[data-agent-workspace]")?.getAttribute("data-agent-phase") === "completed",
+    "The remote session was not reattached",
+  )
   mark(
     "attached-restore",
     remote.starts() === 2 &&
@@ -449,8 +486,10 @@ async function journey() {
       document.querySelectorAll("[data-agent-entry]").length === before &&
       document.querySelector('[data-review-tab="screenshots"]')?.getAttribute("aria-selected") === "true" &&
       document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Approved") === true &&
-      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("not saved for security") === true &&
-      document.querySelector("[data-ssh-active-session]")?.getAttribute("data-ssh-active-session") === "ses_dom_fixture",
+      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("not saved for security") ===
+        true &&
+      document.querySelector("[data-ssh-active-session]")?.getAttribute("data-ssh-active-session") ===
+        "ses_dom_fixture",
   )
   if (new URLSearchParams(location.search).has("visual")) {
     mark("fixture-complete", true)
@@ -459,7 +498,9 @@ async function journey() {
   }
   document.querySelector<HTMLButtonElement>('[data-agent-action="new-session"]')?.click()
   await wait(
-    () => remote.starts() === 3 && document.querySelector("[data-agent-workspace]")?.getAttribute("data-agent-phase") === "ready",
+    () =>
+      remote.starts() === 3 &&
+      document.querySelector("[data-agent-workspace]")?.getAttribute("data-agent-phase") === "ready",
     "A clean session did not start after the completed session",
   )
   mark("new-session", document.querySelectorAll("[data-agent-entry]").length === 0)

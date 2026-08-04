@@ -48,7 +48,6 @@ describe("Android agent session projection", () => {
       text: "Build the fixture",
     })
     expect(state.transcript).toEqual([{ id: "usr_android_1", type: "user", text: "Build the fixture" }])
-
     ;[
       frame(1, "turn.output", { text: "I’ll inspect the workspace." }),
       frame(2, "turn.reasoning", { text: "Finding the smallest change." }),
@@ -437,9 +436,7 @@ describe("Android agent session persistence", () => {
     const raw = data.values.get(sessionKey(workspace, "ses_android_1")) ?? ""
     expect(new TextEncoder().encode(raw).byteLength).toBeLessThanOrEqual(MAX_PERSISTED_AGENT_SESSION_BYTES)
     expect(MAX_PERSISTED_AGENT_SESSION_BYTES).toBeLessThan(192 * 1024)
-    expect((await readAgentSession(data.storage, workspace))?.transcript.at(-1)?.id).toBe(
-      state.transcript.at(-1)?.id,
-    )
+    expect((await readAgentSession(data.storage, workspace))?.transcript.at(-1)?.id).toBe(state.transcript.at(-1)?.id)
   })
 
   test("keeps concurrent provider interactions available until each one is resolved", () => {

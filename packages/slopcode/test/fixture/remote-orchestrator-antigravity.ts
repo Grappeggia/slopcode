@@ -1,6 +1,14 @@
 const prompt = process.env.AGY_TEST_PROMPT ?? ""
 const args = process.argv.slice(2)
-const text = ["--new-project", "--add-dir", process.cwd(), "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt]
+const text = [
+  "--new-project",
+  "--add-dir",
+  process.cwd(),
+  "--sandbox",
+  "--dangerously-skip-permissions",
+  "--prompt",
+  prompt,
+]
 const stream = [...text, "--output-format", "stream-json"]
 
 if (JSON.stringify(args) === JSON.stringify(stream)) {

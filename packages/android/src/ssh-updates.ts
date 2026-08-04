@@ -50,12 +50,7 @@ export async function readSshUpdateRecord(store: Store, profile: string, agent: 
   return value[name(profile, agent)]
 }
 
-export async function writeSshUpdateRecord(
-  store: Store,
-  profile: string,
-  agent: SshAgent,
-  record: SshUpdateRecord,
-) {
+export async function writeSshUpdateRecord(store: Store, profile: string, agent: SshAgent, record: SshUpdateRecord) {
   const value = records(await store.getItem(KEY).catch(() => null))
   const next = Object.fromEntries(
     Object.entries({ ...value, [name(profile, agent)]: record })
@@ -75,5 +70,7 @@ export function newerSshVersion(current: string, latest: string) {
   const a = version(current)
   const b = version(latest)
   if (!a || !b) return false
-  return b.some((value, index) => value !== a[index] && value > a[index] && b.slice(0, index).every((item, i) => item === a[i]))
+  return b.some(
+    (value, index) => value !== a[index] && value > a[index] && b.slice(0, index).every((item, i) => item === a[i]),
+  )
 }

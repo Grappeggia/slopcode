@@ -11,9 +11,12 @@ export function sshLoginFlow(agent: SshAgent): SshLoginFlow {
 }
 
 export function sshLoginGuidance(agent: SshAgent) {
-  if (agent === "codex-cli") return "Codex is using OAuth device authentication. Open the link on this phone and enter the code; no browser callback is needed on the computer."
-  if (agent === "opencode-cli") return "OpenCode will ask which provider and login method to use. Choose that provider’s device or headless method when one is offered."
-  if (agent === "antigravity-cli") return "Antigravity detects SSH and shows a secure Google sign-in link plus a code to return to this screen."
+  if (agent === "codex-cli")
+    return "Codex is using OAuth device authentication. Open the link on this phone and enter the code; no browser callback is needed on the computer."
+  if (agent === "opencode-cli")
+    return "OpenCode will ask which provider and login method to use. Choose that provider’s device or headless method when one is offered."
+  if (agent === "antigravity-cli")
+    return "Antigravity detects SSH and shows a secure Google sign-in link plus a code to return to this screen."
   return "Claude Code detects SSH and shows a browser sign-in link plus a code to return to this screen."
 }
 
@@ -410,17 +413,44 @@ function orchestratorError(value: unknown) {
 }
 
 export function parseSshOrchestratorPreflight(value: unknown): SshOrchestratorPreflight | undefined {
-  if (!object(value) || value.executable !== "slopcode" || typeof value.ok !== "boolean" || typeof value.exitCode !== "number") return
+  if (
+    !object(value) ||
+    value.executable !== "slopcode" ||
+    typeof value.ok !== "boolean" ||
+    typeof value.exitCode !== "number"
+  )
+    return
   const error = value.error === null || value.error === undefined ? undefined : orchestratorError(value.error)
   if (!value.ok && !error) return
-  return { executable: "slopcode", ok: value.ok, exitCode: value.exitCode, ...(typeof value.version === "string" ? { version: value.version } : {}), ...(error ? { error } : {}) }
+  return {
+    executable: "slopcode",
+    ok: value.ok,
+    exitCode: value.exitCode,
+    ...(typeof value.version === "string" ? { version: value.version } : {}),
+    ...(error ? { error } : {}),
+  }
 }
 
 export function parseSshOrchestratorInstall(value: unknown): SshOrchestratorInstall | undefined {
-  if (!object(value) || value.executable !== "slopcode" || value.package !== "slopcode@latest" || value.operation !== "install_or_upgrade" || typeof value.ok !== "boolean" || typeof value.exitCode !== "number") return
+  if (
+    !object(value) ||
+    value.executable !== "slopcode" ||
+    value.package !== "slopcode@latest" ||
+    value.operation !== "install_or_upgrade" ||
+    typeof value.ok !== "boolean" ||
+    typeof value.exitCode !== "number"
+  )
+    return
   const error = value.error === null || value.error === undefined ? undefined : orchestratorError(value.error)
   if (!value.ok && !error) return
-  return { executable: "slopcode", package: "slopcode@latest", operation: "install_or_upgrade", ok: value.ok, exitCode: value.exitCode, ...(error ? { error } : {}) }
+  return {
+    executable: "slopcode",
+    package: "slopcode@latest",
+    operation: "install_or_upgrade",
+    ok: value.ok,
+    exitCode: value.exitCode,
+    ...(error ? { error } : {}),
+  }
 }
 
 export function parseSshAuthStatus(value: unknown): SshAuthStatus | undefined {
@@ -433,7 +463,8 @@ export function parseSshUpdateCheck(value: unknown): SshUpdateCheck | undefined 
   if (!object(value) || typeof value.currentVersion !== "string" || value.currentVersion.length > 128) return
   const preflight = parseSshPreflight(value)
   if (!preflight) return
-  const latestVersion = typeof value.latestVersion === "string" && value.latestVersion.length <= 128 ? value.latestVersion : undefined
+  const latestVersion =
+    typeof value.latestVersion === "string" && value.latestVersion.length <= 128 ? value.latestVersion : undefined
   return { ...preflight, currentVersion: value.currentVersion, ...(latestVersion ? { latestVersion } : {}) }
 }
 

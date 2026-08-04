@@ -21,28 +21,30 @@ const it = testEffect(
   Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer, CrossSpawnSpawner.defaultLayer),
 )
 
-it.live("headerTimeout does not abort delayed SSE body after headers arrive", () =>
-  Effect.gen(function* () {
-    const server = yield* Effect.acquireRelease(
-      Effect.promise(() => delayedBodyServer(1_000)),
-      (server) => Effect.sync(() => server.server.close()),
-    )
+it.live(
+  "headerTimeout does not abort delayed SSE body after headers arrive",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* Effect.acquireRelease(
+        Effect.promise(() => delayedBodyServer(1_000)),
+        (server) => Effect.sync(() => server.server.close()),
+      )
 
-    yield* provideTmpdirInstance(
-      () =>
-        Effect.gen(function* () {
-          const provider = yield* Provider.Service
-          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
-          const result = streamText({
-            model: yield* provider.getLanguage(model),
-            messages: [{ role: "user", content: "hello" }],
-          })
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* Provider.Service
+            const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+            const result = streamText({
+              model: yield* provider.getLanguage(model),
+              messages: [{ role: "user", content: "hello" }],
+            })
 
-          expect(yield* Effect.promise(() => result.text)).toBe("late")
-        }),
-      { config: providerConfig(server.url, { headerTimeout: 500 }) },
-    )
-  }),
+            expect(yield* Effect.promise(() => result.text)).toBe("late")
+          }),
+        { config: providerConfig(server.url, { headerTimeout: 500 }) },
+      )
+    }),
   10_000,
 )
 

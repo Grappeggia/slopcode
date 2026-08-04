@@ -46,7 +46,10 @@ export async function readText(root: string, target: string, line = 1, limit?: n
   const content = await readFile(value, "utf8")
   const start = Math.max(0, Math.trunc(line) - 1)
   const count = limit === undefined ? undefined : Math.max(0, Math.trunc(limit))
-  return content.split("\n").slice(start, count === undefined ? undefined : start + count).join("\n")
+  return content
+    .split("\n")
+    .slice(start, count === undefined ? undefined : start + count)
+    .join("\n")
 }
 
 export async function writeText(root: string, target: string, content: string) {

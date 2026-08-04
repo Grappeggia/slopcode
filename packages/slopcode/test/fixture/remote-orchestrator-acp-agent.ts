@@ -8,7 +8,8 @@ class Fixture {
   constructor(private readonly connection: AgentSideConnection) {}
 
   async initialize(params: { clientCapabilities?: { fs?: { readTextFile?: boolean; writeTextFile?: boolean } } }) {
-    this.fs = params.clientCapabilities?.fs?.readTextFile === true && params.clientCapabilities.fs.writeTextFile === true
+    this.fs =
+      params.clientCapabilities?.fs?.readTextFile === true && params.clientCapabilities.fs.writeTextFile === true
     return { protocolVersion: PROTOCOL_VERSION, agentCapabilities: { loadSession: true } }
   }
 

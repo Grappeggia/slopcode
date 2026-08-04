@@ -366,25 +366,31 @@ describe("remote orchestrator", () => {
   test("projects Antigravity step updates as stable rich tool cards", async () => {
     const cwd = await temp()
     const events: ACPEvent[] = []
-    const updates = ["active", "done"].map((state) => JSON.stringify({
-      event: "step_update",
-      step_update: {
-        step_id: "write-main",
-        step_type: "tool",
-        tool_name: "write_to_file",
-        state,
-        tool_info: { name: "write_to_file" },
-      },
-    })).join("\n") + "\n"
+    const updates =
+      ["active", "done"]
+        .map((state) =>
+          JSON.stringify({
+            event: "step_update",
+            step_update: {
+              step_id: "write-main",
+              step_type: "tool",
+              tool_name: "write_to_file",
+              state,
+              tool_info: { name: "write_to_file" },
+            },
+          }),
+        )
+        .join("\n") + "\n"
     const session = await connectCli({
       agent: "antigravity",
       cwd,
       emit: (event) => events.push(event),
-      start: () => spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(updates)})`], {
-        cwd,
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      }),
+      start: () =>
+        spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(updates)})`], {
+          cwd,
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
     })
     await session.turn("write fixture")
     expect(events).toEqual([

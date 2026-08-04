@@ -111,13 +111,27 @@ function tool(agent: Agent, value: string): ACPEvent | undefined {
     const name = text(update.tool_name) || text(update.tool_info.name) || "Tool"
     const state = text(update.state).toLowerCase()
     const error = record(update.tool_info.error) ? text(update.tool_info.error.message) : ""
-    const key = text(update.step_id) || text(update.id) || text(update.tool_call_id) || text(update.tool_info.id) || name
+    const key =
+      text(update.step_id) || text(update.id) || text(update.tool_call_id) || text(update.tool_info.id) || name
     return {
       type: "tool",
       id: `antigravity:${key}`,
       title: error ? `${name}: ${error}` : name.replaceAll("_", " "),
-      status: error || state === "failed" || state === "error" ? "failed" : state === "done" || state === "completed" || state === "success" ? "completed" : state === "active" || state === "running" ? "in_progress" : "pending",
-      kind: /(?:write|edit|patch)/i.test(name) ? "edit" : /(?:read|list|view)/i.test(name) ? "read" : /search/i.test(name) ? "search" : "execute",
+      status:
+        error || state === "failed" || state === "error"
+          ? "failed"
+          : state === "done" || state === "completed" || state === "success"
+            ? "completed"
+            : state === "active" || state === "running"
+              ? "in_progress"
+              : "pending",
+      kind: /(?:write|edit|patch)/i.test(name)
+        ? "edit"
+        : /(?:read|list|view)/i.test(name)
+          ? "read"
+          : /search/i.test(name)
+            ? "search"
+            : "execute",
     }
   } catch {
     return

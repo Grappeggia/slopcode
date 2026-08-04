@@ -21,7 +21,10 @@ const bytes = (value: string) => Buffer.byteLength(value)
 const text = (value: unknown, size = 4 * 1024) => {
   if (typeof value !== "string") return ""
   const clean = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
-  return [...clean].reduce((result, character) => (bytes(result) + bytes(character) <= size ? result + character : result), "")
+  return [...clean].reduce(
+    (result, character) => (bytes(result) + bytes(character) <= size ? result + character : result),
+    "",
+  )
 }
 const record = (value: unknown): value is Input => typeof value === "object" && value !== null && !Array.isArray(value)
 const detail = (value: Input) => {
@@ -38,7 +41,9 @@ const response = (approved: boolean, input: Input) =>
       : { behavior: "deny", message: "The user declined this action in Slopcode." },
   )
 const socketPath = (dir: string) =>
-  process.platform === "win32" ? `\\\\.\\pipe\\slopcode-${randomBytes(16).toString("hex")}` : path.join(dir, "approval.sock")
+  process.platform === "win32"
+    ? `\\\\.\\pipe\\slopcode-${randomBytes(16).toString("hex")}`
+    : path.join(dir, "approval.sock")
 
 export async function create(input: { cwd: string; emit: (event: ACPEvent) => void }): Promise<ClaudePermission> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "slopcode-claude-"))
@@ -174,7 +179,8 @@ const request = (input: { socket: string; token: string; tool: string; value: In
     client.once("error", reject)
   })
 
-const reply = (id: unknown, result: unknown) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`)
+const reply = (id: unknown, result: unknown) =>
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`)
 const fail = (id: unknown, code: number, message: string) =>
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })}\n`)
 
@@ -245,7 +251,12 @@ export async function serve(input: { socket: string; token: string }) {
       }
       try {
         reply(value.id, {
-          content: [{ type: "text", text: await request({ socket: input.socket, token: input.token, tool: name, value: action }) }],
+          content: [
+            {
+              type: "text",
+              text: await request({ socket: input.socket, token: input.token, tool: name, value: action }),
+            },
+          ],
         })
       } catch (cause) {
         reply(value.id, {

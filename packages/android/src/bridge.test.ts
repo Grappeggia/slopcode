@@ -94,13 +94,23 @@ describe("android bridge parsing helpers", () => {
         if (request.method === "sshOrchestratorPreflight")
           return { executable: "slopcode", version: "1.2.3", ok: true, exitCode: 0, error: null }
         if (request.method === "sshOrchestratorInstall")
-          return { executable: "slopcode", package: "slopcode@latest", operation: "install_or_upgrade", ok: true, exitCode: 0, error: null }
+          return {
+            executable: "slopcode",
+            package: "slopcode@latest",
+            operation: "install_or_upgrade",
+            ok: true,
+            exitCode: 0,
+            error: null,
+          }
         return true
       }),
     })
     const ssh = sshTransportBridge(bridge)!
     await expect(ssh.orchestratorPreflight!("/home/marcos/temp")).resolves.toMatchObject({ ok: true, version: "1.2.3" })
-    await expect(ssh.orchestratorInstall!("/home/marcos/temp")).resolves.toMatchObject({ ok: true, package: "slopcode@latest" })
+    await expect(ssh.orchestratorInstall!("/home/marcos/temp")).resolves.toMatchObject({
+      ok: true,
+      package: "slopcode@latest",
+    })
     expect(calls.filter((item) => item.method.startsWith("sshOrchestrator"))).toEqual([
       { method: "sshOrchestratorPreflight", args: ['{"directory":"/home/marcos/temp"}'] },
       { method: "sshOrchestratorInstall", args: ['{"directory":"/home/marcos/temp"}'] },

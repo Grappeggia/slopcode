@@ -1,4 +1,11 @@
-import { ORCHESTRATOR_CAPABILITIES, parseInteraction, record, type OrchestratorBackendMode, type OrchestratorCapability, type OrchestratorInteraction } from "./ssh-orchestrator"
+import {
+  ORCHESTRATOR_CAPABILITIES,
+  parseInteraction,
+  record,
+  type OrchestratorBackendMode,
+  type OrchestratorCapability,
+  type OrchestratorInteraction,
+} from "./ssh-orchestrator"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 
 export const REVIEW_TABS = ["changes", "files", "tests", "screenshots"] as const
@@ -53,7 +60,12 @@ export type AgentSessionAction =
       answer?: string
     }
   | { type: "failure.added"; id: string; message: string }
-  | { type: "backend.connected"; version: string; mode: OrchestratorBackendMode; capabilities: OrchestratorCapability[] }
+  | {
+      type: "backend.connected"
+      version: string
+      mode: OrchestratorBackendMode
+      capabilities: OrchestratorCapability[]
+    }
 
 type Storage = {
   getItem(key: string): Promise<string | null>
@@ -78,7 +90,8 @@ function bytes(value: string) {
 }
 
 function text(value: unknown, limit = MAX_TEXT, empty = false) {
-  if (typeof value !== "string" || bytes(value) > limit || /\u0000/.test(value) || (!empty && value.length === 0)) return
+  if (typeof value !== "string" || bytes(value) > limit || /\u0000/.test(value) || (!empty && value.length === 0))
+    return
   return value
 }
 
@@ -98,10 +111,16 @@ export function redactAgentSessionText(value: string) {
   return value
     .replace(/-----BEGIN [^-\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\n]*PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
-    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b/g, "[REDACTED TOKEN]")
+    .replace(
+      /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b/g,
+      "[REDACTED TOKEN]",
+    )
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED TOKEN]")
     .replace(/\b\d+\/[A-Za-z0-9._~-]{20,}(?:#[A-Za-z0-9._~-]{8,})?/g, "[REDACTED OAUTH CODE]")
-    .replace(/(?<![A-Za-z0-9._~-])[A-Za-z0-9._~-]{32,}(?:#[A-Za-z0-9._~-]{8,})?(?![A-Za-z0-9._~-])/g, "[REDACTED TOKEN]")
+    .replace(
+      /(?<![A-Za-z0-9._~-])[A-Za-z0-9._~-]{32,}(?:#[A-Za-z0-9._~-]{8,})?(?![A-Za-z0-9._~-])/g,
+      "[REDACTED TOKEN]",
+    )
     .replace(/https?:\/\/[^\s/:@]+:[^\s/@]+@/gi, "https://[REDACTED]@")
     .replace(
       /(\b(?:(?:my|the|your|our|this)\s+)?(?:password|passwd|pwd|passphrase|api[_. -]?(?:key|token)|access[_. -]?token|refresh[_. -]?token|auth(?:entication|orization)?[_. -]?(?:code|token)|device[_. -]?code|verification[_. -]?code|login[_. -]?code|one[_. -]?time[_. -]?code|otp|client[_. -]?secret|secret|credential|cookie)\b)\s*(?:(?:is|was|equals?)\s+|(?:=|:)\s*|\s+)[^\r\n]+/gi,
@@ -193,15 +212,21 @@ function persistedEntry(value: unknown): AgentSessionEntry | undefined {
   if (type === "plan") {
     const content = safe(value.content, MAX_PERSISTED_PLAN)
     const path = safe(value.path, 4 * 1024)
-    const revision = typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision > 0 ? value.revision : undefined
-    return content ? { id: entryID, type, content, ...(path ? { path } : {}), ...(revision ? { revision } : {}) } : undefined
+    const revision =
+      typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision > 0
+        ? value.revision
+        : undefined
+    return content
+      ? { id: entryID, type, content, ...(path ? { path } : {}), ...(revision ? { revision } : {}) }
+      : undefined
   }
   if (type === "artifact") {
     const name = safe(value.name, 256)
     const path = safe(value.path, 4 * 1024)
     const kind = oneOf(value.kind, ARTIFACT_KINDS)
     if (!name || !path || !kind) return
-    const size = typeof value.size === "number" && Number.isSafeInteger(value.size) && value.size >= 0 ? value.size : undefined
+    const size =
+      typeof value.size === "number" && Number.isSafeInteger(value.size) && value.size >= 0 ? value.size : undefined
     const mime = safe(value.mime, 128)
     return { id: entryID, type, name, path, kind, ...(size !== undefined ? { size } : {}), ...(mime ? { mime } : {}) }
   }
@@ -209,7 +234,8 @@ function persistedEntry(value: unknown): AgentSessionEntry | undefined {
     const next = interaction(value.interaction, type)
     const resolved = value.resolved === true
     const decision = type === "approval" && resolved ? oneOf(value.decision, ["approved", "rejected"]) : undefined
-    const answerOmitted = type === "question" && resolved && (typeof value.answer === "string" || value.answerOmitted === true)
+    const answerOmitted =
+      type === "question" && resolved && (typeof value.answer === "string" || value.answerOmitted === true)
     return next
       ? {
           id: entryID,
@@ -218,7 +244,8 @@ function persistedEntry(value: unknown): AgentSessionEntry | undefined {
           resolved,
           ...(decision ? { decision: decision as "approved" | "rejected" } : {}),
           ...(answerOmitted ? { answerOmitted: true } : {}),
-          ...((record(value.interaction) && typeof value.interaction.command === "string") || value.detailsOmitted === true
+          ...((record(value.interaction) && typeof value.interaction.command === "string") ||
+          value.detailsOmitted === true
             ? { detailsOmitted: true }
             : {}),
         }
@@ -262,19 +289,30 @@ export function normalizeAgentSession(value: unknown): AgentSessionState {
   const draft = safe(value.draft, MAX_PERSISTED_TEXT, true) ?? ""
   const selectedReview = oneOf(value.selectedReview, REVIEW_TABS) as ReviewTab | undefined
   const lastCursor = text(value.lastCursor, 128)
-  const lastSequence = typeof value.lastSequence === "number" && Number.isSafeInteger(value.lastSequence) && value.lastSequence > 0 ? value.lastSequence : undefined
+  const lastSequence =
+    typeof value.lastSequence === "number" && Number.isSafeInteger(value.lastSequence) && value.lastSequence > 0
+      ? value.lastSequence
+      : undefined
   const backendVersion = safe(value.backendVersion, 256)
-  const backendMode = oneOf(value.backendMode, ["acp", "app_server", "cli", "streaming_cli", "sandboxed_cli"]) as OrchestratorBackendMode | undefined
+  const backendMode = oneOf(value.backendMode, ["acp", "app_server", "cli", "streaming_cli", "sandboxed_cli"]) as
+    | OrchestratorBackendMode
+    | undefined
   const raw = Array.isArray(value.capabilities) ? value.capabilities : undefined
   const capabilities = raw
-    ? raw.filter((item): item is OrchestratorCapability => typeof item === "string" && ORCHESTRATOR_CAPABILITIES.includes(item as OrchestratorCapability))
+    ? raw.filter(
+        (item): item is OrchestratorCapability =>
+          typeof item === "string" && ORCHESTRATOR_CAPABILITIES.includes(item as OrchestratorCapability),
+      )
     : undefined
-  const validCapabilities = capabilities && capabilities.length === raw?.length && capabilities.length ? capabilities : undefined
+  const validCapabilities =
+    capabilities && capabilities.length === raw?.length && capabilities.length ? capabilities : undefined
   const transcript = Array.isArray(value.transcript)
-    ? value.transcript.flatMap((item) => {
-        const next = persistedEntry(item)
-        return next ? [next] : []
-      }).slice(-MAX_PERSISTED_ENTRIES)
+    ? value.transcript
+        .flatMap((item) => {
+          const next = persistedEntry(item)
+          return next ? [next] : []
+        })
+        .slice(-MAX_PERSISTED_ENTRIES)
     : []
   return fit({
     version: 2,
@@ -329,10 +367,17 @@ export function reduceAgentSession(state: AgentSessionState, action: AgentSessio
   const remote = id(value.sessionID)
   if (!state.sessionID || !remote || remote !== state.sessionID) return state
   const cursor = text(value.cursor, 128)
-  const sequence = typeof value.sequence === "number" && Number.isSafeInteger(value.sequence) && value.sequence > 0 ? value.sequence : undefined
+  const sequence =
+    typeof value.sequence === "number" && Number.isSafeInteger(value.sequence) && value.sequence > 0
+      ? value.sequence
+      : undefined
   if (cursor && state.lastCursor === cursor) return state
   if (sequence && state.lastSequence && sequence <= state.lastSequence) return state
-  const current = { ...state, ...(cursor ? { lastCursor: cursor } : {}), ...(sequence ? { lastSequence: sequence } : {}) }
+  const current = {
+    ...state,
+    ...(cursor ? { lastCursor: cursor } : {}),
+    ...(sequence ? { lastSequence: sequence } : {}),
+  }
   const type = text(value.type, 128)
   if (!type) return current
   if (type === "turn.output" || type === "turn.reasoning" || type === "turn.retry") {
@@ -353,16 +398,32 @@ export function reduceAgentSession(state: AgentSessionState, action: AgentSessio
     const kind = oneOf(value.tool.kind, TOOL_KINDS)
     const detail = metadata(value.tool.metadata)
     return toolID && title && status
-      ? replace(current, { id: toolID, type: "tool", title, status, ...(kind ? { kind } : {}), ...(detail ? { metadata: detail } : {}) })
+      ? replace(current, {
+          id: toolID,
+          type: "tool",
+          title,
+          status,
+          ...(kind ? { kind } : {}),
+          ...(detail ? { metadata: detail } : {}),
+        })
       : current
   }
   if (type === "plan.available" && record(value.plan)) {
     const planID = id(value.plan.id)
     const content = text(value.plan.content)
     const path = text(value.plan.path, 4 * 1024)
-    const revision = typeof value.plan.revision === "number" && Number.isSafeInteger(value.plan.revision) && value.plan.revision > 0 ? value.plan.revision : undefined
+    const revision =
+      typeof value.plan.revision === "number" && Number.isSafeInteger(value.plan.revision) && value.plan.revision > 0
+        ? value.plan.revision
+        : undefined
     return planID && content
-      ? replace(current, { id: planID, type: "plan", content, ...(path ? { path } : {}), ...(revision ? { revision } : {}) })
+      ? replace(current, {
+          id: planID,
+          type: "plan",
+          content,
+          ...(path ? { path } : {}),
+          ...(revision ? { revision } : {}),
+        })
       : current
   }
   if (type === "artifact.created" && record(value.artifact)) {
@@ -371,11 +432,25 @@ export function reduceAgentSession(state: AgentSessionState, action: AgentSessio
     const path = text(value.artifact.path, 4 * 1024)
     const kind = oneOf(value.artifact.kind, ARTIFACT_KINDS)
     if (!artifactID || !name || !path || !kind) return current
-    const size = typeof value.artifact.size === "number" && Number.isSafeInteger(value.artifact.size) && value.artifact.size >= 0 ? value.artifact.size : undefined
+    const size =
+      typeof value.artifact.size === "number" && Number.isSafeInteger(value.artifact.size) && value.artifact.size >= 0
+        ? value.artifact.size
+        : undefined
     const mime = text(value.artifact.mime, 128)
-    return replace(current, { id: artifactID, type: "artifact", name, path, kind, ...(size !== undefined ? { size } : {}), ...(mime ? { mime } : {}) })
+    return replace(current, {
+      id: artifactID,
+      type: "artifact",
+      name,
+      path,
+      kind,
+      ...(size !== undefined ? { size } : {}),
+      ...(mime ? { mime } : {}),
+    })
   }
-  if ((type === "interaction.approval.requested" || type === "interaction.question.requested") && record(value.interaction)) {
+  if (
+    (type === "interaction.approval.requested" || type === "interaction.question.requested") &&
+    record(value.interaction)
+  ) {
     const kind = type === "interaction.approval.requested" ? "approval" : "question"
     const next = parseInteraction(value.interaction, kind)
     return next ? replace(current, { id: next.id, type: kind, interaction: next, resolved: false }) : current
@@ -425,24 +500,22 @@ export function lastPrompt(state: AgentSessionState) {
 
 export function pendingInteraction(transcript: AgentSessionEntry[], exclude?: string) {
   const item = transcript.findLast(
-    (entry) =>
-      (entry.type === "approval" || entry.type === "question") && !entry.resolved && entry.id !== exclude,
+    (entry) => (entry.type === "approval" || entry.type === "question") && !entry.resolved && entry.id !== exclude,
   )
   return item?.type === "approval" || item?.type === "question" ? item.interaction : undefined
 }
 
 function hash(value: string) {
-  return [...value].reduce((result, character) => Math.imul(result ^ character.charCodeAt(0), 16_777_619) >>> 0, 2_166_136_261).toString(36)
+  return [...value]
+    .reduce((result, character) => Math.imul(result ^ character.charCodeAt(0), 16_777_619) >>> 0, 2_166_136_261)
+    .toString(36)
 }
 
 function workspaceKey(workspace: Pick<SshWorkspaceState, "profile" | "directory" | "agent">) {
   return `ssh.agent-session.latest.v2.${hash(`${workspace.profile}\u0000${workspace.directory}\u0000${workspace.agent}`)}`
 }
 
-export function sessionKey(
-  workspace: Pick<SshWorkspaceState, "profile" | "directory" | "agent">,
-  sessionID: string,
-) {
+export function sessionKey(workspace: Pick<SshWorkspaceState, "profile" | "directory" | "agent">, sessionID: string) {
   return `ssh.agent-session.v2.${hash(`${workspace.profile}\u0000${workspace.directory}\u0000${workspace.agent}\u0000${sessionID}`)}`
 }
 

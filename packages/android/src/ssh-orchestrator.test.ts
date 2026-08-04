@@ -43,27 +43,59 @@ describe("SSH agent orchestration frames", () => {
     expect(snapshotFrame("ses_1")).toMatchObject({ type: "session.snapshot", sessionID: "ses_1" })
     expect(cancelFrame("ses_1", "trn_1")).toMatchObject({ type: "turn.cancel" })
     expect(retryFrame("ses_1", "trn_1")).toMatchObject({ type: "turn.retry" })
-    expect(steerFrame("ses_1", "trn_1", "focus tests")).toMatchObject({ type: "turn.steer", instruction: "focus tests" })
+    expect(steerFrame("ses_1", "trn_1", "focus tests")).toMatchObject({
+      type: "turn.steer",
+      instruction: "focus tests",
+    })
   })
 
   test("strictly parses bridge negotiation, snapshots, and replay", () => {
-    expect(parseHello({
-      type: "bridge.hello",
-      bridgeVersion: "1.0.0",
-      protocolVersion: "v1",
-      agent: "codex",
-      backendVersion: "codex 2.0.0",
-      backendMode: "app_server",
-      capabilities: ["workspace", "sessions", "turns", "replay", "cancel"],
-    })).toMatchObject({ agent: "codex", backendMode: "app_server" })
+    expect(
+      parseHello({
+        type: "bridge.hello",
+        bridgeVersion: "1.0.0",
+        protocolVersion: "v1",
+        agent: "codex",
+        backendVersion: "codex 2.0.0",
+        backendMode: "app_server",
+        capabilities: ["workspace", "sessions", "turns", "replay", "cancel"],
+      }),
+    ).toMatchObject({ agent: "codex", backendMode: "app_server" })
     const snapshot = {
-      session: { id: "ses_1", state: "running", backendVersion: "codex 2.0.0", backendMode: "app_server", capabilities: ["workspace", "sessions", "turns", "replay"], activeTurnID: "trn_1", lastCursor: "cur_1" },
+      session: {
+        id: "ses_1",
+        state: "running",
+        backendVersion: "codex 2.0.0",
+        backendMode: "app_server",
+        capabilities: ["workspace", "sessions", "turns", "replay"],
+        activeTurnID: "trn_1",
+        lastCursor: "cur_1",
+      },
       pending: [],
       artifacts: [],
       authoritative: true,
     }
-    expect(parseAttach({ type: "session.attach", attached: true, snapshot })).toMatchObject({ attached: true, snapshot: { session: { id: "ses_1" } } })
-    expect(parseReplay({ type: "event.replay", events: [{ kind: "event", sessionID: "ses_1", type: "turn.output", cursor: "cur_2", sequence: 2, turnID: "trn_1", text: "done" }], hasMore: false })).toMatchObject({ hasMore: false, events: [{ cursor: "cur_2" }] })
+    expect(parseAttach({ type: "session.attach", attached: true, snapshot })).toMatchObject({
+      attached: true,
+      snapshot: { session: { id: "ses_1" } },
+    })
+    expect(
+      parseReplay({
+        type: "event.replay",
+        events: [
+          {
+            kind: "event",
+            sessionID: "ses_1",
+            type: "turn.output",
+            cursor: "cur_2",
+            sequence: 2,
+            turnID: "trn_1",
+            text: "done",
+          },
+        ],
+        hasMore: false,
+      }),
+    ).toMatchObject({ hasMore: false, events: [{ cursor: "cur_2" }] })
     expect(parseHello({ protocolVersion: "v2" })).toBeUndefined()
   })
 
@@ -76,7 +108,12 @@ describe("SSH agent orchestration frames", () => {
     expect(cancelFrame("ses_1", "trn_1")).toMatchObject(cancelFrame("ses_1", "trn_1"))
     expect(retryFrame("ses_1", "trn_1")).toMatchObject(retryFrame("ses_1", "trn_1"))
     expect(sessionAttachFrame("ses_1")).toMatchObject(sessionAttachFrame("ses_1"))
-    const question = replyFrame("ses_1", { id: "int_2", revision: 1, kind: "question", prompt: "Token?" }, "secret-answer", undefined)
+    const question = replyFrame(
+      "ses_1",
+      { id: "int_2", revision: 1, kind: "question", prompt: "Token?" },
+      "secret-answer",
+      undefined,
+    )
     expect(question.idempotencyKey).not.toContain("secret-answer")
     expect(steerFrame("ses_1", "trn_1", "use password=secret").idempotencyKey).not.toContain("secret")
   })
@@ -87,7 +124,12 @@ describe("SSH agent orchestration frames", () => {
     expect(parseOrchestratorLine("not-json")).toBeUndefined()
     expect(parseOrchestratorLine("x".repeat(256 * 1024 + 1))).toBeUndefined()
     expect(parseOrchestratorEvent(value)).toEqual({ kind: "event", value })
-    expect(parseOrchestratorEvent({ kind: "error", message: "failed" })).toEqual({ kind: "error", message: "failed", code: "internal", retryable: false })
+    expect(parseOrchestratorEvent({ kind: "error", message: "failed" })).toEqual({
+      kind: "error",
+      message: "failed",
+      code: "internal",
+      retryable: false,
+    })
   })
 
   test("reduces plans, interactions, and terminal turn state", () => {

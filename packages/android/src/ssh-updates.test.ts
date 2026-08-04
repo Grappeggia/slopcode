@@ -29,7 +29,10 @@ describe("SSH agent update checks", () => {
     const value = store()
     await writeSshUpdateRecord(value, "agent@void:22", "codex-cli", { checkedAt: 10, preference: "skip" })
     await writeSshUpdateRecord(value, "agent@void:22", "opencode-cli", { checkedAt: 20 })
-    expect(await readSshUpdateRecord(value, "agent@void:22", "codex-cli")).toEqual({ checkedAt: 10, preference: "skip" })
+    expect(await readSshUpdateRecord(value, "agent@void:22", "codex-cli")).toEqual({
+      checkedAt: 10,
+      preference: "skip",
+    })
     expect(await readSshUpdateRecord(value, "agent@void:22", "opencode-cli")).toEqual({ checkedAt: 20 })
     expect(await readSshUpdateRecord(value, "other@void:22", "codex-cli")).toBeUndefined()
   })

@@ -358,7 +358,8 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
       )
     },
     orchestratorPreflight: (directory) => {
-      if (!bridge.sshOrchestratorPreflight) return Promise.reject(new Error("Native SSH orchestration preflight is unavailable."))
+      if (!bridge.sshOrchestratorPreflight)
+        return Promise.reject(new Error("Native SSH orchestration preflight is unavailable."))
       return result(
         bridge.sshOrchestratorPreflight(JSON.stringify({ directory })),
         parseSshOrchestratorPreflight,
@@ -366,7 +367,8 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
       )
     },
     orchestratorInstall: (directory) => {
-      if (!bridge.sshOrchestratorInstall) return Promise.reject(new Error("Native SSH orchestration setup is unavailable."))
+      if (!bridge.sshOrchestratorInstall)
+        return Promise.reject(new Error("Native SSH orchestration setup is unavailable."))
       return result(
         bridge.sshOrchestratorInstall(JSON.stringify({ directory })),
         parseSshOrchestratorInstall,

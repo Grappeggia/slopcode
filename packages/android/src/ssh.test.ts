@@ -216,7 +216,9 @@ describe("direct SSH boundary parsing", () => {
     expect(sshSetupRecipe("codex-cli", "login")).toBe("codex login --device-auth")
     expect(sshSetupRecipe("opencode-cli", "login")).toBe("opencode auth login")
     expect(sshSetupRecipe("claude-code", "login")).toBe("claude")
-    expect(sshSetupRecipe("antigravity-cli", "install")).toContain("curl -fsSL https://antigravity.google/cli/install.sh | bash")
+    expect(sshSetupRecipe("antigravity-cli", "install")).toContain(
+      "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    )
     expect(sshSetupRecipe("antigravity-cli", "install")).toContain("apt-get")
     expect(sshSetupRecipe("antigravity-cli", "login")).toBe("agy")
     expect(sshLoginFlow("codex-cli")).toBe("device-code")
@@ -262,6 +264,8 @@ describe("direct SSH boundary parsing", () => {
       currentVersion: "0.146.0",
       latestVersion: "0.147.0",
     })
-    expect(parseSshUpdateCheck({ agent: "bash", currentVersion: "1", output: "", exitCode: 0, ok: true })).toBeUndefined()
+    expect(
+      parseSshUpdateCheck({ agent: "bash", currentVersion: "1", output: "", exitCode: 0, ok: true }),
+    ).toBeUndefined()
   })
 })

@@ -697,7 +697,8 @@ export function SshConnect(props: Props) {
       checkedAt: Date.now(),
       ...(previous?.preference ? { preference: previous.preference } : {}),
     }).catch(() => undefined)
-    if (!result.ok || !result.latestVersion || !newerSshVersion(result.currentVersion, result.latestVersion)) return true
+    if (!result.ok || !result.latestVersion || !newerSshVersion(result.currentVersion, result.latestVersion))
+      return true
     if (previous?.preference === "skip") return true
     if (previous?.preference === "upgrade") {
       setSetup({ action: "install", reason: "upgrade", state: "available", output: "" })
@@ -752,8 +753,11 @@ export function SshConnect(props: Props) {
       if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
       if (!bridge.ok) {
         const missing = bridge.error?.code === "missing_executable"
-        setOrchestratorSetup({ state: missing ? "available" : "failed", message: bridge.error?.message ?? "The remote session service is unavailable." })
-        setError(missing ? "" : bridge.error?.message ?? "The remote session service could not start.")
+        setOrchestratorSetup({
+          state: missing ? "available" : "failed",
+          message: bridge.error?.message ?? "The remote session service is unavailable.",
+        })
+        setError(missing ? "" : (bridge.error?.message ?? "The remote session service could not start."))
         return false
       }
       setOrchestratorSetup({ state: "complete", version: bridge.version })
@@ -1502,27 +1506,49 @@ export function SshConnect(props: Props) {
             </section>
             <Show when={orchestratorSetup()}>
               {(current) => (
-                <section class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3" aria-label="Remote session service" aria-live="polite">
+                <section
+                  class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3"
+                  aria-label="Remote session service"
+                  aria-live="polite"
+                >
                   <div class="flex items-start justify-between gap-3">
                     <div>
                       <h2 class="text-14-medium">Remote session service</h2>
                       <p class="text-12-regular text-text-weak">
                         {current().state === "complete"
                           ? `Ready${current().version ? ` · ${current().version}` : ""}`
-                          : current().message ?? "Required to provide resumable, structured agent sessions."}
+                          : (current().message ?? "Required to provide resumable, structured agent sessions.")}
                       </p>
                     </div>
-                    <span class={`rounded-full px-2 py-1 text-12-regular ${current().state === "complete" ? "bg-surface-success-weak text-text-success" : current().state === "failed" ? "bg-surface-critical-weak text-text-critical" : "bg-surface-weak-base text-text-weak"}`}>
-                      {current().state === "complete" ? "Ready" : current().state === "running" ? "Installing" : "Needs setup"}
+                    <span
+                      class={`rounded-full px-2 py-1 text-12-regular ${current().state === "complete" ? "bg-surface-success-weak text-text-success" : current().state === "failed" ? "bg-surface-critical-weak text-text-critical" : "bg-surface-weak-base text-text-weak"}`}
+                    >
+                      {current().state === "complete"
+                        ? "Ready"
+                        : current().state === "running"
+                          ? "Installing"
+                          : "Needs setup"}
                     </span>
                   </div>
-                  <p class="text-12-regular text-text-weak">This installs Slopcode only as the private orchestration bridge. Your selected backend remains {agentName(agent())}.</p>
+                  <p class="text-12-regular text-text-weak">
+                    This installs Slopcode only as the private orchestration bridge. Your selected backend remains{" "}
+                    {agentName(agent())}.
+                  </p>
                   <Show when={current().state !== "complete" && current().state !== "running"}>
-                    <button type="button" disabled={busy() || !props.ssh.orchestratorInstall} onClick={() => void installOrchestrator()} class="w-fit min-h-12 rounded-md bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">Install session service</button>
+                    <button
+                      type="button"
+                      disabled={busy() || !props.ssh.orchestratorInstall}
+                      onClick={() => void installOrchestrator()}
+                      class="w-fit min-h-12 rounded-md bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50"
+                    >
+                      Install session service
+                    </button>
                   </Show>
                   <details>
                     <summary class="cursor-pointer text-12-regular text-text-weak">Technical details</summary>
-                    <code class="mt-2 block rounded-md border border-border-weak-base px-3 py-2 text-12-regular">npm install --prefix "$HOME/.local" -g slopcode@latest</code>
+                    <code class="mt-2 block rounded-md border border-border-weak-base px-3 py-2 text-12-regular">
+                      npm install --prefix "$HOME/.local" -g slopcode@latest
+                    </code>
                   </details>
                 </section>
               )}
@@ -1583,8 +1609,8 @@ export function SshConnect(props: Props) {
                   <div>
                     <h2 class="text-16-medium">Upgrade {agentName(available().agent)}?</h2>
                     <p class="text-12-regular text-text-weak">
-                      A newer version is available on this computer: {available().currentVersion} → {available().latestVersion}.
-                      Upgrade before starting this session?
+                      A newer version is available on this computer: {available().currentVersion} →{" "}
+                      {available().latestVersion}. Upgrade before starting this session?
                     </p>
                   </div>
                   <label class="flex min-h-12 items-center gap-2 text-12-regular">
@@ -1694,7 +1720,8 @@ export function SshConnect(props: Props) {
                     <Show when={setupNeedsInput(current().action, current().output)}>
                       <div class="flex flex-col gap-2">
                         <p class="text-12-regular text-text-weak">
-                          If the agent asks for a code, password, API key, or provider choice, enter it here. Sign-in input is never saved by Slopcode.
+                          If the agent asks for a code, password, API key, or provider choice, enter it here. Sign-in
+                          input is never saved by Slopcode.
                         </p>
                         <div class="flex gap-2">
                           <input
@@ -1732,9 +1759,18 @@ export function SshConnect(props: Props) {
                       {checkingLogin() ? "Checking sign-in…" : "I completed sign-in — check again"}
                     </button>
                   </Show>
-                  <Show when={current().action === "install" && current().state === "running" && setupNeedsInput(current().action, current().output)}>
+                  <Show
+                    when={
+                      current().action === "install" &&
+                      current().state === "running" &&
+                      setupNeedsInput(current().action, current().output)
+                    }
+                  >
                     <div class="flex flex-col gap-2">
-                      <p class="text-12-regular text-text-weak">This computer needs administrator access to install its package manager. This password is sent once to the remote installer and is not saved.</p>
+                      <p class="text-12-regular text-text-weak">
+                        This computer needs administrator access to install its package manager. This password is sent
+                        once to the remote installer and is not saved.
+                      </p>
                       <div class="flex gap-2">
                         <input
                           type={setupInputType(current().action, current().output)}
@@ -1785,7 +1821,9 @@ export function SshConnect(props: Props) {
                     <button
                       type="button"
                       disabled={busy()}
-                      onClick={() => void startSetup(current().action, onboarding.current(), selectedProfile(), current().reason)}
+                      onClick={() =>
+                        void startSetup(current().action, onboarding.current(), selectedProfile(), current().reason)
+                      }
                       class="rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base disabled:opacity-50"
                     >
                       {current().state === "failed"

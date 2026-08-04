@@ -35,7 +35,20 @@ export type OrchestratorState = {
 }
 
 export const ORCHESTRATOR_CAPABILITIES = [
-  "workspace", "sessions", "turns", "approvals", "questions", "plans", "artifacts", "replay", "cancel", "retry", "steer", "streaming", "permissions", "sandboxed",
+  "workspace",
+  "sessions",
+  "turns",
+  "approvals",
+  "questions",
+  "plans",
+  "artifacts",
+  "replay",
+  "cancel",
+  "retry",
+  "steer",
+  "streaming",
+  "permissions",
+  "sandboxed",
 ] as const
 export type OrchestratorCapability = (typeof ORCHESTRATOR_CAPABILITIES)[number]
 export type OrchestratorBackendMode = "acp" | "app_server" | "cli" | "streaming_cli" | "sandboxed_cli"
@@ -108,7 +121,10 @@ export function idempotencyKey(prefix: string) {
 }
 
 function stable(prefix: string, ...values: Array<string | number>) {
-  const value = values.join(":").replaceAll(/[^A-Za-z0-9._:-]/g, "_").slice(0, 96)
+  const value = values
+    .join(":")
+    .replaceAll(/[^A-Za-z0-9._:-]/g, "_")
+    .slice(0, 96)
   return `idem_${prefix}_${value || "android"}`
 }
 
@@ -136,7 +152,13 @@ export function sessionListFrame(agent: SshAgent) {
 }
 
 export function sessionAttachFrame(sessionID: string) {
-  return frame("session.attach", "attach", { sessionID }, stable("attach", sessionID), stableRequest("attach", sessionID))
+  return frame(
+    "session.attach",
+    "attach",
+    { sessionID },
+    stable("attach", sessionID),
+    stableRequest("attach", sessionID),
+  )
 }
 
 export function snapshotFrame(sessionID: string) {
@@ -148,11 +170,23 @@ export function replayFrame(sessionID: string, afterCursor?: string, limit = 100
 }
 
 export function cancelFrame(sessionID: string, turnID: string) {
-  return frame("turn.cancel", "cancel", { sessionID, turnID }, stable("cancel", sessionID, turnID), stableRequest("cancel", sessionID, turnID))
+  return frame(
+    "turn.cancel",
+    "cancel",
+    { sessionID, turnID },
+    stable("cancel", sessionID, turnID),
+    stableRequest("cancel", sessionID, turnID),
+  )
 }
 
 export function retryFrame(sessionID: string, turnID: string) {
-  return frame("turn.retry", "retry", { sessionID, turnID }, stable("retry", sessionID, turnID), stableRequest("retry", sessionID, turnID))
+  return frame(
+    "turn.retry",
+    "retry",
+    { sessionID, turnID },
+    stable("retry", sessionID, turnID),
+    stableRequest("retry", sessionID, turnID),
+  )
 }
 
 export function steerFrame(sessionID: string, turnID: string, instruction: string) {
@@ -297,11 +331,19 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
   const type = text(value.type, 128)
   if (!type) return state
   const cursor = text(value.cursor, 128)
-  const sequence = typeof value.sequence === "number" && Number.isSafeInteger(value.sequence) && value.sequence > 0 ? value.sequence : undefined
+  const sequence =
+    typeof value.sequence === "number" && Number.isSafeInteger(value.sequence) && value.sequence > 0
+      ? value.sequence
+      : undefined
   if (cursor && state.cursor === cursor) return state
   if (sequence && state.sequence && sequence <= state.sequence) return state
   const turnID = id(value.turnID)
-  const base = { ...state, ...(cursor ? { cursor } : {}), ...(sequence ? { sequence } : {}), ...(turnID ? { turnID } : {}) }
+  const base = {
+    ...state,
+    ...(cursor ? { cursor } : {}),
+    ...(sequence ? { sequence } : {}),
+    ...(turnID ? { turnID } : {}),
+  }
   if (type === "turn.output" || type === "turn.reasoning" || type === "turn.retry") {
     const content = text(value.text ?? value.reason, MAX_TEXT)
     if (!content) return base
@@ -312,10 +354,7 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
     }
     const last = state.items[state.items.length - 1]
     if (last?.type === item.type && "text" in last) {
-      const items = [
-        ...state.items.slice(0, -1),
-        { ...last, text: last.text + item.text },
-      ]
+      const items = [...state.items.slice(0, -1), { ...last, text: last.text + item.text }]
       return {
         ...base,
         phase: type === "turn.retry" ? "running" : "running",
@@ -342,7 +381,9 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
     }
     const index = state.items.findIndex((current) => current.id === toolID)
     const items = (
-      index < 0 ? [...state.items, item] : state.items.map((current, currentIndex) => (currentIndex === index ? item : current))
+      index < 0
+        ? [...state.items, item]
+        : state.items.map((current, currentIndex) => (currentIndex === index ? item : current))
     ).slice(-MAX_ITEMS)
     return { ...base, phase: "running", items }
   }
@@ -384,15 +425,22 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
 
 function capabilities(value: unknown) {
   if (!Array.isArray(value) || value.length === 0 || value.length > 16) return
-  const result = value.filter((item): item is OrchestratorCapability =>
-    typeof item === "string" && ORCHESTRATOR_CAPABILITIES.includes(item as OrchestratorCapability),
+  const result = value.filter(
+    (item): item is OrchestratorCapability =>
+      typeof item === "string" && ORCHESTRATOR_CAPABILITIES.includes(item as OrchestratorCapability),
   )
   if (result.length !== value.length || new Set(result).size !== result.length) return
   return result
 }
 
 function mode(value: unknown): OrchestratorBackendMode | undefined {
-  return value === "acp" || value === "app_server" || value === "cli" || value === "streaming_cli" || value === "sandboxed_cli" ? value : undefined
+  return value === "acp" ||
+    value === "app_server" ||
+    value === "cli" ||
+    value === "streaming_cli" ||
+    value === "sandboxed_cli"
+    ? value
+    : undefined
 }
 
 export function parseHello(value: unknown): OrchestratorHello | undefined {
@@ -402,7 +450,14 @@ export function parseHello(value: unknown): OrchestratorHello | undefined {
   const backendMode = mode(value.backendMode)
   const list = capabilities(value.capabilities)
   const agent = value.agent
-  if (!bridgeVersion || !backendVersion || !backendMode || !list || (agent !== "opencode" && agent !== "codex" && agent !== "claude" && agent !== "antigravity")) return
+  if (
+    !bridgeVersion ||
+    !backendVersion ||
+    !backendMode ||
+    !list ||
+    (agent !== "opencode" && agent !== "codex" && agent !== "claude" && agent !== "antigravity")
+  )
+    return
   return { bridgeVersion, protocolVersion: "v1", agent, backendVersion, backendMode, capabilities: list }
 }
 
@@ -413,22 +468,52 @@ function summary(value: unknown): OrchestratorSnapshot["session"] | undefined {
   const backendMode = mode(value.backendMode)
   const list = capabilities(value.capabilities)
   const states = ["idle", "running", "waiting", "completed", "failed", "stopped", "interrupted", "detached"]
-  if (!sessionID?.startsWith("ses_") || !backendVersion || !backendMode || !list || typeof value.state !== "string" || !states.includes(value.state)) return
+  if (
+    !sessionID?.startsWith("ses_") ||
+    !backendVersion ||
+    !backendMode ||
+    !list ||
+    typeof value.state !== "string" ||
+    !states.includes(value.state)
+  )
+    return
   const activeTurnID = id(value.activeTurnID)
   const lastTurnID = id(value.lastTurnID)
   const lastCursor = text(value.lastCursor, 128)
-  return { id: sessionID, state: value.state as OrchestratorSnapshot["session"]["state"], backendVersion, backendMode, capabilities: list, ...(activeTurnID ? { activeTurnID } : {}), ...(lastTurnID ? { lastTurnID } : {}), ...(lastCursor ? { lastCursor } : {}) }
+  return {
+    id: sessionID,
+    state: value.state as OrchestratorSnapshot["session"]["state"],
+    backendVersion,
+    backendMode,
+    capabilities: list,
+    ...(activeTurnID ? { activeTurnID } : {}),
+    ...(lastTurnID ? { lastTurnID } : {}),
+    ...(lastCursor ? { lastCursor } : {}),
+  }
 }
 
 export function parseSnapshot(value: unknown): OrchestratorSnapshot | undefined {
-  if (!record(value) || value.authoritative !== true || !Array.isArray(value.pending) || !Array.isArray(value.artifacts) || value.pending.length > 32 || value.artifacts.length > 64) return
+  if (
+    !record(value) ||
+    value.authoritative !== true ||
+    !Array.isArray(value.pending) ||
+    !Array.isArray(value.artifacts) ||
+    value.pending.length > 32 ||
+    value.artifacts.length > 64
+  )
+    return
   const session = summary(value.session)
   if (!session) return
   const pending = value.pending.flatMap((item) => {
     if (!record(item)) return []
     const interactionID = id(item.id)
     const title = text(item.title, 512)
-    return interactionID && title && (item.kind === "approval" || item.kind === "question") && typeof item.revision === "number" && Number.isSafeInteger(item.revision) && item.revision > 0
+    return interactionID &&
+      title &&
+      (item.kind === "approval" || item.kind === "question") &&
+      typeof item.revision === "number" &&
+      Number.isSafeInteger(item.revision) &&
+      item.revision > 0
       ? [{ id: interactionID, kind: item.kind as "approval" | "question", revision: item.revision, title }]
       : []
   })
@@ -438,8 +523,23 @@ export function parseSnapshot(value: unknown): OrchestratorSnapshot | undefined 
     const name = text(item.name, 256)
     const path = text(item.path, 4_096)
     const kind = text(item.kind, 64)
-    return artifactID && name && path && kind && typeof item.size === "number" && Number.isSafeInteger(item.size) && item.size >= 0
-      ? [{ id: artifactID, name, path, kind, size: item.size, ...(text(item.mime, 128) ? { mime: text(item.mime, 128) } : {}) }]
+    return artifactID &&
+      name &&
+      path &&
+      kind &&
+      typeof item.size === "number" &&
+      Number.isSafeInteger(item.size) &&
+      item.size >= 0
+      ? [
+          {
+            id: artifactID,
+            name,
+            path,
+            kind,
+            size: item.size,
+            ...(text(item.mime, 128) ? { mime: text(item.mime, 128) } : {}),
+          },
+        ]
       : []
   })
   if (pending.length !== value.pending.length || artifacts.length !== value.artifacts.length) return
@@ -453,8 +553,17 @@ export function parseAttach(value: unknown) {
 }
 
 export function parseReplay(value: unknown) {
-  if (!record(value) || value.type !== "event.replay" || !Array.isArray(value.events) || value.events.length > 100 || typeof value.hasMore !== "boolean") return
-  const events = value.events.flatMap((item) => record(item) && parseOrchestratorEvent(item)?.kind === "event" ? [item] : [])
+  if (
+    !record(value) ||
+    value.type !== "event.replay" ||
+    !Array.isArray(value.events) ||
+    value.events.length > 100 ||
+    typeof value.hasMore !== "boolean"
+  )
+    return
+  const events = value.events.flatMap((item) =>
+    record(item) && parseOrchestratorEvent(item)?.kind === "event" ? [item] : [],
+  )
   const nextCursor = text(value.nextCursor, 128)
   if (events.length !== value.events.length || value.hasMore !== Boolean(nextCursor)) return
   return { events, hasMore: value.hasMore, ...(nextCursor ? { nextCursor } : {}) }

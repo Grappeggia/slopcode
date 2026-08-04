@@ -20,7 +20,19 @@ const capabilities: Record<Exclude<AgentOrchestrationAgentID, "codex">, readonly
   antigravity: ["workspace", "sessions", "turns", "streaming", "sandboxed"],
 }
 const codex = {
-  app_server: ["workspace", "sessions", "turns", "approvals", "questions", "plans", "artifacts", "replay", "streaming", "cancel", "steer"],
+  app_server: [
+    "workspace",
+    "sessions",
+    "turns",
+    "approvals",
+    "questions",
+    "plans",
+    "artifacts",
+    "replay",
+    "streaming",
+    "cancel",
+    "steer",
+  ],
   cli: ["workspace", "sessions", "turns", "streaming"],
 } as const satisfies Record<"app_server" | "cli", readonly AgentOrchestrationCapability[]>
 
