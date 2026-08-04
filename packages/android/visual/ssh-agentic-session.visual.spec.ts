@@ -16,6 +16,11 @@ for (const theme of ["light", "dark"] as const) {
     await scroll.evaluate((node) => node.scrollTo({ top: 0, behavior: "instant" }))
     await expect(page).toHaveScreenshot(`agentic-${theme}-transcript.png`)
 
+    await page.locator('[data-agent-entry="approval"]').evaluate((node) =>
+      node.scrollIntoView({ block: "center", behavior: "instant" }),
+    )
+    await expect(page).toHaveScreenshot(`agentic-${theme}-interactions.png`)
+
     await scroll.evaluate((node) => node.scrollTo({ top: node.scrollHeight, behavior: "instant" }))
     await expect(page).toHaveScreenshot(`agentic-${theme}-review.png`)
   })

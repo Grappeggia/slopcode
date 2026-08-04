@@ -51,6 +51,7 @@ describe("SSH agentic session rendered DOM journey", () => {
       expect(html).toContain('data-streamed-entries="true"')
       expect(html).toContain('data-approval="true"')
       expect(html).toContain('data-question="true"')
+      expect(html).toContain('data-scroll-follow="true"')
       expect(html).toContain('data-review-projection="true"')
       expect(html).toContain('data-artifact-projection="true"')
       expect(html).toContain('data-completion-live="true"')

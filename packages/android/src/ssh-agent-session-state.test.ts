@@ -125,7 +125,11 @@ describe("Android agent session projection", () => {
         },
       }),
     })
-    state = reduceAgentSession(state, { type: "interaction.resolved", id: "int_approval_1" })
+    state = reduceAgentSession(state, {
+      type: "interaction.resolved",
+      id: "int_approval_1",
+      decision: "rejected",
+    })
     state = reduceAgentSession(state, {
       type: "event.received",
       value: frame(2, "interaction.question.requested", {
@@ -142,10 +146,16 @@ describe("Android agent session projection", () => {
       type: "event.received",
       value: frame(3, "turn.completed", { status: "completed", message: "Done" }),
     })
+    state = reduceAgentSession(state, {
+      type: "interaction.resolved",
+      id: "int_question_1",
+      answer: "Use TypeScript",
+    })
     state = reduceAgentSession(state, { type: "failure.added", id: "failure_1", message: "Connection lost" })
 
     expect(state.transcript.map((item) => item.type)).toEqual(["approval", "question", "completion", "failure"])
-    expect(state.transcript[0]).toMatchObject({ type: "approval", resolved: true })
+    expect(state.transcript[0]).toMatchObject({ type: "approval", resolved: true, decision: "rejected" })
+    expect(state.transcript[1]).toMatchObject({ type: "question", resolved: true, answer: "Use TypeScript" })
     expect(state.transcript[2]).toMatchObject({ type: "completion", status: "completed", message: "Done" })
   })
 
@@ -222,6 +232,22 @@ describe("Android agent session persistence", () => {
     })
     state = reduceAgentSession(state, {
       type: "event.received",
+      value: frame(5, "interaction.question.requested", {
+        interaction: {
+          id: "int_question_1",
+          revision: 1,
+          prompt: "What should the deployment use?",
+          allowFreeform: true,
+        },
+      }),
+    })
+    state = reduceAgentSession(state, {
+      type: "interaction.resolved",
+      id: "int_question_1",
+      answer: "The password is answer-secret",
+    })
+    state = reduceAgentSession(state, {
+      type: "event.received",
       value: frame(2, "turn.reasoning", {
         text: "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key-secret\n-----END OPENSSH PRIVATE KEY-----",
       }),
@@ -252,6 +278,11 @@ describe("Android agent session persistence", () => {
         },
       }),
     })
+    state = reduceAgentSession(state, {
+      type: "interaction.resolved",
+      id: "int_approval_1",
+      decision: "approved",
+    })
 
     await writeAgentSession(data.storage, workspace, state)
     const raw = data.values.get(sessionKey(workspace, "ses_android_1")) ?? ""
@@ -267,6 +298,7 @@ describe("Android agent session persistence", () => {
       "approval-secret",
       "command-secret",
       "reason-secret",
+      "answer-secret",
     ].forEach((secret) => expect(raw).not.toContain(secret))
     expect(raw).toContain("[REDACTED")
     expect(raw).not.toContain("deploy --token")
@@ -274,6 +306,14 @@ describe("Android agent session persistence", () => {
     const restored = await readAgentSession(data.storage, workspace)
     expect(restored).toMatchObject({ version: 2, sessionID: "ses_android_1" })
     expect(restored?.transcript.find((item) => item.type === "approval")).toMatchObject({ detailsOmitted: true })
+    expect(restored?.transcript.find((item) => item.type === "approval")).toMatchObject({
+      resolved: true,
+      decision: "approved",
+    })
+    expect(restored?.transcript.find((item) => item.type === "question")).toMatchObject({
+      resolved: true,
+      answer: "The password [REDACTED CREDENTIAL]",
+    })
     expect(
       normalizeAgentSession({
         ...restored,
@@ -282,6 +322,68 @@ describe("Android agent session persistence", () => {
         transcript: [{ id: "usr_safe", type: "user", text: "Safe", credential: "structural-secret" }],
       }),
     ).not.toHaveProperty("password")
+  })
+
+  test("never serializes natural-language credentials, OAuth codes, or provider tokens", async () => {
+    const data = memory()
+    const secrets = [
+      "natural-password-value",
+      "WDJB-MJHT",
+      "access-token-value-123456",
+      "refresh-token-value-123456",
+      "api-token-value-123456",
+      "authorization-code-value",
+      "login-code-value",
+      "credential-sentence-value",
+    ]
+    const lines = [
+      `The password is ${secrets[0]}`,
+      `Use device code ${secrets[1]} to sign in`,
+      `My access token is ${secrets[2]}`,
+      `The refresh token: ${secrets[3]}`,
+      `API token = ${secrets[4]}`,
+      `Authorization code is ${secrets[5]}`,
+      `Your login code is ${secrets[6]}`,
+      `Use this credential ${secrets[7]} for the account`,
+    ]
+    let state = reduceAgentSession(initialAgentSessionState("ses_android_1"), {
+      type: "draft.changed",
+      value: lines.join("\n"),
+    })
+    lines.forEach((line, index) => {
+      state = reduceAgentSession(state, {
+        type: "prompt.submitted",
+        id: `usr_secret_${index}`,
+        text: line,
+      })
+    })
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(20, "interaction.question.requested", {
+        interaction: {
+          id: "int_secret_answer",
+          revision: 1,
+          prompt: "Paste the login result",
+          allowFreeform: true,
+        },
+      }),
+    })
+    state = reduceAgentSession(state, {
+      type: "interaction.resolved",
+      id: "int_secret_answer",
+      answer: lines.join("\n"),
+    })
+
+    await writeAgentSession(data.storage, workspace, state)
+    const raw = data.values.get(sessionKey(workspace, "ses_android_1")) ?? ""
+    secrets.forEach((secret) => expect(raw).not.toContain(secret))
+    expect(raw).toContain("[REDACTED")
+    const restored = await readAgentSession(data.storage, workspace)
+    expect(restored?.transcript.find((item) => item.id === "int_secret_answer")).toMatchObject({
+      type: "question",
+      resolved: true,
+    })
+    secrets.forEach((secret) => expect(JSON.stringify(restored)).not.toContain(secret))
   })
 
   test("enforces a total UTF-8 serialized bound below the Android bridge value limit", async () => {

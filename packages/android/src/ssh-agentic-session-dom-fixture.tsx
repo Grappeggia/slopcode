@@ -301,13 +301,13 @@ async function journey() {
   await wait(
     () =>
       remote.replies.some((reply) => reply.type === "interaction.approval.reply") &&
-      document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Response sent") === true,
+      document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Approved") === true,
     "The approval response was not sent",
   )
   mark(
     "approval",
     remote.replies.some((reply) => reply.type === "interaction.approval.reply" && reply.decision === "approved") &&
-      document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Response sent") === true,
+      document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Approved") === true,
   )
 
   remote.event("interaction.question.requested", {
@@ -331,7 +331,7 @@ async function journey() {
   await wait(
     () =>
       remote.replies.some((reply) => reply.type === "interaction.question.reply") &&
-      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Response sent") === true,
+      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Use the accessible style") === true,
     "The question response was not sent",
   )
   mark(
@@ -339,8 +339,27 @@ async function journey() {
     label.textContent?.trim() === "Your answer" &&
       remote.replies.some(
         (reply) => reply.type === "interaction.question.reply" && reply.answer === "Use the accessible style",
-      ),
+      ) && document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Your answer") === true,
   )
+
+  Array.from({ length: 18 }, (_, index) => index).forEach((index) => {
+    remote.event(index % 2 ? "turn.output" : "turn.reasoning", {
+      sequence: 20 + index,
+      text: `Streaming activity ${index} ${"detail ".repeat(20)}`,
+    })
+  })
+  await wait(() => scroll.scrollHeight > scroll.clientHeight, "The transcript did not become scrollable")
+  scroll.scrollTop = 0
+  scroll.dispatchEvent(new Event("scroll"))
+  remote.event("turn.output", { sequence: 40, text: "New activity while reading history." })
+  await wait(() => !!document.querySelector("[data-agent-new-activity]"), "New activity control was not shown")
+  const beforeJump = scroll.scrollTop
+  document.querySelector<HTMLButtonElement>("[data-agent-new-activity]")?.click()
+  await wait(
+    () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 96,
+    `New activity control did not jump to the latest output (${scroll.scrollHeight}:${scroll.scrollTop}:${scroll.clientHeight})`,
+  )
+  mark("scroll-follow", beforeJump <= 96 && !document.querySelector("[data-agent-new-activity]"))
 
   remote.event("tool.updated", {
     sequence: 8,
@@ -406,9 +425,10 @@ async function journey() {
   )
   mark(
     "completion-live",
-    document.querySelector('[data-agent-entry="completion"]')?.getAttribute("role") === "status" &&
-      document.querySelector('[data-agent-entry="completion"]')?.getAttribute("aria-live") === "polite" &&
-      document.querySelector("[data-agent-status-live]")?.textContent?.includes("Complete") === true,
+    !document.querySelector('[data-agent-entry][aria-live]') &&
+      !document.querySelector('[data-agent-transcript][aria-live]') &&
+      document.querySelector("[data-agent-status-live]")?.getAttribute("role") === "status" &&
+      document.querySelector("[data-agent-status-live]")?.getAttribute("aria-live") === "polite",
   )
   await wait(
     () => [...values.values()].some((value) => value.includes('"type":"completion"')),
@@ -427,6 +447,8 @@ async function journey() {
       document.querySelectorAll("[data-agent-entry]").length === before &&
       document.querySelector<HTMLTextAreaElement>("[data-agent-prompt]")?.disabled === true &&
       document.querySelector('[data-review-tab="screenshots"]')?.getAttribute("aria-selected") === "true" &&
+      document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Approved") === true &&
+      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Use the accessible style") === true &&
       !document.querySelector("[data-ssh-active-session]"),
   )
   mark("fixture-complete", true)

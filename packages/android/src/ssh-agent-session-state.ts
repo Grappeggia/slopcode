@@ -20,6 +20,8 @@ export type AgentSessionEntry =
       type: "approval" | "question"
       interaction: OrchestratorInteraction
       resolved: boolean
+      decision?: "approved" | "rejected"
+      answer?: string
       detailsOmitted?: boolean
     }
   | { id: string; type: "completion"; status: "completed" | "failed" | "stopped"; message?: string }
@@ -39,7 +41,12 @@ export type AgentSessionAction =
   | { type: "review.selected"; value: ReviewTab }
   | { type: "prompt.submitted"; id: string; text: string }
   | { type: "event.received"; value: Record<string, unknown> }
-  | { type: "interaction.resolved"; id: string }
+  | {
+      type: "interaction.resolved"
+      id: string
+      decision?: "approved" | "rejected"
+      answer?: string
+    }
   | { type: "failure.added"; id: string; message: string }
 
 type Storage = {
@@ -89,7 +96,12 @@ export function redactAgentSessionText(value: string) {
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED TOKEN]")
     .replace(/https?:\/\/[^\s/:@]+:[^\s/@]+@/gi, "https://[REDACTED]@")
     .replace(
-      /(\b(?:password|passwd|pwd|passphrase|api[_.-]?key|access[_.-]?token|auth(?:orization)?|secret|client[_.-]?secret|credential|cookie|token)\b\s*(?:=|:|\s+)\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;&|}\]]+)/gi,
+      /(\b(?:(?:my|the|your|our|this)\s+)?(?:password|passwd|pwd|passphrase|api[_. -]?(?:key|token)|access[_. -]?token|refresh[_. -]?token|auth(?:entication|orization)?[_. -]?(?:code|token)|device[_. -]?code|verification[_. -]?code|login[_. -]?code|one[_. -]?time[_. -]?code|otp|client[_. -]?secret|secret|credential|cookie)\b)\s*(?:(?:is|was|equals?)\s+|(?:=|:)\s*|\s+)[^\r\n]+/gi,
+      "$1 [REDACTED CREDENTIAL]",
+    )
+    .replace(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,3}\b/g, "[REDACTED DEVICE CODE]")
+    .replace(
+      /(\b(?:password|passwd|pwd|passphrase|api[_.-]?(?:key|token)|access[_.-]?token|refresh[_.-]?token|auth(?:entication|orization)?(?:[_.-]?(?:code|token))?|device[_.-]?code|verification[_.-]?code|login[_.-]?code|one[_.-]?time[_.-]?code|otp|secret|client[_.-]?secret|credential|cookie|token)\b\s*(?:=|:|\s+)\s*)(?!\[REDACTED\b)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;&|}]+)/gi,
       "$1[REDACTED]",
     )
 }
@@ -187,12 +199,17 @@ function persistedEntry(value: unknown): AgentSessionEntry | undefined {
   }
   if (type === "approval" || type === "question") {
     const next = interaction(value.interaction, type)
+    const resolved = value.resolved === true
+    const decision = type === "approval" && resolved ? oneOf(value.decision, ["approved", "rejected"]) : undefined
+    const answer = type === "question" && resolved ? safe(value.answer, 4 * 1024) : undefined
     return next
       ? {
           id: entryID,
           type,
           interaction: next,
-          resolved: value.resolved === true,
+          resolved,
+          ...(decision ? { decision: decision as "approved" | "rejected" } : {}),
+          ...(answer ? { answer } : {}),
           ...((record(value.interaction) && typeof value.interaction.command === "string") || value.detailsOmitted === true
             ? { detailsOmitted: true }
             : {}),
@@ -271,7 +288,11 @@ export function reduceAgentSession(state: AgentSessionState, action: AgentSessio
       ...state,
       transcript: state.transcript.map((item) =>
         (item.type === "approval" || item.type === "question") && item.id === action.id
-          ? { ...item, resolved: true }
+          ? item.type === "approval" && (action.decision === "approved" || action.decision === "rejected")
+            ? { ...item, resolved: true, decision: action.decision }
+            : item.type === "question" && safe(action.answer, 4 * 1024)
+              ? { ...item, resolved: true, answer: safe(action.answer, 4 * 1024) }
+              : item
           : item,
       ),
     }
