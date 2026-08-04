@@ -612,6 +612,16 @@ class AndroidBridge(
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid Codex App Server request")
           sshAsync(id, replyProxy) { ssh.codexAppServerStatus(raw) }
         }
+        "sshOrchestratorPreflight" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_ORCHESTRATOR_REQUEST_BYTES) ?: error("Invalid SSH orchestrator preflight request")
+          sshAsync(id, replyProxy) { ssh.orchestratorPreflight(raw) }
+        }
+        "sshOrchestratorInstall" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_ORCHESTRATOR_REQUEST_BYTES) ?: error("Invalid SSH orchestrator setup request")
+          sshAsync(id, replyProxy) { ssh.orchestratorInstall(raw) }
+        }
         "sshStart" -> {
           arity(args, 1)
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH session request")
@@ -843,6 +853,7 @@ class AndroidBridge(
     private const val MAX_NAMESPACE_BYTES = 128
     private const val MAX_KEY_BYTES = 256
     private const val MAX_VALUE_BYTES = 192 * 1024
+    private const val MAX_ORCHESTRATOR_REQUEST_BYTES = 8 * 1024
     private const val MAX_PROFILE_BYTES = 320
     private const val MAX_SECRET_BYTES = 16 * 1024
     private const val MAX_PRIVATE_KEY_BYTES = 128 * 1024

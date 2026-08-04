@@ -125,6 +125,23 @@ export type SshOrchestratorStart = {
   status: "started"
 }
 
+export type SshOrchestratorPreflight = {
+  executable: "slopcode"
+  version?: string
+  ok: boolean
+  exitCode: number
+  error?: { code: string; message: string }
+}
+
+export type SshOrchestratorInstall = {
+  executable: "slopcode"
+  package: "slopcode@latest"
+  operation: "install_or_upgrade"
+  ok: boolean
+  exitCode: number
+  error?: { code: string; message: string }
+}
+
 export type SshOrchestratorEvent =
   | { type: "started"; id: string }
   | { type: "output"; id: string; data: string }
@@ -162,6 +179,8 @@ export type SshTransport = {
     height?: number
   }): Promise<SshSessionStart>
   orchestratorStart(directory: string): Promise<SshOrchestratorStart>
+  orchestratorPreflight?(directory: string): Promise<SshOrchestratorPreflight>
+  orchestratorInstall?(directory: string): Promise<SshOrchestratorInstall>
   orchestratorInput(value: string): Promise<unknown>
   orchestratorStop(): Promise<unknown>
   input(value: string): Promise<unknown>
@@ -383,6 +402,25 @@ export function parseSshPreflight(value: unknown): SshPreflight | undefined {
     ok: value.ok,
     ...(typeof value.error === "string" ? { error: value.error } : {}),
   }
+}
+
+function orchestratorError(value: unknown) {
+  if (!object(value) || typeof value.code !== "string" || typeof value.message !== "string") return
+  return { code: value.code, message: value.message }
+}
+
+export function parseSshOrchestratorPreflight(value: unknown): SshOrchestratorPreflight | undefined {
+  if (!object(value) || value.executable !== "slopcode" || typeof value.ok !== "boolean" || typeof value.exitCode !== "number") return
+  const error = value.error === null || value.error === undefined ? undefined : orchestratorError(value.error)
+  if (!value.ok && !error) return
+  return { executable: "slopcode", ok: value.ok, exitCode: value.exitCode, ...(typeof value.version === "string" ? { version: value.version } : {}), ...(error ? { error } : {}) }
+}
+
+export function parseSshOrchestratorInstall(value: unknown): SshOrchestratorInstall | undefined {
+  if (!object(value) || value.executable !== "slopcode" || value.package !== "slopcode@latest" || value.operation !== "install_or_upgrade" || typeof value.ok !== "boolean" || typeof value.exitCode !== "number") return
+  const error = value.error === null || value.error === undefined ? undefined : orchestratorError(value.error)
+  if (!value.ok && !error) return
+  return { executable: "slopcode", package: "slopcode@latest", operation: "install_or_upgrade", ok: value.ok, exitCode: value.exitCode, ...(error ? { error } : {}) }
 }
 
 export function parseSshAuthStatus(value: unknown): SshAuthStatus | undefined {

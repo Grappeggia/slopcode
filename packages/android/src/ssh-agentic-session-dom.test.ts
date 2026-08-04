@@ -55,7 +55,8 @@ describe("SSH agentic session rendered DOM journey", () => {
       expect(html).toContain('data-review-projection="true"')
       expect(html).toContain('data-artifact-projection="true"')
       expect(html).toContain('data-completion-live="true"')
-      expect(html).toContain('data-detached-restore="true"')
+      expect(html).toContain('data-attached-restore="true"')
+      expect(html).toContain('data-new-session="true"')
       expect(html).toContain('data-fixture-complete="true"')
     } finally {
       server.kill()

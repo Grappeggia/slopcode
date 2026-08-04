@@ -13,20 +13,16 @@ const commands: Record<AgentOrchestrationAgentID, readonly string[]> = {
   claude: ["claude", "--version"],
   antigravity: ["agy", "--version"],
 }
-const modes: Record<AgentOrchestrationAgentID, AgentOrchestrationBackendMode> = {
-  slopcode: "acp",
-  opencode: "acp",
-  codex: "app_server",
-  claude: "streaming_cli",
-  antigravity: "sandboxed_cli",
-}
-const capabilities: Record<AgentOrchestrationAgentID, readonly AgentOrchestrationCapability[]> = {
-  slopcode: ["workspace", "sessions", "turns", "approvals", "questions", "replay", "streaming"],
-  opencode: ["workspace", "sessions", "turns", "approvals", "questions", "replay", "streaming"],
-  codex: ["workspace", "sessions", "turns", "approvals", "questions", "plans", "artifacts", "replay", "streaming"],
+const capabilities: Record<Exclude<AgentOrchestrationAgentID, "codex">, readonly AgentOrchestrationCapability[]> = {
+  slopcode: ["workspace", "sessions", "turns", "approvals", "questions", "streaming"],
+  opencode: ["workspace", "sessions", "turns", "approvals", "questions", "streaming"],
   claude: ["workspace", "sessions", "turns", "approvals", "streaming", "permissions"],
   antigravity: ["workspace", "sessions", "turns", "streaming", "sandboxed"],
 }
+const codex = {
+  app_server: ["workspace", "sessions", "turns", "approvals", "questions", "plans", "artifacts", "replay", "streaming", "cancel", "steer"],
+  cli: ["workspace", "sessions", "turns", "streaming"],
+} as const satisfies Record<"app_server" | "cli", readonly AgentOrchestrationCapability[]>
 
 export type Result = {
   version: string
@@ -41,21 +37,57 @@ const clean = (value: string) =>
     .trim()
     .slice(0, 256) || "unknown"
 
-export const probe: Probe = async (agent, cwd) => {
+export type Execute = (
+  argv: readonly string[],
+  cwd: string,
+) => Promise<{ code: number; stdout: string; stderr: string }>
+
+const run: Execute = async (argv, cwd) => {
   let child: ReturnType<typeof Bun.spawn>
   try {
-    child = Bun.spawn([...commands[agent]], { cwd, stdout: "pipe", stderr: "pipe" })
+    child = Bun.spawn([...argv], { cwd, stdout: "pipe", stderr: "pipe" })
   } catch (error) {
-    throw new Error(`${agent} executable is unavailable: ${error instanceof Error ? error.message : "spawn failed"}`)
+    return { code: -1, stdout: "", stderr: error instanceof Error ? error.message : "spawn failed" }
   }
   const timer = setTimeout(() => child.kill(), 5_000)
-  if (!child.stdout || typeof child.stdout === "number" || !child.stderr || typeof child.stderr === "number")
-    throw new Error(`${agent} version check did not provide output streams`)
+  if (!child.stdout || typeof child.stdout === "number" || !child.stderr || typeof child.stderr === "number") {
+    child.kill()
+    clearTimeout(timer)
+    return { code: -1, stdout: "", stderr: "version check did not provide output streams" }
+  }
   const [code, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]).finally(() => clearTimeout(timer))
-  if (code !== 0) throw new Error(clean(stderr) || `${agent} version check failed`)
-  return { version: clean(stdout || stderr), mode: modes[agent], capabilities: capabilities[agent] }
+  return { code, stdout, stderr }
 }
+
+export const inspect = async (
+  agent: AgentOrchestrationAgentID,
+  cwd: string,
+  execute: Execute = run,
+): Promise<Result> => {
+  const version = await execute(commands[agent], cwd)
+  if (version.code !== 0) throw new Error(clean(version.stderr) || `${agent} version check failed`)
+  if (agent === "codex") {
+    const app = await execute(["codex", "app-server", "--help"], cwd)
+    if (app.code === 0)
+      return { version: clean(version.stdout || version.stderr), mode: "app_server", capabilities: codex.app_server }
+    const cli = await execute(["codex", "exec", "--help"], cwd)
+    if (cli.code !== 0) throw new Error(clean(cli.stderr) || "codex exec is unavailable")
+    return { version: clean(version.stdout || version.stderr), mode: "cli", capabilities: codex.cli }
+  }
+  if (agent === "slopcode" || agent === "opencode") {
+    const acp = await execute([agent, "acp", "--help"], cwd)
+    if (acp.code !== 0) throw new Error(clean(acp.stderr) || `${agent} ACP mode is unavailable`)
+    return { version: clean(version.stdout || version.stderr), mode: "acp", capabilities: capabilities[agent] }
+  }
+  return {
+    version: clean(version.stdout || version.stderr),
+    mode: agent === "antigravity" ? "sandboxed_cli" : "streaming_cli",
+    capabilities: capabilities[agent],
+  }
+}
+
+export const probe: Probe = (agent, cwd) => inspect(agent, cwd)

@@ -86,6 +86,27 @@ describe("android bridge parsing helpers", () => {
     expect(calls).toContainEqual({ method: "sshSelectWorkspace", args: ["/srv/project-link"] })
   })
 
+  test("exposes strict native orchestrator prerequisite RPCs", async () => {
+    const calls: Array<{ method: string; args?: unknown[] }> = []
+    const bridge = getAndroidBridge({
+      SlopcodeAndroid: port((request) => {
+        calls.push({ method: request.method, args: request.args })
+        if (request.method === "sshOrchestratorPreflight")
+          return { executable: "slopcode", version: "1.2.3", ok: true, exitCode: 0, error: null }
+        if (request.method === "sshOrchestratorInstall")
+          return { executable: "slopcode", package: "slopcode@latest", operation: "install_or_upgrade", ok: true, exitCode: 0, error: null }
+        return true
+      }),
+    })
+    const ssh = sshTransportBridge(bridge)!
+    await expect(ssh.orchestratorPreflight!("/home/marcos/temp")).resolves.toMatchObject({ ok: true, version: "1.2.3" })
+    await expect(ssh.orchestratorInstall!("/home/marcos/temp")).resolves.toMatchObject({ ok: true, package: "slopcode@latest" })
+    expect(calls.filter((item) => item.method.startsWith("sshOrchestrator"))).toEqual([
+      { method: "sshOrchestratorPreflight", args: ['{"directory":"/home/marcos/temp"}'] },
+      { method: "sshOrchestratorInstall", args: ['{"directory":"/home/marcos/temp"}'] },
+    ])
+  })
+
   test("reads string arrays safely", () => {
     expect(parseStringArray('["one","two",3]')).toEqual(["one", "two"])
     expect(parseStringArray(["one", "two", 3])).toEqual(["one", "two"])

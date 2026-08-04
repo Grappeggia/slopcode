@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-const url = "http://127.0.0.1:41743/ssh-agentic-session-dom-fixture.html"
+const url = "http://127.0.0.1:41743/ssh-agentic-session-dom-fixture.html?visual=1"
 
 for (const theme of ["light", "dark"] as const) {
   test(`${theme} agentic transcript and review remain visually stable`, async ({ page }) => {

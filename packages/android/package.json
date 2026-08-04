@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "bun test src && bun run test:visual",
+    "test": "bun test ./src && bun run test:visual",
     "test:visual": "playwright test --config=playwright.config.ts",
     "build:web": "vite build",
     "build:android": "./gradlew :app:assembleDebug",

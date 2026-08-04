@@ -380,28 +380,36 @@ describe("HttpApi SDK", () => {
   )
 
   httpapi(
-    "routes configured SDK directory and workspace for v2 location GETs",
-    withProject("raw", { setup: writeStandardFiles }, ({ directory }) =>
-      Effect.gen(function* () {
-        const workspaceID = "wrk_sdk"
-        let request: Request | undefined
-        const sdk = yield* client("raw", directory, {
-          workspaceID,
-          onRequest: (value) => (request = value),
-        })
-        const found = yield* call(() => sdk.v2.fs.find({ query: "hello", type: "file" }))
-        const url = new URL(request!.url)
+    "serializes configured SDK directory and workspace for v2 location GETs",
+    Effect.gen(function* () {
+      const directory = "/tmp/sdk-location"
+      const workspaceID = "wrk_sdk"
+      let request: Request | undefined
+      const fetch = Object.assign(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          request = input instanceof Request ? input : new Request(input, init)
+          return Response.json({ data: [{ path: "hello.txt", type: "file", mime: "text/plain" }] })
+        },
+        { preconnect: globalThis.fetch.preconnect },
+      ) satisfies typeof globalThis.fetch
+      const sdk = createSlopcodeClient({
+        baseUrl: "http://localhost",
+        directory,
+        experimental_workspaceID: workspaceID,
+        fetch,
+      })
+      const found = yield* call(() => sdk.v2.fs.find({ query: "hello", type: "file" }))
+      const url = new URL(request!.url)
 
-        expect(found.response.status).toBe(200)
-        expect(found.data).toMatchObject({ data: [{ path: "hello.txt", type: "file" }] })
-        expect(url.searchParams.get("directory")).toBe(directory)
-        expect(url.searchParams.get("workspace")).toBe(workspaceID)
-        expect(url.searchParams.get("location[directory]")).toBe(directory)
-        expect(url.searchParams.get("location[workspace]")).toBe(workspaceID)
-        expect(request!.headers.has("x-slopcode-directory")).toBe(false)
-        expect(request!.headers.has("x-slopcode-workspace")).toBe(false)
-      }),
-    ),
+      expect(found.response.status).toBe(200)
+      expect(found.data).toMatchObject({ data: [{ path: "hello.txt", type: "file" }] })
+      expect(url.searchParams.get("directory")).toBe(directory)
+      expect(url.searchParams.get("workspace")).toBe(workspaceID)
+      expect(url.searchParams.get("location[directory]")).toBe(directory)
+      expect(url.searchParams.get("location[workspace]")).toBe(workspaceID)
+      expect(request!.headers.has("x-slopcode-directory")).toBe(false)
+      expect(request!.headers.has("x-slopcode-workspace")).toBe(false)
+    }),
   )
 
   serverPathParity("matches generated SDK global and control behavior", (serverPath) =>

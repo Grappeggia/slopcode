@@ -11,5 +11,7 @@ process.stdin.on("end", () => {
   process.stdout.write(
     `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `${agent}:${prompt ?? input.trim()}` }] } })}\n`,
   )
+  if (agent === "claude")
+    process.stdout.write(`${JSON.stringify({ type: "result", result: `${agent}:${prompt ?? input.trim()}` })}\n`)
   process.stdout.write(`${JSON.stringify({ type: "turn.completed" })}\n`)
 })

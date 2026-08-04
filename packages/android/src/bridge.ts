@@ -21,6 +21,8 @@ import {
   parseSshPreflight,
   parseSshUpdateCheck,
   parseSshOrchestratorEventMessage,
+  parseSshOrchestratorInstall,
+  parseSshOrchestratorPreflight,
   parseSshOrchestratorStart,
   parseSshWorkspaceSelection,
   parseSshStart,
@@ -110,6 +112,8 @@ export type AndroidNativeBridge = {
   sshCodexAppServerStatus?(input: string): Promise<unknown>
   sshStart?(input: string): Promise<unknown>
   sshOrchestratorStart?(input: string): Promise<unknown>
+  sshOrchestratorPreflight?(input: string): Promise<unknown>
+  sshOrchestratorInstall?(input: string): Promise<unknown>
   sshOrchestratorInput?(value: string): Promise<unknown>
   sshOrchestratorStop?(): Promise<unknown>
   sshInput?(value: string): Promise<unknown>
@@ -212,6 +216,8 @@ export function getAndroidBridge(
     sshCodexAppServerStatus: (input) => call("sshCodexAppServerStatus", input),
     sshStart: (input) => call("sshStart", input),
     sshOrchestratorStart: (input) => call("sshOrchestratorStart", input),
+    sshOrchestratorPreflight: (input) => call("sshOrchestratorPreflight", input),
+    sshOrchestratorInstall: (input) => call("sshOrchestratorInstall", input),
     sshOrchestratorInput: (value) => call("sshOrchestratorInput", value),
     sshOrchestratorStop: () => call("sshOrchestratorStop"),
     sshInput: (value) => call("sshInput", value),
@@ -349,6 +355,22 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
         bridge.sshOrchestratorStart(JSON.stringify({ directory })),
         parseSshOrchestratorStart,
         "Android returned an invalid SSH orchestrator result.",
+      )
+    },
+    orchestratorPreflight: (directory) => {
+      if (!bridge.sshOrchestratorPreflight) return Promise.reject(new Error("Native SSH orchestration preflight is unavailable."))
+      return result(
+        bridge.sshOrchestratorPreflight(JSON.stringify({ directory })),
+        parseSshOrchestratorPreflight,
+        "Android returned an invalid SSH orchestrator preflight result.",
+      )
+    },
+    orchestratorInstall: (directory) => {
+      if (!bridge.sshOrchestratorInstall) return Promise.reject(new Error("Native SSH orchestration setup is unavailable."))
+      return result(
+        bridge.sshOrchestratorInstall(JSON.stringify({ directory })),
+        parseSshOrchestratorInstall,
+        "Android returned an invalid SSH orchestrator setup result.",
       )
     },
     orchestratorInput: (value) => {

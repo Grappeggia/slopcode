@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { lstat, mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises"
+import { constants } from "node:fs"
+import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises"
 import path from "node:path"
 import { Schema, SchemaParser } from "effect"
 import {
@@ -120,25 +121,56 @@ const checked = async (value: string, kind: "directory" | "file") => {
     throw new StateError("path_forbidden", `orchestrator state ${kind} is not a regular ${kind}`)
   return true
 }
+type Identity = { dev: number | bigint; ino: number | bigint }
+const identity = async (value: string): Promise<Identity> => {
+  const info = await lstat(value)
+  if (info.isSymbolicLink() || !info.isDirectory())
+    throw new StateError("path_forbidden", "orchestrator state directory is not a regular directory")
+  if ((await realpath(value)) !== value)
+    throw new StateError("path_forbidden", "orchestrator state directory is not canonical")
+  return { dev: info.dev, ino: info.ino }
+}
+const stable = async (value: string, expected: Identity) => {
+  const actual = await identity(value)
+  if (actual.dev !== expected.dev || actual.ino !== expected.ino)
+    throw new StateError("path_forbidden", "orchestrator state directory changed during access")
+}
 const directory = async (workspace: string) => {
   const base = path.join(workspace, ".slopcode")
   if (!(await checked(base, "directory"))) await mkdir(base, { mode: 0o700 })
+  await identity(base)
   const dir = path.join(base, "remote-orchestrator")
   if (!(await checked(dir, "directory"))) await mkdir(dir, { mode: 0o700 })
+  await identity(dir)
   return dir
 }
-const json = (state: State) => `${JSON.stringify(state)}\n`
+const json = (state: State) => {
+  try {
+    return `${JSON.stringify(decode(JSON.parse(JSON.stringify(state))))}\n`
+  } catch {
+    throw new StateError("corrupt", "orchestrator state mutation is invalid")
+  }
+}
 const inside = (base: string, value: string) => {
   const relative = path.relative(base, value)
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
 }
 const safe = async (base: string, value: string) => {
   if (!inside(base, value)) return false
-  const resolved = await realpath(value).catch((error: unknown) => {
-    if (missing(error)) return undefined
-    throw error
-  })
-  return !resolved || inside(base, resolved)
+  const relative = path.relative(base, value)
+  const segments = relative ? relative.split(path.sep) : []
+  let current = base
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment)
+    const info = await lstat(current).catch((error: unknown) => {
+      if (missing(error)) return undefined
+      throw error
+    })
+    if (!info) return true
+    if (info.isSymbolicLink()) return false
+    if (index < segments.length - 1 && !info.isDirectory()) return false
+  }
+  return true
 }
 
 const write = async (workspace: string, state: State) => {
@@ -146,13 +178,14 @@ const write = async (workspace: string, state: State) => {
   if (Buffer.byteLength(value) > limits.bytes)
     throw new StateError("too_large", "orchestrator state journal is too large")
   const dir = await directory(workspace)
+  const owner = await identity(dir)
   const target = path.join(dir, "v1.json")
   if (await checked(target, "file")) {
     const info = await lstat(target)
     if (info.size > limits.bytes) throw new StateError("too_large", "orchestrator state journal is too large")
   }
   const temp = path.join(dir, `.v1-${randomUUID()}.tmp`)
-  const file = await open(temp, "wx", 0o600)
+  const file = await open(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600)
   const saved = file.writeFile(value).then(() => file.sync())
   await saved
     .finally(() => file.close())
@@ -160,22 +193,52 @@ const write = async (workspace: string, state: State) => {
       await rm(temp, { force: true })
       throw error
     })
+  await stable(dir, owner).catch(async (error: unknown) => {
+    await rm(temp, { force: true })
+    throw error
+  })
+  if (!inside(dir, await realpath(temp))) {
+    await rm(temp, { force: true })
+    throw new StateError("path_forbidden", "orchestrator temporary journal escaped its state directory")
+  }
   await rename(temp, target).catch(async (error: unknown) => {
     await rm(temp, { force: true })
     throw error
   })
+  await stable(dir, owner)
   const folder = await open(dir, "r")
   await folder.sync().finally(() => folder.close())
 }
 
 const read = async (workspace: AgentOrchestrationWorkspace): Promise<State> => {
   const dir = await directory(workspace.path)
+  const owner = await identity(dir)
   const target = path.join(dir, "v1.json")
   if (!(await checked(target, "file")))
     return { version: 1, workspace, cursor: 0, sessions: [], events: [], requests: [] } as State
-  const info = await lstat(target)
-  if (info.size > limits.bytes) throw new StateError("too_large", "orchestrator state journal is too large")
-  const value = await readFile(target, "utf8")
+  const file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW).catch((error: unknown) => {
+    if (error && typeof error === "object" && "code" in error && error.code === "ELOOP")
+      throw new StateError("path_forbidden", "orchestrator state journal became a symlink")
+    throw error
+  })
+  await stable(dir, owner).catch(async (error: unknown) => {
+    await file.close()
+    throw error
+  })
+  if (!inside(dir, await realpath(target))) {
+    await file.close()
+    throw new StateError("path_forbidden", "orchestrator state journal escaped its state directory")
+  }
+  const info = await file.stat()
+  if (!info.isFile()) {
+    await file.close()
+    throw new StateError("path_forbidden", "orchestrator state journal is not a regular file")
+  }
+  if (info.size > limits.bytes) {
+    await file.close()
+    throw new StateError("too_large", "orchestrator state journal is too large")
+  }
+  const value = await file.readFile("utf8").finally(() => file.close())
   let input: unknown
   try {
     input = JSON.parse(value)

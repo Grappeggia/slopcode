@@ -31,6 +31,7 @@ type Turn = {
 const record = (value: unknown): value is RecordValue =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 const bytes = (value: string) => Buffer.byteLength(value)
+const MAX_APP_SERVER_FRAME_BYTES = 4 * 1024 * 1024
 const clean = (value: unknown, size = AgentOrchestrationLimits.maxTextBytes, fallback = "") => {
   if (typeof value !== "string") return fallback
   const normalized = value
@@ -43,6 +44,18 @@ const clean = (value: unknown, size = AgentOrchestrationLimits.maxTextBytes, fal
     "",
   )
   return output || fallback
+}
+const delta = (value: unknown) => {
+  if (typeof value !== "string") return ""
+  const normalized = value
+    .replace(/\u0000/g, "")
+    .replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\r\n?/g, "\n")
+  return [...normalized].reduce(
+    (result, character) =>
+      bytes(result) + bytes(character) <= AgentOrchestrationLimits.maxTextBytes ? result + character : result,
+    "",
+  )
 }
 const object = (value: unknown) => (record(value) ? value : {})
 const id = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value) : "")
@@ -367,13 +380,15 @@ export async function connect(input: {
     if (method === "item/agentMessage/delta") {
       const nativeID = clean(params.itemId, 512, "codex-message")
       deltas.add(nativeID)
-      emit({ type: "output", text: clean(params.delta), nativeID })
+      const text = delta(params.delta)
+      if (text) emit({ type: "output", text, nativeID })
       return
     }
     if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
       const nativeID = clean(params.itemId, 512, "codex-reasoning")
       deltas.add(nativeID)
-      emit({ type: "reasoning", text: clean(params.delta), nativeID })
+      const text = delta(params.delta)
+      if (text) emit({ type: "reasoning", text, nativeID })
       return
     }
     if (method === "item/started" || method === "item/completed") {
@@ -438,12 +453,22 @@ export async function connect(input: {
     while (true) {
       const index = buffer.indexOf(10)
       if (index < 0) {
-        if (buffer.byteLength > AgentOrchestrationLimits.maxTextBytes) buffer = Buffer.alloc(0)
+        if (buffer.byteLength <= MAX_APP_SERVER_FRAME_BYTES) return
+        const error = new Error("Codex App Server sent an oversized protocol frame")
+        buffer = Buffer.alloc(0)
+        fail(error)
+        child.kill("SIGTERM")
         return
       }
       const line = buffer.subarray(0, index).toString("utf8").replace(/\r$/, "")
       buffer = buffer.subarray(index + 1)
-      if (!line || Buffer.byteLength(line) > AgentOrchestrationLimits.maxTextBytes) continue
+      if (!line) continue
+      if (Buffer.byteLength(line) > MAX_APP_SERVER_FRAME_BYTES) {
+        const error = new Error("Codex App Server sent an oversized protocol frame")
+        fail(error)
+        child.kill("SIGTERM")
+        return
+      }
       try {
         receive(JSON.parse(line))
       } catch {
@@ -496,6 +521,8 @@ export async function connect(input: {
     "artifacts",
     "replay",
     "streaming",
+    "cancel",
+    "steer",
   ]
   return {
     nativeID,
@@ -524,6 +551,24 @@ export async function connect(input: {
         )
         turns.set(nativeTurn, { resolve, reject, timer })
       })
+    },
+    async cancel() {
+      const turn = [...turns.keys()][0]
+      if (!turn) return false
+      await request("turn/interrupt", { threadId: nativeID, turnId: turn })
+      return true
+    },
+    async steer(_turnID, instruction) {
+      const turn = [...turns.keys()][0]
+      if (!turn) return false
+      const result = object(
+        await request("turn/steer", {
+          threadId: nativeID,
+          expectedTurnId: turn,
+          input: [{ type: "text", text: instruction, text_elements: [] }],
+        }),
+      )
+      return result.turnId === turn
     },
     approval(nativeID, approved) {
       const handler = approvals.get(nativeID)

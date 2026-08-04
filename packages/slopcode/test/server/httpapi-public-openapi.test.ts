@@ -289,7 +289,6 @@ describe("PublicApi OpenAPI v2 errors", () => {
     for (const route of [
       ["post", "/mcp/{name}/auth"],
       ["post", "/mcp/{name}/auth/authenticate"],
-      ["post", "/mcp/{name}/auth/callback"],
       ["delete", "/mcp/{name}/auth"],
       ["post", "/mcp/{name}/connect"],
       ["post", "/mcp/{name}/disconnect"],

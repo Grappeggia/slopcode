@@ -3,9 +3,12 @@ import path from "node:path"
 import { Readable, Writable } from "node:stream"
 
 class Fixture {
+  private fs = false
+
   constructor(private readonly connection: AgentSideConnection) {}
 
-  async initialize() {
+  async initialize(params: { clientCapabilities?: { fs?: { readTextFile?: boolean; writeTextFile?: boolean } } }) {
+    this.fs = params.clientCapabilities?.fs?.readTextFile === true && params.clientCapabilities.fs.writeTextFile === true
     return { protocolVersion: PROTOCOL_VERSION, agentCapabilities: { loadSession: true } }
   }
 
@@ -15,6 +18,21 @@ class Fixture {
 
   async prompt(params: { sessionId: string }) {
     await Bun.write(path.join(process.cwd(), "fixture.ts"), "fixture")
+    if (process.env.ACP_FILE_IO) {
+      if (!this.fs) throw new Error("fixture client did not advertise ACP file support")
+      await this.connection.writeTextFile({
+        sessionId: params.sessionId,
+        path: path.join(process.cwd(), "client-write.ts"),
+        content: "line one\nline two\nline three",
+      })
+      const read = await this.connection.readTextFile({
+        sessionId: params.sessionId,
+        path: path.join(process.cwd(), "client-write.ts"),
+        line: 2,
+        limit: 1,
+      })
+      if (read.content !== "line two") throw new Error("fixture ACP file read did not round-trip")
+    }
     await this.connection.sessionUpdate({
       sessionId: params.sessionId,
       update: {

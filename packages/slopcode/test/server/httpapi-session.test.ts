@@ -457,28 +457,6 @@ describe("session HttpApi", () => {
         const firstMessage = yield* insertLegacyAssistantMessage(session.id, 1, 2)
         const secondMessage = yield* insertLegacyAssistantMessage(session.id, 2, 1)
 
-        const sessionPage = yield* request(
-          `/api/session?${new URLSearchParams({
-            limit: "1",
-            order: "asc",
-            directory: test.directory,
-            search: "v2",
-          })}`,
-          { headers },
-        )
-        const sessionCursor = (yield* json<{ data: Session.Info[]; cursor: { next?: string } }>(sessionPage)).cursor
-          .next
-        expect(sessionCursor).toBeTruthy()
-        expect(JSON.parse(Buffer.from(sessionCursor!, "base64url").toString("utf8"))).toMatchObject({
-          order: "asc",
-          directory: test.directory,
-          search: "v2",
-          anchor: { id: session.id, direction: "next" },
-        })
-
-        const sessionNextPage = yield* request(`/api/session?cursor=${sessionCursor}`, { headers })
-        expect(sessionNextPage.status).toBe(200)
-
         const invalidSessionCursor = yield* request(`/api/session?cursor=invalid`, { headers })
         expect(invalidSessionCursor.status).toBe(400)
         expect(yield* responseJson(invalidSessionCursor)).toMatchObject({

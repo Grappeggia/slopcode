@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from "node:child_process"
+import path from "node:path"
 import { Readable, Writable } from "node:stream"
 import {
   ClientSideConnection,
@@ -15,7 +16,7 @@ import {
   type AgentOrchestrationBackendMode,
   type AgentOrchestrationCapability,
 } from "@slopcode-ai/protocol"
-import { approvalCwd, contained } from "./workspace"
+import { approvalCwd, contained, readText, writeText } from "./workspace"
 import { connect as connectCli, type Launch as CliLaunch } from "./cli"
 import { connect as connectCodex, type Launch as CodexLaunch } from "./codex-app-server"
 
@@ -157,12 +158,15 @@ export async function connect(input: {
   codexStart?: CodexLaunch
   cliStart?: CliLaunch
   resume?: string
+  mode?: AgentOrchestrationBackendMode
 }): Promise<Session> {
   if (input.agent === "codex") {
+    if (input.mode === "cli")
+      return connectCli({ agent: input.agent, cwd: input.cwd, emit: input.emit, start: input.cliStart })
     try {
       return await connectCodex({ cwd: input.cwd, emit: input.emit, start: input.codexStart, resume: input.resume })
     } catch (error) {
-      if (input.resume) throw error
+      if (input.resume || input.mode === "app_server") throw error
       process.stderr.write(
         `[remote-orchestrator/codex] App Server unavailable; using CLI fallback: ${safe(error instanceof Error ? error.message : "startup failed", 512, "startup failed")}\n`,
       )
@@ -275,6 +279,16 @@ export async function connect(input: {
       emit({ type: "unsupported", feature: text(update.sessionUpdate, 256, "ACP update") })
       return Promise.resolve()
     },
+    async readTextFile(params) {
+      if (params.sessionId !== nativeID) throw new Error("ACP file read belongs to another session")
+      return { content: await readText(input.cwd, params.path, params.line ?? 1, params.limit ?? undefined) }
+    },
+    async writeTextFile(params) {
+      if (params.sessionId !== nativeID) throw new Error("ACP file write belongs to another session")
+      const value = await writeText(input.cwd, params.path, params.content)
+      await artifact({ type: "artifact", id: `write:${value}`, path: value, name: path.basename(value), kind: "file" })
+      return {}
+    },
     requestPermission(params: RequestPermissionRequest) {
       return new Promise((resolve) => {
         const id = params.toolCall.toolCallId
@@ -348,7 +362,10 @@ export async function connect(input: {
   try {
     initialized = await connection.initialize({
       protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: { elicitation: { form: {} } },
+      clientCapabilities: {
+        elicitation: { form: {} },
+        fs: { readTextFile: true, writeTextFile: true },
+      },
       clientInfo: { name: "slopcode-remote-orchestrator", version: "v1" },
     })
     const created = await (async () => {

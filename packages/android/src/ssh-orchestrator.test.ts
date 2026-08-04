@@ -2,6 +2,15 @@ import { describe, expect, test } from "bun:test"
 import type { SshOrchestratorEvent, SshTransport } from "./ssh"
 import {
   agentID,
+  cancelFrame,
+  helloFrame,
+  parseAttach,
+  parseHello,
+  parseReplay,
+  retryFrame,
+  sessionAttachFrame,
+  snapshotFrame,
+  steerFrame,
   parseInteraction,
   parseOrchestratorEvent,
   parseOrchestratorLine,
@@ -29,6 +38,47 @@ describe("SSH agent orchestration frames", () => {
     expect(turnFrame("ses_1", "review", "claude-code").agent).toBe("claude")
     expect(turnFrame("ses_1", "review", "antigravity-cli").agent).toBe("antigravity")
     expect(workspaceFrame("/tmp/work", "codex-cli").agent.id).toBe("codex")
+    expect(helloFrame("opencode-cli")).toMatchObject({ type: "bridge.hello", agent: "opencode" })
+    expect(sessionAttachFrame("ses_1")).toMatchObject({ type: "session.attach", sessionID: "ses_1" })
+    expect(snapshotFrame("ses_1")).toMatchObject({ type: "session.snapshot", sessionID: "ses_1" })
+    expect(cancelFrame("ses_1", "trn_1")).toMatchObject({ type: "turn.cancel" })
+    expect(retryFrame("ses_1", "trn_1")).toMatchObject({ type: "turn.retry" })
+    expect(steerFrame("ses_1", "trn_1", "focus tests")).toMatchObject({ type: "turn.steer", instruction: "focus tests" })
+  })
+
+  test("strictly parses bridge negotiation, snapshots, and replay", () => {
+    expect(parseHello({
+      type: "bridge.hello",
+      bridgeVersion: "1.0.0",
+      protocolVersion: "v1",
+      agent: "codex",
+      backendVersion: "codex 2.0.0",
+      backendMode: "app_server",
+      capabilities: ["workspace", "sessions", "turns", "replay", "cancel"],
+    })).toMatchObject({ agent: "codex", backendMode: "app_server" })
+    const snapshot = {
+      session: { id: "ses_1", state: "running", backendVersion: "codex 2.0.0", backendMode: "app_server", capabilities: ["workspace", "sessions", "turns", "replay"], activeTurnID: "trn_1", lastCursor: "cur_1" },
+      pending: [],
+      artifacts: [],
+      authoritative: true,
+    }
+    expect(parseAttach({ type: "session.attach", attached: true, snapshot })).toMatchObject({ attached: true, snapshot: { session: { id: "ses_1" } } })
+    expect(parseReplay({ type: "event.replay", events: [{ kind: "event", sessionID: "ses_1", type: "turn.output", cursor: "cur_2", sequence: 2, turnID: "trn_1", text: "done" }], hasMore: false })).toMatchObject({ hasMore: false, events: [{ cursor: "cur_2" }] })
+    expect(parseHello({ protocolVersion: "v2" })).toBeUndefined()
+  })
+
+  test("uses stable idempotency keys for interaction and turn controls", () => {
+    const interaction = { id: "int_1", revision: 2, kind: "approval" as const, title: "Write" }
+    const first = replyFrame("ses_1", interaction, undefined, "approved")
+    const repeated = replyFrame("ses_1", interaction, undefined, "approved")
+    expect(first.idempotencyKey).toBe(repeated.idempotencyKey)
+    expect(first.requestID).toBe(repeated.requestID)
+    expect(cancelFrame("ses_1", "trn_1")).toMatchObject(cancelFrame("ses_1", "trn_1"))
+    expect(retryFrame("ses_1", "trn_1")).toMatchObject(retryFrame("ses_1", "trn_1"))
+    expect(sessionAttachFrame("ses_1")).toMatchObject(sessionAttachFrame("ses_1"))
+    const question = replyFrame("ses_1", { id: "int_2", revision: 1, kind: "question", prompt: "Token?" }, "secret-answer", undefined)
+    expect(question.idempotencyKey).not.toContain("secret-answer")
+    expect(steerFrame("ses_1", "trn_1", "use password=secret").idempotencyKey).not.toContain("secret")
   })
 
   test("bounds and parses trusted protocol event lines", () => {
@@ -37,7 +87,7 @@ describe("SSH agent orchestration frames", () => {
     expect(parseOrchestratorLine("not-json")).toBeUndefined()
     expect(parseOrchestratorLine("x".repeat(256 * 1024 + 1))).toBeUndefined()
     expect(parseOrchestratorEvent(value)).toEqual({ kind: "event", value })
-    expect(parseOrchestratorEvent({ kind: "error", message: "failed" })).toEqual({ kind: "error", message: "failed" })
+    expect(parseOrchestratorEvent({ kind: "error", message: "failed" })).toEqual({ kind: "error", message: "failed", code: "internal", retryable: false })
   })
 
   test("reduces plans, interactions, and terminal turn state", () => {

@@ -1,4 +1,5 @@
 import { RouteLocationContext, RouteLocationMiddleware } from "@slopcode-ai/server/middleware/route-location"
+import { InvalidRequestError } from "@slopcode-ai/server/errors"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { Flag } from "@slopcode-ai/core/flag/flag"
 import type { Target } from "@/control-plane/types"
@@ -230,7 +231,16 @@ function routeWorkspace<E>(
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, Socket.WebSocketConstructor | Workspace.Service> {
   if (plan._tag === "Response") return Effect.succeed(plan.response)
   if (plan._tag === "InvalidWorkspace") {
-    return Effect.succeed(HttpServerResponse.text("Invalid workspace query parameter", { status: 400 }))
+    return Effect.succeed(
+      HttpServerResponse.jsonUnsafe(
+        new InvalidRequestError({
+          message: "Invalid workspace query parameter",
+          kind: "Query",
+          field: "workspace",
+        }),
+        { status: 400 },
+      ),
+    )
   }
   if (plan._tag === "MissingWorkspace") return Effect.succeed(missingWorkspaceResponse(plan.workspaceID))
   if (plan._tag === "Remote")

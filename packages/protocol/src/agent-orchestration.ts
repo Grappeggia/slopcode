@@ -753,10 +753,9 @@ export const AgentOrchestrationEventReplayResponse = exact(replayShape)
       if (value.hasMore !== (value.nextCursor !== undefined)) return "event replay continuation must match hasMore"
       if (
         value.nextCursor !== undefined &&
-        value.events.length > 0 &&
-        cursor(value.nextCursor) <= cursor(value.events.at(-1)!.cursor)
+        (value.events.length === 0 || value.nextCursor !== value.events.at(-1)!.cursor)
       ) {
-        return "next cursor must advance beyond replayed events"
+        return "next cursor must equal the last replayed event cursor"
       }
       return jsonBytes(value) <= AgentOrchestrationLimits.maxFrameBytes ? undefined : "event replay is too large"
     }),

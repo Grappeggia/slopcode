@@ -1,225 +1,162 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-03T15:04:00-07:00",
-  "build": "v0.2.215 Android debug · refreshed live SSH evidence",
+  "generatedAt": "2026-08-03T23:25:00-07:00",
+  "build": "Android release candidate · native SSH rich agent sessions",
   "requiredAgents": ["opencode-cli", "codex-cli", "claude-code", "antigravity-cli"],
   "shared": [
     {
-      "id": "appearance",
-      "title": "Light and dark navigation drawer",
-      "caption": "The Android-native drawer exposes appearance and active-session context without leaving the SSH flow.",
-      "src": "latest-00-dark-drawer.png",
-      "alt": "Dark navigation drawer with active sessions and appearance control"
-    },
-    {
-      "id": "choose-computer",
+      "id": "choose-computer-light",
       "title": "Choose a computer",
-      "caption": "Start with one simple user@host field and saved computers.",
+      "caption": "The Android-native flow starts with the saved agent@void computer and its last workspace.",
       "src": "latest-01-choose-computer.png",
-      "alt": "Choose a computer screen"
+      "alt": "Light-mode Android screen for choosing the saved void computer"
     },
     {
-      "id": "sign-in",
-      "title": "Sign in securely",
-      "caption": "Choose password or Android's private-key document picker.",
-      "src": "latest-08-key-selected.png",
-      "alt": "SSH sign-in choices"
+      "id": "drawer-dark",
+      "title": "Sessions and appearance",
+      "caption": "The dark navigation drawer keeps active sessions and appearance controls one tap away.",
+      "src": "latest-00-dark-drawer.png",
+      "alt": "Dark-mode Android navigation drawer with active sessions and appearance controls"
     },
     {
-      "id": "host-key",
-      "title": "Verify the computer",
-      "caption": "Review the host identity before trusting a new SSH key.",
-      "src": "latest-09-host-key.png",
-      "alt": "Confirm this is your computer"
-    },
-    {
-      "id": "workspace",
-      "title": "Choose a workspace",
-      "caption": "Use the compact SFTP browser, breadcrumbs, recent folders, and hidden files off by default.",
-      "src": "latest-10-workspace.png",
-      "alt": "Remote workspace folder browser"
-    },
-    {
-      "id": "debug-portrait-light",
-      "title": "Latest build · portrait light",
-      "caption": "Fresh emulator capture from the current debug APK with the saved computer and workspace fixture.",
+      "id": "portrait-light",
+      "title": "Portrait onboarding",
+      "caption": "The current Android onboarding surface in light mode.",
       "src": "release-debug-00-portrait-light.png",
-      "alt": "Latest Android debug build in portrait light mode"
+      "alt": "Current Android onboarding screen in portrait light mode"
     },
     {
-      "id": "debug-portrait-dark",
-      "title": "Latest build · portrait dark",
-      "caption": "The same onboarding surface rendered in the refreshed dark theme.",
+      "id": "portrait-dark",
+      "title": "Portrait onboarding",
+      "caption": "The same Android onboarding surface in dark mode.",
       "src": "release-debug-01-portrait-dark.png",
-      "alt": "Latest Android debug build in portrait dark mode"
+      "alt": "Current Android onboarding screen in portrait dark mode"
     },
     {
-      "id": "debug-portrait-keyboard",
-      "title": "Latest build · keyboard-safe onboarding",
-      "caption": "Large-font keyboard fixture keeps the computer selection controls reachable above the IME.",
-      "src": "release-debug-02-portrait-light-keyboard.png",
-      "alt": "Latest Android debug build with the keyboard open"
-    },
-    {
-      "id": "debug-portrait-dark-keyboard",
-      "title": "Latest build · dark keyboard",
-      "caption": "Dark mode remains readable while the Android keyboard is active.",
-      "src": "release-debug-03-portrait-dark-keyboard.png",
-      "alt": "Latest Android debug build in dark mode with the keyboard open"
-    },
-    {
-      "id": "debug-landscape-light",
-      "title": "Latest build · landscape light",
-      "caption": "Landscape layout keeps the drawer control and primary action clear of system insets.",
+      "id": "landscape-light",
+      "title": "Landscape onboarding",
+      "caption": "Landscape light mode keeps the primary action clear of system insets.",
       "src": "release-debug-04-landscape-light.png",
-      "alt": "Latest Android debug build in landscape light mode"
+      "alt": "Current Android onboarding screen in landscape light mode"
     },
     {
-      "id": "debug-landscape-dark",
-      "title": "Latest build · landscape dark",
-      "caption": "Landscape dark-mode capture from the current emulator build.",
+      "id": "landscape-dark",
+      "title": "Landscape onboarding",
+      "caption": "Landscape dark mode preserves hierarchy and contrast.",
       "src": "release-debug-05-landscape-dark.png",
-      "alt": "Latest Android debug build in landscape dark mode"
-    },
-    {
-      "id": "debug-landscape-keyboard",
-      "title": "Latest build · landscape keyboard",
-      "caption": "Large-font landscape keyboard fixture captured from the v0.2.215 release build.",
-      "src": "release-debug-06-landscape-light-keyboard.png",
-      "alt": "Latest Android debug build in landscape with the keyboard fixture"
-    },
-    {
-      "id": "debug-landscape-dark-keyboard",
-      "title": "Latest build · landscape dark keyboard",
-      "caption": "Dark mode remains readable at large font scale with the keyboard open in landscape.",
-      "src": "release-debug-07-landscape-dark-keyboard.png",
-      "alt": "Latest Android debug build in landscape dark mode with the keyboard fixture"
+      "alt": "Current Android onboarding screen in landscape dark mode"
     }
   ],
   "agents": {
-    "codex-cli": {
-      "label": "Codex",
-      "status": "passed",
-      "runId": "emulator-2026-08-03-codex-tetris-real",
-      "screenshots": [
-        {
-          "id": "tetris-command-approval",
-          "title": "Codex requests a workspace-scoped command approval",
-          "caption": "The live Android session pauses before creating the requested Tetris folder and files, showing the exact command and selected remote workspace.",
-          "src": "codex-03-android-e2e-tetris-approval.png",
-          "alt": "Codex approval request for a Tetris app command in the Android SSH session"
-        },
-        {
-          "id": "tetris-file-approval",
-          "title": "Codex requests file-change approval",
-          "caption": "After the directory is created, Codex requests a second approval before writing the three Tetris source files.",
-          "src": "codex-04-android-e2e-tetris-file-approval.png",
-          "alt": "Codex file change approval in the Android SSH session"
-        },
-        {
-          "id": "tetris-complete",
-          "title": "Codex completes and verifies the Tetris app",
-          "caption": "Codex created index.html, styles.css, and app.js in /home/agent/temp/android-e2e-codex-tetris, then verified their presence and checked app.js syntax before the Android session reached Complete.",
-          "src": "codex-05-android-e2e-tetris-complete.png",
-          "alt": "Completed Codex Android SSH session after creating and verifying a Tetris app"
-        }
-      ]
-    },
     "opencode-cli": {
       "label": "OpenCode",
       "status": "passed",
-      "runId": "emulator-2026-08-03-opencode-tetris-real",
+      "runId": "emulator-agent-at-void-2026-08-03-opencode-final",
       "screenshots": [
         {
-          "id": "real-ready",
-          "title": "OpenCode session ready · real emulator run",
-          "caption": "The rebuilt APK connected to agent@void over SSH, verified the saved local credential, and opened the native OpenCode ACP session.",
-          "src": "opencode-03-real-ready.png",
-          "alt": "OpenCode remote agent session ready"
+          "id": "working-light",
+          "title": "OpenCode builds through ACP",
+          "caption": "The live SSH session shows OpenCode creating the app through structured remote tool activity.",
+          "src": "current/opencode-light-working.png",
+          "alt": "OpenCode working on the remote Tetris website in Android light mode"
         },
         {
-          "id": "real-working",
-          "title": "OpenCode is building · real emulator run",
-          "caption": "The prompt reached the remote backend and the Android activity stream shows mkdir and write tool calls while the agent works in /home/agent/temp.",
-          "src": "opencode-04-real-working.png",
-          "alt": "OpenCode remote agent creating files in the selected workspace"
+          "id": "complete-light",
+          "title": "OpenCode completes the Tetris loop",
+          "caption": "OpenCode created index.html, styles.css, and app.js in /home/marcos/temp/e2e-opencode-final; an independent node and reference check passed.",
+          "src": "current/opencode-light-complete-final.png",
+          "alt": "Completed OpenCode Tetris coding session in Android light mode"
         },
         {
-          "id": "real-complete",
-          "title": "OpenCode completes the coding task",
-          "caption": "OpenCode created tetris-session/index.html, ran file and game-board smoke checks, and the Android session reached Complete.",
-          "src": "opencode-05-real-complete.png",
-          "alt": "Completed OpenCode coding session on the remote workspace"
+          "id": "complete-dark",
+          "title": "OpenCode completes the Tetris loop",
+          "caption": "The same independently verified OpenCode result rendered in Android dark mode.",
+          "src": "current/opencode-dark-complete-final.png",
+          "alt": "Completed OpenCode Tetris coding session in Android dark mode"
+        }
+      ]
+    },
+    "codex-cli": {
+      "label": "Codex",
+      "status": "passed",
+      "runId": "emulator-agent-at-void-2026-08-03-codex-final",
+      "screenshots": [
+        {
+          "id": "approval-dark",
+          "title": "Codex pauses for a large file approval",
+          "caption": "A large App Server file-change frame reaches Android intact and becomes an actionable approval card.",
+          "src": "current/codex-dark-approval-large-frame.png",
+          "alt": "Codex file-change approval card in Android dark mode"
         },
         {
-          "id": "android-e2e-tetris-complete",
-          "title": "OpenCode completes the latest Tetris build",
-          "caption": "In the latest emulator run, OpenCode created /home/agent/temp/android-e2e-tetris/index.html, styles.css, and app.js, then verified the folder contents with ls before the Android session reached Complete.",
-          "src": "opencode-06-android-e2e-tetris-complete.png",
-          "alt": "OpenCode Android SSH session complete after creating a Tetris web app"
+          "id": "complete-dark",
+          "title": "Codex reports exact validation",
+          "caption": "Codex created and checked /home/marcos/temp/e2e-codex-final, with streamed output, tools, approvals, and completion preserved.",
+          "src": "current/codex-dark-complete-final.png",
+          "alt": "Completed Codex Tetris session and validation output in Android dark mode"
+        },
+        {
+          "id": "review-dark",
+          "title": "Codex review metadata",
+          "caption": "The review surface projects the three reported diffs as first-class cards rather than terminal text.",
+          "src": "current/codex-dark-review-final.png",
+          "alt": "Codex file review cards in Android dark mode"
+        },
+        {
+          "id": "complete-light",
+          "title": "Codex reports exact validation",
+          "caption": "The independently verified Codex completion rendered in Android light mode.",
+          "src": "current/codex-light-complete-final.png",
+          "alt": "Completed Codex Tetris session and validation output in Android light mode"
         }
       ]
     },
     "claude-code": {
       "label": "Claude Code",
       "status": "passed",
-      "runId": "emulator-2026-08-03-claude-tetris-real",
+      "runId": "emulator-agent-at-void-2026-08-03-claude-final",
       "screenshots": [
         {
-          "id": "setup",
-          "title": "Claude Code sign-in is required",
-          "caption": "The CLI is installed, but claude auth status reported loggedIn=false, so Android shows the visual sign-in checklist instead of opening a session.",
-          "src": "claude-01-setup-required.png",
-          "alt": "Claude Code sign-in required checklist"
+          "id": "approval-dark",
+          "title": "Claude requests an explicit action",
+          "caption": "Claude's permission callback appears as a workspace-scoped Android approval with approve and reject actions.",
+          "src": "current/claude-dark-approval-final.png",
+          "alt": "Claude Code approval card for the remote Tetris task in Android dark mode"
         },
         {
-          "id": "login-method",
-          "title": "Claude Code chooses an account method",
-          "caption": "The live remote CLI is installed but unauthenticated. Android relays the initial account-method choice, while the later browser handoff stays off the gallery because it contains ephemeral authorization data.",
-          "src": "claude-02-login-method.png",
-          "alt": "Claude Code account-method choice in the Android SSH setup flow"
+          "id": "complete-dark",
+          "title": "Claude completes and validates Tetris",
+          "caption": "Claude created three files in /home/marcos/temp/e2e-claude-final and reported syntax, references, controls, and offline checks.",
+          "src": "current/claude-dark-complete-final.png",
+          "alt": "Completed Claude Code Tetris session in Android dark mode"
         },
         {
-          "id": "tetris-file-approval",
-          "title": "Claude requests an Android approval before writing",
-          "caption": "The real SSH session pauses before writing index.html in /home/agent/temp/claude-e2e-tetris, showing the selected workspace and an explicit approve or reject action.",
-          "src": "claude-03-android-e2e-tetris-approval.png",
-          "alt": "Claude Code write approval in the Android SSH session"
-        },
-        {
-          "id": "tetris-verification-approval",
-          "title": "Claude requests verification approval",
-          "caption": "After creating the Tetris source files, Claude requests approval to list the folder and syntax-check game.js before reporting completion.",
-          "src": "claude-04-android-e2e-tetris-verify.png",
-          "alt": "Claude Code verification approval in the Android SSH session"
-        },
-        {
-          "id": "tetris-complete",
-          "title": "Claude completes the remote Tetris app",
-          "caption": "Claude created index.html, style.css, and game.js in /home/agent/temp/claude-e2e-tetris. The Android session reached Complete and the remote JavaScript syntax check passed.",
-          "src": "claude-05-android-e2e-tetris-complete.png",
-          "alt": "Completed Claude Code Android SSH session after creating and verifying a Tetris app"
+          "id": "complete-light",
+          "title": "Claude completes and validates Tetris",
+          "caption": "The independently verified Claude result rendered in Android light mode.",
+          "src": "current/claude-light-complete-final.png",
+          "alt": "Completed Claude Code Tetris session in Android light mode"
         }
       ]
     },
     "antigravity-cli": {
       "label": "Antigravity",
       "status": "passed",
-      "runId": "emulator-2026-08-03-antigravity-tetris-real",
+      "runId": "emulator-agent-at-void-2026-08-03-antigravity-rich",
       "screenshots": [
         {
-          "id": "login-method",
-          "title": "Antigravity offers secure sign-in",
-          "caption": "The installed Antigravity CLI is waiting for Google OAuth or a Google Cloud project. The Android app keeps the browser authorization code out of recorded evidence.",
-          "src": "antigravity-01-login-method.png",
-          "alt": "Antigravity sign-in method choice in the Android SSH setup flow"
+          "id": "complete-light",
+          "title": "Antigravity completes with rich tools",
+          "caption": "Antigravity's step updates render as stable tool cards while it creates and verifies /home/marcos/temp/e2e-antigravity-rich.",
+          "src": "current/antigravity-light-complete-final.png",
+          "alt": "Completed Antigravity Tetris session with rich tool cards in Android light mode"
         },
         {
-          "id": "tetris-complete",
-          "title": "Antigravity completes a Tetris website in the selected workspace",
-          "caption": "The real Android SSH session created index.html, styles.css, and app.js in /home/agent/temp/antigravity-e2e-tetris-v3. Antigravity then ran node --check app.js and the session reached Complete.",
-          "src": "antigravity-02-android-e2e-tetris-complete.png",
-          "alt": "Completed Antigravity Android SSH session after creating and verifying a Tetris website"
+          "id": "complete-dark",
+          "title": "Antigravity completes with rich tools",
+          "caption": "The same independently verified Antigravity result rendered in Android dark mode.",
+          "src": "current/antigravity-dark-complete-final.png",
+          "alt": "Completed Antigravity Tetris session with rich tool cards in Android dark mode"
         }
       ]
     }

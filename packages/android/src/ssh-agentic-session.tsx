@@ -3,15 +3,27 @@ import type { SshTransport } from "./ssh"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import {
   agentID,
+  cancelFrame,
+  helloFrame,
   initialOrchestratorState,
   isOrchestratorAvailable,
+  parseAttach,
+  parseHello,
+  parseReplay,
+  parseSnapshot,
   reduceOrchestratorEvent,
+  replayFrame,
   replyFrame,
+  retryFrame,
+  sessionAttachFrame,
   sessionFrame,
+  snapshotFrame,
+  steerFrame,
   turnFrame,
   wire,
   workspaceFrame,
   type OrchestratorInteraction,
+  OrchestratorError,
   type OrchestratorState,
   type OrchestratorWire,
 } from "./ssh-orchestrator"
@@ -20,11 +32,13 @@ import {
   REVIEW_TABS,
   initialAgentSessionState,
   lastPrompt,
+  pendingInteraction,
   readAgentSession,
   reduceAgentSession,
   reviewItems,
   writeAgentSession,
   type AgentSessionEntry,
+  type AgentSessionState,
   type ReviewTab,
 } from "./ssh-agent-session-state"
 import { SshShell } from "./ssh-shell"
@@ -36,7 +50,6 @@ import {
   cleanupAgenticStart,
   handoffToInteractive,
   reconnectAgentic,
-  stopAgentic,
 } from "./ssh-session-flow"
 
 type Props = {
@@ -68,6 +81,15 @@ function responseID(value: unknown, key: "sessionID" | "turnID") {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
   const next = (value as Record<string, unknown>)[key]
   return typeof next === "string" && next.length > 0 && next.length <= 256 ? next : undefined
+}
+
+function snapshotPhase(value: string): OrchestratorState["phase"] {
+  if (value === "running") return "running"
+  if (value === "waiting") return "waiting"
+  if (value === "completed") return "completed"
+  if (value === "failed") return "error"
+  if (value === "stopped" || value === "interrupted" || value === "detached") return "stopped"
+  return "ready"
 }
 
 function reviewLabel(value: ReviewTab) {
@@ -319,6 +341,7 @@ export function SshAgenticSession(props: Props) {
   let stopped = false
   let active = false
   let hydrated = false
+  let reconciling = false
   let saves = Promise.resolve()
 
   createEffect(() => {
@@ -333,7 +356,8 @@ export function SshAgenticSession(props: Props) {
     const message = cause instanceof Error ? cause.message : fallback
     setError(message)
     setState((current) => ({ ...current, phase: "error", error: message }))
-    if (session().sessionID) project({ type: "failure.added", id: `failure:${crypto.randomUUID()}`, message })
+    if (session().sessionID && !/\b(?:ssh|transport|connection|network|orchestrator exited|transport closed)\b/i.test(message))
+      project({ type: "failure.added", id: `failure:${crypto.randomUUID()}`, message })
   }
 
   const event = (value: Record<string, unknown>) => {
@@ -344,19 +368,88 @@ export function SshAgenticSession(props: Props) {
       queueMicrotask(() => document.querySelector<HTMLElement>("[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input")?.focus())
   }
 
-  const start = async (last?: string) => {
+  const applySnapshot = (value: ReturnType<typeof parseSnapshot> & {}) => {
+    const pending = value.pending.map((item) =>
+      item.kind === "approval"
+        ? ({ id: item.id, revision: item.revision, kind: "approval", title: item.title } as const)
+        : ({ id: item.id, revision: item.revision, kind: "question", prompt: item.title, allowFreeform: true } as const),
+    )
+    setState((current) => ({
+      ...current,
+      phase: snapshotPhase(value.session.state),
+      sessionID: value.session.id,
+      turnID: value.session.activeTurnID ?? value.session.lastTurnID,
+      cursor: value.session.lastCursor,
+      interaction: pending.at(-1),
+      error: undefined,
+    }))
+    project({ type: "backend.connected", version: value.session.backendVersion, mode: value.session.backendMode, capabilities: value.session.capabilities })
+    pending.forEach((interaction) =>
+      project({
+        type: "event.received",
+        value: {
+          kind: "event",
+          type: interaction.kind === "approval" ? "interaction.approval.requested" : "interaction.question.requested",
+          sessionID: value.session.id,
+          interaction,
+        },
+      }),
+    )
+    value.artifacts.forEach((artifact) => project({
+      type: "event.received",
+      value: { kind: "event", type: "artifact.created", sessionID: value.session.id, artifact },
+    }))
+  }
+
+  const replay = async (current: OrchestratorWire, sessionID: string, after?: string) => {
+    let cursor = after
+    for (let page = 0; page < 100; page++) {
+      const result = parseReplay(await current.send(replayFrame(sessionID, cursor)))
+      if (!result) throw new Error("The remote event replay response was invalid.")
+      result.events.forEach(event)
+      if (!result.hasMore) return
+      const last = result.events.at(-1)
+      if (!last || typeof last.cursor !== "string" || last.cursor === cursor) throw new Error("The remote replay cursor did not advance.")
+      cursor = last.cursor
+    }
+    throw new Error("The remote event replay exceeded its safe page limit.")
+  }
+
+  const reconcile = async () => {
+    const current = wireState()
+    const sessionID = state().sessionID
+    if (!current || !sessionID || reconciling) return
+    reconciling = true
+    try {
+      const response = await current.send(snapshotFrame(sessionID))
+      const snapshot = parseSnapshot(response.snapshot)
+      if (!snapshot) throw new Error("The remote session snapshot was invalid.")
+      applySnapshot(snapshot)
+      await replay(current, sessionID, session().lastCursor).catch((cause) => {
+        if (!(cause instanceof OrchestratorError) || cause.code !== "cursor_gap") throw cause
+      })
+    } catch (cause) {
+      showError(cause, "Could not reconcile the remote agent session.")
+    } finally {
+      reconciling = false
+    }
+  }
+
+  const start = async (saved?: AgentSessionState) => {
     if (!isOrchestratorAvailable(props.ssh)) {
       showError(new Error("Native SSH orchestration is unavailable on this device."), "Native SSH orchestration is unavailable.")
       setBusy(false)
       return
     }
     stopped = false
-    setRestored(false)
-    setSession(initialAgentSessionState())
+    setRestored(Boolean(saved))
+    setSession(saved ?? initialAgentSessionState())
     setBusy(true)
     setError("")
-    setState({ ...initialOrchestratorState(), phase: "opening", ...(last ? { lastPrompt: last } : {}) })
+    setState({ ...initialOrchestratorState(), phase: "opening", ...(saved ? { lastPrompt: lastPrompt(saved) } : {}) })
     closeWire()
+    if (active) await props.ssh.orchestratorStop().catch(() => undefined)
+    active = false
     const next = wire(props.ssh)
     setWireState(next)
     closeWire = next.connect(event)
@@ -366,14 +459,35 @@ export function SshAgenticSession(props: Props) {
       next.scope(channel.id)
       started = true
       active = true
+      const hello = parseHello(await next.send(helloFrame(props.workspace.agent)))
+      if (!hello || hello.agent !== agentID(props.workspace.agent)) throw new Error("The remote bridge does not support this agent with protocol v1.")
       const opened = await next.send(workspaceFrame(props.workspace.directory, props.workspace.agent))
       const workspace = opened.workspace
       if (!workspace || typeof workspace !== "object" || Array.isArray(workspace) || (workspace as { id?: unknown }).id !== "wrk_android")
         throw new Error("The remote workspace response was invalid.")
+      project({ type: "backend.connected", version: hello.backendVersion, mode: hello.backendMode, capabilities: hello.capabilities })
+      if (saved?.sessionID) {
+        const attached = parseAttach(await next.send(sessionAttachFrame(saved.sessionID)))
+        if (!attached) throw new Error("The remote session attach response was invalid.")
+        applySnapshot(attached.snapshot)
+        if (!attached.attached) {
+          setState((current) => ({ ...current, phase: "stopped" }))
+          setRestored(true)
+          return
+        }
+        setRestored(false)
+        try {
+          await replay(next, saved.sessionID, saved.lastCursor)
+        } catch (cause) {
+          if (!(cause instanceof OrchestratorError) || cause.code !== "cursor_gap") throw cause
+          applySnapshot(attached.snapshot)
+        }
+        return
+      }
       const created = await next.send(sessionFrame(props.workspace.agent))
       const sessionID = responseID(created, "sessionID")
       if (!sessionID) throw new Error("The remote agent did not return a session.")
-      setSession(initialAgentSessionState(sessionID))
+      setSession((current) => ({ ...current, sessionID }))
       setState((current) => ({ ...current, phase: "ready", sessionID }))
     } catch (cause) {
       await cleanupAgenticStart(props.ssh, () => setWireState(), closeWire, started)
@@ -390,11 +504,7 @@ export function SshAgenticSession(props: Props) {
       .then((saved) => {
         if (stopped) return
         hydrated = true
-        if (!saved) return start()
-        setSession(saved)
-        setRestored(true)
-        setState({ ...initialOrchestratorState(), phase: "stopped", lastPrompt: lastPrompt(saved) })
-        setBusy(false)
+        return start(saved)
       })
       .catch(() => {
         hydrated = true
@@ -423,7 +533,11 @@ export function SshAgenticSession(props: Props) {
     setBusy(true)
     setState((previous) => ({ ...previous, phase: "running", lastPrompt: value, error: undefined }))
     try {
-      const response = await current.send(turnFrame(currentState.sessionID, value, props.workspace.agent))
+      const response = await current.send(
+        currentState.phase === "running" && currentState.turnID && session().capabilities?.includes("steer")
+          ? steerFrame(currentState.sessionID, currentState.turnID, value)
+          : turnFrame(currentState.sessionID, value, props.workspace.agent),
+      )
       const turnID = responseID(response, "turnID")
       if (turnID) setState((previous) => ({ ...previous, turnID }))
     } catch (cause) {
@@ -448,8 +562,18 @@ export function SshAgenticSession(props: Props) {
         id: interaction.id,
         ...(interaction.kind === "approval" ? { decision } : { answer: value }),
       })
-      setState((previous) => ({ ...previous, phase: "running", interaction: undefined, error: undefined }))
-      queueMicrotask(() => document.querySelector<HTMLTextAreaElement>("#agent-prompt")?.focus())
+      const next = pendingInteraction(session().transcript, interaction.id)
+      setState((previous) => ({
+        ...previous,
+        phase: next ? "waiting" : "running",
+        interaction: next,
+        error: undefined,
+      }))
+      queueMicrotask(() =>
+        (next
+          ? document.querySelector<HTMLElement>("[data-agent-interaction-active='true'] button, [data-agent-interaction-active='true'] input")
+          : document.querySelector<HTMLTextAreaElement>("#agent-prompt"))?.focus(),
+      )
     } catch (cause) {
       showError(cause, "The remote agent did not accept that response.")
     } finally {
@@ -458,13 +582,13 @@ export function SshAgenticSession(props: Props) {
   }
 
   const stop = async () => {
-    if (busy()) return
+    const current = wireState()
+    const value = state()
+    if (busy() || !current || !value.sessionID || !value.turnID || !session().capabilities?.includes("cancel")) return
     setBusy(true)
     try {
-      await stopAgentic(props.ssh, closeWire)
-      active = false
-      setWireState()
-      setState({ ...initialOrchestratorState(), phase: "stopped", lastPrompt: state().lastPrompt })
+      await current.send(cancelFrame(value.sessionID, value.turnID))
+      setState((previous) => ({ ...previous, phase: "stopped" }))
     } catch (cause) {
       showError(cause, "Could not stop the remote agent.")
     }
@@ -481,11 +605,19 @@ export function SshAgenticSession(props: Props) {
     props.onDisconnected()
   }
 
-  const retry = () => {
-    const value = state().lastPrompt ?? lastPrompt(session())
-    if (!value || busy() || !canRetry(state().phase, state().sessionID, !!wireState())) return
-    project({ type: "draft.changed", value })
-    queueMicrotask(() => void send())
+  const retry = async () => {
+    const current = wireState()
+    const value = state()
+    if (busy() || !current || !value.sessionID || !value.turnID || !session().capabilities?.includes("retry")) return
+    setBusy(true)
+    try {
+      await current.send(retryFrame(value.sessionID, value.turnID))
+      setState((previous) => ({ ...previous, phase: "running", error: undefined }))
+    } catch (cause) {
+      showError(cause, "The remote agent could not retry this turn.")
+    } finally {
+      setBusy(false)
+    }
   }
 
   const reconnect = async () => {
@@ -494,7 +626,7 @@ export function SshAgenticSession(props: Props) {
     setBusy(true)
     setError("")
     try {
-      await reconnectAgentic(props.ssh, closeWire, value, start)
+      await reconnectAgentic(props.ssh, closeWire, value, () => start(session()))
       active = true
     } catch (cause) {
       showError(cause, "Could not reconnect the remote agent session.")
@@ -591,8 +723,18 @@ export function SshAgenticSession(props: Props) {
             <Show when={restored()}>
               <section class="mb-4 rounded-xl border border-border-brand-base bg-surface-base p-4" data-agent-restored>
                 <h1 class="text-16-medium">Local session snapshot restored</h1>
-                <p class="mt-1 text-12-regular text-text-weak">This transcript is bound to the previous remote session. It is not attached and cannot receive replies or events.</p>
-                <button type="button" data-agent-action="start" disabled={busy()} onClick={() => void start(lastPrompt(session()))} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new session</button>
+                <p class="mt-1 text-12-regular text-text-weak">The remote session is detached. Its safe local transcript remains available, but it cannot receive replies or events.</p>
+                <button type="button" data-agent-action="start" disabled={busy()} onClick={() => void start()} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new session</button>
+              </section>
+            </Show>
+
+            <Show when={!restored() && (state().phase === "completed" || state().phase === "stopped")}>
+              <section class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-border-weak-base bg-surface-base p-4" data-agent-finished>
+                <div>
+                  <h1 class="text-14-medium">{state().phase === "completed" ? "Session complete" : "Session stopped"}</h1>
+                  <p class="mt-1 text-12-regular text-text-weak">Keep this result or begin with a clean conversation.</p>
+                </div>
+                <button type="button" data-agent-action="new-session" disabled={busy()} onClick={() => void start()} class="min-h-12 shrink-0 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new</button>
               </section>
             </Show>
 
@@ -642,6 +784,7 @@ export function SshAgenticSession(props: Props) {
               <summary class="cursor-pointer text-12-medium">Diagnostics</summary>
               <div class="pb-3 text-12-regular text-text-weak">
                 <p>Transport: native SSH · backend: {agentID(props.workspace.agent)}</p>
+                <p>Backend version: {session().backendVersion ?? "checking"} · mode: {session().backendMode ?? "unknown"}</p>
                 <p>Session: {restored() ? "not attached" : state().sessionID ?? "starting"}</p>
                 <p>Cursor: {session().lastCursor ?? state().cursor ?? "none"}</p>
                 <p>Raw PTY output is kept out of the primary experience. Use Interactive CLI for terminal prompts and sign-in.</p>
@@ -654,12 +797,12 @@ export function SshAgenticSession(props: Props) {
           <form data-agent-composer class="border-t border-border-weak-base bg-surface-raised-base p-3" onSubmit={(event) => { event.preventDefault(); void send() }}>
             <label class="text-12-medium" for="agent-prompt">Message the agent</label>
             <div class="mt-2 flex items-end gap-2">
-              <textarea id="agent-prompt" data-agent-prompt rows="2" value={session().draft} onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })} placeholder="Describe the outcome you want" disabled={busy() || restored() || !state().sessionID || !canSubmit(state().phase)} class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50" />
-              <button type="submit" data-agent-action="send" aria-label="Send message" disabled={busy() || restored() || !session().draft.trim() || !state().sessionID || !canSubmit(state().phase)} class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">Send</button>
-              <button type="button" data-agent-action="stop" aria-label="Stop agent" disabled={busy() || state().phase !== "running"} onClick={() => void stop()} class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50">Stop</button>
+              <textarea id="agent-prompt" data-agent-prompt rows="2" value={session().draft} onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })} placeholder={state().phase === "running" ? "Steer the current turn" : "Describe the outcome you want"} disabled={busy() || restored() || !state().sessionID || (!canSubmit(state().phase) && !(state().phase === "running" && session().capabilities?.includes("steer")))} class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50" />
+              <button type="submit" data-agent-action="send" aria-label="Send message" disabled={busy() || restored() || !session().draft.trim() || !state().sessionID || (!canSubmit(state().phase) && !(state().phase === "running" && session().capabilities?.includes("steer")))} class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">{state().phase === "running" ? "Steer" : "Send"}</button>
+              <button type="button" data-agent-action="stop" aria-label="Stop agent" disabled={busy() || state().phase !== "running" || !session().capabilities?.includes("cancel")} onClick={() => void stop()} class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50">Stop</button>
             </div>
             <Show when={state().phase === "ready" && state().lastPrompt && canRetry(state().phase, state().sessionID, !!wireState())}>
-              <button type="button" disabled={busy()} onClick={retry} class="mt-2 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Retry last request</button>
+              <button type="button" disabled={busy() || !session().capabilities?.includes("retry")} onClick={() => void retry()} class="mt-2 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Retry last request</button>
             </Show>
           </form>
         </section>

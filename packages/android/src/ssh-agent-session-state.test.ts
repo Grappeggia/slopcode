@@ -3,6 +3,7 @@ import {
   MAX_PERSISTED_AGENT_SESSION_BYTES,
   initialAgentSessionState,
   normalizeAgentSession,
+  pendingInteraction,
   readAgentSession,
   reduceAgentSession,
   reviewItems,
@@ -103,9 +104,19 @@ describe("Android agent session projection", () => {
     })
     expect(state.lastCursor).toBe("cur_7")
 
+    state = reduceAgentSession(state, {
+      type: "event.received",
+      value: frame(12, "turn.output", { text: "Global sequence gaps belong to other sessions." }),
+    })
+    expect(state.transcript.at(-1)).toMatchObject({
+      type: "output",
+      text: "Global sequence gaps belong to other sessions.",
+    })
+    expect(state.lastCursor).toBe("cur_12")
+
     const crossed = reduceAgentSession(state, {
       type: "event.received",
-      value: { ...frame(8, "turn.output", { text: "Wrong session" }), sessionID: "ses_android_2" },
+      value: { ...frame(13, "turn.output", { text: "Wrong session" }), sessionID: "ses_android_2" },
     })
     expect(crossed).toEqual(state)
   })
@@ -213,6 +224,23 @@ describe("Android agent session projection", () => {
 })
 
 describe("Android agent session persistence", () => {
+  test("persists negotiated backend metadata and deduplicates replayed events", async () => {
+    const data = memory()
+    let state = reduceAgentSession(initialAgentSessionState("ses_android_1"), {
+      type: "backend.connected",
+      version: "codex 2.0.0",
+      mode: "app_server",
+      capabilities: ["workspace", "sessions", "turns", "replay", "cancel"],
+    })
+    state = reduceAgentSession(state, { type: "event.received", value: frame(1, "turn.output", { text: "once" }) })
+    state = reduceAgentSession(state, { type: "event.received", value: frame(1, "turn.output", { text: "duplicate" }) })
+    await writeAgentSession(data.storage, workspace, state)
+    const restored = await readAgentSession(data.storage, workspace)
+    expect(restored).toMatchObject({ backendVersion: "codex 2.0.0", backendMode: "app_server", lastSequence: 1 })
+    expect(restored?.capabilities).toContain("cancel")
+    expect(restored?.transcript.filter((item) => item.type === "output")).toHaveLength(1)
+  })
+
   test("persists a session-bound redacted projection without interaction commands", async () => {
     const data = memory()
     let state = reduceAgentSession(initialAgentSessionState("ses_android_1"), {
@@ -232,7 +260,7 @@ describe("Android agent session persistence", () => {
     })
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: frame(5, "interaction.question.requested", {
+      value: frame(2, "interaction.question.requested", {
         interaction: {
           id: "int_question_1",
           revision: 1,
@@ -248,13 +276,13 @@ describe("Android agent session persistence", () => {
     })
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: frame(2, "turn.reasoning", {
+      value: frame(3, "turn.reasoning", {
         text: "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key-secret\n-----END OPENSSH PRIVATE KEY-----",
       }),
     })
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: frame(3, "tool.updated", {
+      value: frame(4, "tool.updated", {
         tool: {
           id: "tol_android_1",
           title: "Deploy token=tool-secret",
@@ -266,7 +294,7 @@ describe("Android agent session persistence", () => {
     })
     state = reduceAgentSession(state, {
       type: "event.received",
-      value: frame(4, "interaction.approval.requested", {
+      value: frame(5, "interaction.approval.requested", {
         interaction: {
           id: "int_approval_1",
           revision: 1,
@@ -412,6 +440,29 @@ describe("Android agent session persistence", () => {
     expect((await readAgentSession(data.storage, workspace))?.transcript.at(-1)?.id).toBe(
       state.transcript.at(-1)?.id,
     )
+  })
+
+  test("keeps concurrent provider interactions available until each one is resolved", () => {
+    const state = [
+      frame(1, "interaction.approval.requested", {
+        interaction: { id: "int_permissions", revision: 1, title: "Allow workspace access" },
+      }),
+      frame(2, "interaction.approval.requested", {
+        interaction: { id: "int_command", revision: 1, title: "Create project", command: "mkdir project" },
+      }),
+    ].reduce(
+      (current, value) => reduceAgentSession(current, { type: "event.received", value }),
+      initialAgentSessionState("ses_android_1"),
+    )
+
+    expect(pendingInteraction(state.transcript)?.id).toBe("int_command")
+    expect(pendingInteraction(state.transcript, "int_command")?.id).toBe("int_permissions")
+    const resolved = reduceAgentSession(state, {
+      type: "interaction.resolved",
+      id: "int_command",
+      decision: "approved",
+    })
+    expect(pendingInteraction(resolved.transcript)?.id).toBe("int_permissions")
   })
 
   test("uses opaque workspace and remote-session scope and refuses a different expected session", async () => {

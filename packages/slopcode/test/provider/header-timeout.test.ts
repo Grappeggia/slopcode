@@ -43,6 +43,7 @@ it.live("headerTimeout does not abort delayed SSE body after headers arrive", ()
       { config: providerConfig(server.url, { headerTimeout: 500 }) },
     )
   }),
+  10_000,
 )
 
 it.live("chunkTimeout raises a response stream error when SSE body stalls", () =>

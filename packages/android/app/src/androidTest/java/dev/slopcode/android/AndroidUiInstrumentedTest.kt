@@ -241,13 +241,12 @@ class AndroidUiInstrumentedTest {
       assertTrue("Completion is not exposed as a polite live status.", complete.optBoolean("completionLive"))
 
       recreateWithFakeBridge(scenario)
-      waitFor(scenario) { agentState(scenario).optBoolean("restored") }
+      waitFor(scenario) { agentState(scenario).optString("phase") == "completed" }
       val restored = agentState(scenario)
-      assertTrue("The recreated WebView did not restore a detached snapshot: " + restored, restored.optBoolean("detached"))
-      assertTrue("The detached transcript lost completion.", restored.getJSONArray("entries").toString().contains("completion"))
-      assertTrue("The detached composer is enabled.", restored.optBoolean("promptDisabled"))
+      assertFalse("The recreated WebView remained detached: " + restored, restored.optBoolean("detached"))
+      assertTrue("The attached transcript lost completion.", restored.getJSONArray("entries").toString().contains("completion"))
       assertEquals("screenshots", restored.optString("review"))
-      assertEquals("A detached restore started a new remote session.", 0, restored.optInt("starts"))
+      assertEquals("The restore did not open exactly one bridge for reattachment.", 1, restored.optInt("starts"))
     }
   }
 
@@ -834,30 +833,35 @@ class AndroidUiInstrumentedTest {
           }
           if (request.method === 'sshCodexAppServerStatus') result = { executable: 'codex', state: 'not_installed', ready: false, handshake: 'not_run', message: 'Install Codex before its App Server can start.', output: 'codex: not found', preflight: { agent: 'codex-cli', executable: 'codex', exitCode: 127, output: 'not found', ok: false } };
           if (request.method === 'sshAuthStatus') result = { agent: call.agent, executable: call.agent, exitCode: 0, output: call.agent === 'opencode-cli' ? 'sign in required' : 'signed in', ok: true, loggedIn: call.agent !== 'opencode-cli' };
+          if (request.method === 'sshOrchestratorPreflight') result = { executable: 'slopcode', version: '1.0.0', ok: true, exitCode: 0, error: null };
+          if (request.method === 'sshOrchestratorInstall') result = { executable: 'slopcode', package: 'slopcode@latest', operation: 'install_or_upgrade', ok: true, exitCode: 0, error: null };
           if (request.method === 'sshOrchestratorStart') { window.__SLOPCODE_TEST_ORCHESTRATOR_STARTS += 1; channel = 'ssh_orchestrator'; result = { id: channel, status: 'started' }; }
           if (request.method === 'sshOrchestratorInput') {
+            if (frame.type === 'bridge.hello') line({ kind: 'response', requestID: frame.requestID, type: 'bridge.hello', bridgeVersion: '1.0.0', protocolVersion: 'v1', agent: 'opencode', backendVersion: 'opencode fixture 1.0.0', backendMode: 'acp', capabilities: ['workspace', 'sessions', 'turns', 'approvals', 'questions', 'plans', 'artifacts', 'replay', 'cancel', 'retry', 'steer'] });
             if (frame.type === 'workspace.open') line({ kind: 'response', requestID: frame.requestID, workspace: { id: 'wrk_android' } });
-            if (frame.type === 'session.create') line({ kind: 'response', requestID: frame.requestID, sessionID: 'ssh_fixture' });
+            if (frame.type === 'session.create') line({ kind: 'response', requestID: frame.requestID, sessionID: 'ses_fixture' });
+            if (frame.type === 'session.attach') line({ kind: 'response', requestID: frame.requestID, type: 'session.attach', attached: true, snapshot: { session: { id: 'ses_fixture', state: 'completed', backendVersion: 'opencode fixture 1.0.0', backendMode: 'acp', capabilities: ['workspace', 'sessions', 'turns', 'approvals', 'questions', 'plans', 'artifacts', 'replay', 'cancel', 'retry', 'steer'], lastTurnID: 'trn_fixture', lastCursor: 'cur_complete' }, pending: [], artifacts: [], authoritative: true } });
+            if (frame.type === 'event.replay') line({ kind: 'response', requestID: frame.requestID, type: 'event.replay', events: [], hasMore: false });
             if (frame.type === 'turn.create' || typeof frame.prompt === 'string') {
-              line({ kind: 'response', requestID: frame.requestID, turnID: 'turn_fixture' });
-              line({ kind: 'event', cursor: 'cur_output', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.output', text: 'Inspecting the workspace.' }, 10);
-              line({ kind: 'event', cursor: 'cur_reasoning', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.reasoning', text: 'Use the smallest safe fixture.' }, 15);
-              line({ kind: 'event', cursor: 'cur_plan', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'plan.available', plan: { id: 'plan_fixture', content: '1. Create a fixture app\\n2. Verify the rendered result' } }, 20);
-              line({ kind: 'event', cursor: 'cur_tool', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'in_progress', kind: 'edit', metadata: { path: '/home/marcos/temp/fixture.ts', progress: '1/2' } } }, 25);
-              line({ kind: 'event', cursor: 'cur_approval', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'interaction.approval.requested', interaction: { id: 'approval_fixture', revision: 1, title: 'Create app files?', command: 'mkdir -p ./fixture-app', cwd: '/home/marcos/temp', reason: 'The agent needs to create the requested local app.', risk: 'low' } }, 30);
+              line({ kind: 'response', requestID: frame.requestID, turnID: 'trn_fixture' });
+              line({ kind: 'event', cursor: 'cur_output', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'turn.output', text: 'Inspecting the workspace.' }, 10);
+              line({ kind: 'event', cursor: 'cur_reasoning', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'turn.reasoning', text: 'Use the smallest safe fixture.' }, 15);
+              line({ kind: 'event', cursor: 'cur_plan', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'plan.available', plan: { id: 'plan_fixture', content: '1. Create a fixture app\\n2. Verify the rendered result' } }, 20);
+              line({ kind: 'event', cursor: 'cur_tool', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'in_progress', kind: 'edit', metadata: { path: '/home/marcos/temp/fixture.ts', progress: '1/2' } } }, 25);
+              line({ kind: 'event', cursor: 'cur_approval', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'interaction.approval.requested', interaction: { id: 'approval_fixture', revision: 1, title: 'Create app files?', command: 'mkdir -p ./fixture-app', cwd: '/home/marcos/temp', reason: 'The agent needs to create the requested local app.', risk: 'low' } }, 30);
             }
             if (frame.type === 'interaction.approval.reply') {
               line({ kind: 'response', requestID: frame.requestID });
-              line({ kind: 'event', cursor: 'cur_question', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'interaction.question.requested', interaction: { id: 'question_fixture', revision: 1, prompt: 'Which language should the fixture use?', allowFreeform: true } }, 20);
+              line({ kind: 'event', cursor: 'cur_question', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'interaction.question.requested', interaction: { id: 'question_fixture', revision: 1, prompt: 'Which language should the fixture use?', allowFreeform: true } }, 20);
             }
             if (frame.type === 'interaction.question.reply') {
               line({ kind: 'response', requestID: frame.requestID });
-              line({ kind: 'event', cursor: 'cur_tool_done', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'completed', kind: 'edit', metadata: { path: '/home/marcos/temp/fixture.ts', progress: '2/2' } } }, 10);
-              line({ kind: 'event', cursor: 'cur_test', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'test_fixture', title: 'Run fixture tests', status: 'completed', kind: 'execute', metadata: { test: 'Android UI', result: 'passed', exitCode: '0' } } }, 15);
-              line({ kind: 'event', cursor: 'cur_diff', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'diff_fixture', name: 'fixture.diff', path: '/home/marcos/temp/fixture.diff', kind: 'diff', size: 128 } }, 20);
-              line({ kind: 'event', cursor: 'cur_file', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'file_fixture', name: 'fixture.ts', path: '/home/marcos/temp/fixture.ts', kind: 'file', size: 256 } }, 25);
-              line({ kind: 'event', cursor: 'cur_image', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'image_fixture', name: 'fixture.png', path: '/home/marcos/temp/fixture.png', kind: 'image', size: 512, mime: 'image/png' } }, 30);
-              line({ kind: 'event', cursor: 'cur_complete', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.completed', status: 'completed', message: 'Fixture verified.' }, 35);
+              line({ kind: 'event', cursor: 'cur_tool_done', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'completed', kind: 'edit', metadata: { path: '/home/marcos/temp/fixture.ts', progress: '2/2' } } }, 10);
+              line({ kind: 'event', cursor: 'cur_test', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'tool.updated', tool: { id: 'test_fixture', title: 'Run fixture tests', status: 'completed', kind: 'execute', metadata: { test: 'Android UI', result: 'passed', exitCode: '0' } } }, 15);
+              line({ kind: 'event', cursor: 'cur_diff', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'artifact.created', artifact: { id: 'diff_fixture', name: 'fixture.diff', path: '/home/marcos/temp/fixture.diff', kind: 'diff', size: 128 } }, 20);
+              line({ kind: 'event', cursor: 'cur_file', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'artifact.created', artifact: { id: 'file_fixture', name: 'fixture.ts', path: '/home/marcos/temp/fixture.ts', kind: 'file', size: 256 } }, 25);
+              line({ kind: 'event', cursor: 'cur_image', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'artifact.created', artifact: { id: 'image_fixture', name: 'fixture.png', path: '/home/marcos/temp/fixture.png', kind: 'image', size: 512, mime: 'image/png' } }, 30);
+              line({ kind: 'event', cursor: 'cur_complete', sessionID: 'ses_fixture', turnID: 'trn_fixture', type: 'turn.completed', status: 'completed', message: 'Fixture verified.' }, 35);
             }
             result = true;
           }

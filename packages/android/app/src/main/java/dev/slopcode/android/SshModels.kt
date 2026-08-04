@@ -135,6 +135,10 @@ internal object SshCommand {
 
   fun codexAppServer(directory: String) = command(directory, "codex", "app-server", "--stdio")
 
+  fun orchestratorVersion(directory: String) = command(directory, "slopcode", "--version")
+
+  fun orchestratorInstall(directory: String) = script(directory, npmInstallFixed("slopcode@latest"))
+
   fun orchestrator(directory: String) = command(directory, "slopcode", "remote-orchestrator", "--stdio")
 
   private fun command(directory: String, vararg args: String) = script(directory, "exec ${args.joinToString(" ") { argument(it) }}")
@@ -169,6 +173,19 @@ internal object SshCommand {
       "command -v npm >/dev/null 2>&1 || { printf '%s\\n' 'npm installation did not provide an executable npm.' >&2; exit 127; }; " +
       "npm install --prefix \"\u0024HOME/.local\" -g ${argument(packageName)}; " +
       "else printf '%s\\n' 'Install npm or Node.js on this computer before installing this agent.' >&2; exit 127; fi"
+
+  private fun npmInstallFixed(packageName: String) =
+    "if command -v npm >/dev/null 2>&1; then " +
+      "npm install --prefix \"\u0024HOME/.local\" -g ${argument(packageName)}; " +
+      "elif command -v apt-get >/dev/null 2>&1; then " +
+      "if [ \"\u0024(id -u)\" -eq 0 ]; then " +
+      "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm; " +
+      "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then " +
+      "sudo -n sh -c \"DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm\"; " +
+      "else printf '%s\\n' 'Installing npm requires administrator access on this computer.' >&2; exit 126; fi; " +
+      "command -v npm >/dev/null 2>&1 || { printf '%s\\n' 'npm installation did not provide an executable npm.' >&2; exit 127; }; " +
+      "npm install --prefix \"\u0024HOME/.local\" -g ${argument(packageName)}; " +
+      "else printf '%s\\n' 'Install npm or Node.js on this computer before installing Slopcode.' >&2; exit 127; fi"
 
   private fun curlInstall(value: String) =
     "if command -v curl >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then " +
@@ -207,6 +224,9 @@ internal object SshExecReader {
     val output = ByteArrayOutputStream()
     val buffer = ByteArray(4 * 1024)
     while (true) {
+      if (!closed() && System.currentTimeMillis() >= deadline) {
+        throw SshTransportException("exec_timeout", "Remote CLI preflight timed out.")
+      }
       val available = input.available()
       if (available > 0) {
         val count = input.read(buffer, 0, minOf(buffer.size, available))
@@ -216,9 +236,6 @@ internal object SshExecReader {
         continue
       }
       if (closed()) break
-      if (System.currentTimeMillis() >= deadline) {
-        throw SshTransportException("exec_timeout", "Remote CLI preflight timed out.")
-      }
       Thread.sleep(20)
     }
     return output.toString(Charsets.UTF_8.name()).take(16 * 1024)
@@ -317,11 +334,88 @@ internal data class SshVersionRequest(val agent: SshAgent, val directory: String
 
 internal data class SshOrchestratorRequest(val directory: String) {
   companion object {
+    fun parse(raw: String): SshOrchestratorRequest? {
+      if (raw.toByteArray(Charsets.UTF_8).size > MAX_ORCHESTRATOR_REQUEST_BYTES || raw.contains('\u0000')) return null
+      return runCatching { JSONObject(raw) }.getOrNull()?.let(::parse)
+    }
+
     fun parse(value: JSONObject): SshOrchestratorRequest? {
-      val directory = SshPath.normalize(value.optString("directory", "/")) ?: return null
+      if (value.keys().asSequence().toSet() != setOf("directory")) return null
+      val raw = value.opt("directory") as? String ?: return null
+      val directory = SshPath.normalize(raw) ?: return null
       return SshOrchestratorRequest(directory)
     }
   }
+}
+
+internal class SshOrchestratorNative(
+  private val workspace: SshWorkspaceScope,
+  private val exec: (String, Long) -> Triple<String, String, Int>,
+) {
+  fun preflight(raw: String): JSONObject {
+    val request = SshOrchestratorRequest.parse(raw)
+      ?: throw SshTransportException("invalid_configuration", "Remote orchestrator preflight configuration is invalid.")
+    val directory = workspace.require(request.directory)
+    val result = exec(SshCommand.orchestratorVersion(directory), PREFLIGHT_TIMEOUT_MS)
+    return SshOrchestratorResult.preflight(result.first, result.second, result.third)
+  }
+
+  fun install(raw: String): JSONObject {
+    val request = SshOrchestratorRequest.parse(raw)
+      ?: throw SshTransportException("invalid_configuration", "Remote orchestrator setup configuration is invalid.")
+    val directory = workspace.require(request.directory)
+    val result = exec(SshCommand.orchestratorInstall(directory), INSTALL_TIMEOUT_MS)
+    return SshOrchestratorResult.install(result.third)
+  }
+
+  companion object {
+    private const val PREFLIGHT_TIMEOUT_MS = 15_000L
+    private const val INSTALL_TIMEOUT_MS = 120_000L
+  }
+}
+
+internal object SshOrchestratorResult {
+  fun preflight(stdout: String, stderr: String, exitCode: Int): JSONObject {
+    val version = if (exitCode == 0) version("$stdout\n$stderr") else null
+    val error = when {
+      exitCode == 127 -> error("missing_executable", "Slopcode is not installed or is not on PATH.")
+      exitCode == 126 -> error("permission_denied", "Slopcode exists but cannot be executed by this SSH account.")
+      exitCode != 0 -> error("unavailable", "Slopcode preflight failed with exit code ${exitCode.coerceIn(-1, 255)}.")
+      version == null -> error("invalid_version", "Slopcode returned an invalid or unsupported version response.")
+      else -> null
+    }
+    return JSONObject()
+      .put("executable", "slopcode")
+      .put("version", version ?: JSONObject.NULL)
+      .put("ok", error == null)
+      .put("exitCode", exitCode.coerceIn(-1, 255))
+      .put("error", error ?: JSONObject.NULL)
+  }
+
+  fun install(exitCode: Int): JSONObject {
+    val error = when (exitCode) {
+      0 -> null
+      126 -> error("permission_denied", "Installing Slopcode requires administrator access on this computer.")
+      127 -> error("dependency_missing", "npm or Node.js is unavailable on this computer.")
+      else -> error("install_failed", "Slopcode installation failed with exit code ${exitCode.coerceIn(-1, 255)}.")
+    }
+    return JSONObject()
+      .put("executable", "slopcode")
+      .put("package", "slopcode@latest")
+      .put("operation", "install_or_upgrade")
+      .put("ok", error == null)
+      .put("exitCode", exitCode.coerceIn(-1, 255))
+      .put("error", error ?: JSONObject.NULL)
+  }
+
+  private fun version(value: String) =
+    Regex("(?<![0-9])v?([0-9]+(?:\\.[0-9]+){1,2}(?:[-+][0-9A-Za-z.-]+)?)(?![0-9])")
+      .find(value.take(MAX_ORCHESTRATOR_OUTPUT_CHARS))
+      ?.groupValues
+      ?.get(1)
+      ?.take(MAX_ORCHESTRATOR_VERSION_CHARS)
+
+  private fun error(code: String, message: String) = JSONObject().put("code", code).put("message", message)
 }
 
 internal data class SshTrustRequest(val profile: String, val fingerprint: String) {
@@ -372,3 +466,6 @@ internal fun validProfile(value: String) =
 private const val MAX_SECRET_LENGTH = 16 * 1024
 private const val MAX_PRIVATE_KEY_BYTES = 128 * 1024
 private const val MAX_PROMPT_BYTES = 128 * 1024
+private const val MAX_ORCHESTRATOR_REQUEST_BYTES = 8 * 1024
+private const val MAX_ORCHESTRATOR_OUTPUT_CHARS = 16 * 1024
+private const val MAX_ORCHESTRATOR_VERSION_CHARS = 128

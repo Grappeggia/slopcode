@@ -96,8 +96,11 @@ function transport() {
     },
     orchestratorInput: async (raw) => {
       const value = JSON.parse(raw) as Record<string, unknown>
+      if (value.type === "bridge.hello") response(value, { type: "bridge.hello", bridgeVersion: "1.0.0", protocolVersion: "v1", agent: "codex", backendVersion: "codex fixture 1.0.0", backendMode: "app_server", capabilities: ["workspace", "sessions", "turns", "replay", "cancel", "retry", "steer"] })
       if (value.type === "workspace.open") response(value, { workspace: { id: "wrk_android" } })
       if (value.type === "session.create") response(value, { sessionID: "ses_dom_fixture" })
+      if (value.type === "session.attach") response(value, { type: "session.attach", attached: true, snapshot: { session: { id: "ses_dom_fixture", state: "completed", backendVersion: "codex fixture 1.0.0", backendMode: "app_server", capabilities: ["workspace", "sessions", "turns", "replay", "cancel", "retry", "steer"], lastTurnID: "trn_dom_fixture", lastCursor: "cur_31" }, pending: [], artifacts: [], authoritative: true } })
+      if (value.type === "event.replay") response(value, { type: "event.replay", events: [], hasMore: false })
       if (value.type === "turn.create") turn = value
       if (value.type === "interaction.approval.reply" || value.type === "interaction.question.reply") {
         replies.push(value)
@@ -344,14 +347,14 @@ async function journey() {
 
   Array.from({ length: 18 }, (_, index) => index).forEach((index) => {
     remote.event(index % 2 ? "turn.output" : "turn.reasoning", {
-      sequence: 20 + index,
+      sequence: 8 + index,
       text: `Streaming activity ${index} ${"detail ".repeat(20)}`,
     })
   })
   await wait(() => scroll.scrollHeight > scroll.clientHeight, "The transcript did not become scrollable")
   scroll.scrollTop = 0
   scroll.dispatchEvent(new Event("scroll"))
-  remote.event("turn.output", { sequence: 40, text: "New activity while reading history." })
+  remote.event("turn.output", { sequence: 26, text: "New activity while reading history." })
   await wait(() => !!document.querySelector("[data-agent-new-activity]"), "New activity control was not shown")
   const beforeJump = scroll.scrollTop
   document.querySelector<HTMLButtonElement>("[data-agent-new-activity]")?.click()
@@ -362,7 +365,7 @@ async function journey() {
   mark("scroll-follow", beforeJump <= 96 && !document.querySelector("[data-agent-new-activity]"))
 
   remote.event("tool.updated", {
-    sequence: 8,
+    sequence: 27,
     tool: {
       id: "tol_test_fixture",
       title: "Run fixture tests",
@@ -372,7 +375,7 @@ async function journey() {
     },
   })
   remote.event("artifact.created", {
-    sequence: 9,
+    sequence: 28,
     artifact: {
       id: "art_diff_fixture",
       name: "fixture.diff",
@@ -382,7 +385,7 @@ async function journey() {
     },
   })
   remote.event("artifact.created", {
-    sequence: 10,
+    sequence: 29,
     artifact: {
       id: "art_file_fixture",
       name: "fixture.ts",
@@ -392,7 +395,7 @@ async function journey() {
     },
   })
   remote.event("artifact.created", {
-    sequence: 11,
+    sequence: 30,
     artifact: {
       id: "art_image_fixture",
       name: "fixture.png",
@@ -418,7 +421,7 @@ async function journey() {
       document.querySelector('[data-review-item="artifact"]')?.textContent?.includes("preview unavailable") === true,
   )
 
-  remote.event("turn.completed", { sequence: 12, status: "completed", message: "Fixture verified." })
+  remote.event("turn.completed", { sequence: 31, status: "completed", message: "Fixture verified." })
   await wait(
     () => document.querySelector('[data-agent-entry="completion"]')?.textContent?.includes("Fixture verified.") === true,
     "Completion was not rendered",
@@ -438,19 +441,28 @@ async function journey() {
   const before = document.querySelectorAll("[data-agent-entry]").length
   dispose()
   const restore = mount()
-  await wait(() => !!document.querySelector("[data-agent-restored]"), "The detached snapshot was not restored")
-  const restored = document.querySelector<HTMLElement>("[data-agent-restored]")
+  await wait(() => document.querySelector("[data-agent-workspace]")?.getAttribute("data-agent-phase") === "completed", "The remote session was not reattached")
   mark(
-    "detached-restore",
-    remote.starts() === 1 &&
-      restored?.textContent?.includes("not attached") === true &&
+    "attached-restore",
+    remote.starts() === 2 &&
+      !document.querySelector("[data-agent-restored]") &&
       document.querySelectorAll("[data-agent-entry]").length === before &&
-      document.querySelector<HTMLTextAreaElement>("[data-agent-prompt]")?.disabled === true &&
       document.querySelector('[data-review-tab="screenshots"]')?.getAttribute("aria-selected") === "true" &&
       document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Approved") === true &&
       document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("not saved for security") === true &&
-      !document.querySelector("[data-ssh-active-session]"),
+      document.querySelector("[data-ssh-active-session]")?.getAttribute("data-ssh-active-session") === "ses_dom_fixture",
   )
+  if (new URLSearchParams(location.search).has("visual")) {
+    mark("fixture-complete", true)
+    void restore
+    return
+  }
+  document.querySelector<HTMLButtonElement>('[data-agent-action="new-session"]')?.click()
+  await wait(
+    () => remote.starts() === 3 && document.querySelector("[data-agent-workspace]")?.getAttribute("data-agent-phase") === "ready",
+    "A clean session did not start after the completed session",
+  )
+  mark("new-session", document.querySelectorAll("[data-agent-entry]").length === 0)
   mark("fixture-complete", true)
   void restore
 }

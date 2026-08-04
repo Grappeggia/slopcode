@@ -101,6 +101,29 @@ function control(value: unknown) {
   return /^(thread|turn|item)\.(started|completed|failed)$/.test(value.type)
 }
 
+function tool(agent: Agent, value: string): ACPEvent | undefined {
+  if (agent !== "antigravity") return
+  try {
+    const parsed: unknown = JSON.parse(value.trim())
+    if (!record(parsed) || parsed.event !== "step_update" || !record(parsed.step_update)) return
+    const update = parsed.step_update
+    if (update.step_type !== "tool" || !record(update.tool_info)) return
+    const name = text(update.tool_name) || text(update.tool_info.name) || "Tool"
+    const state = text(update.state).toLowerCase()
+    const error = record(update.tool_info.error) ? text(update.tool_info.error.message) : ""
+    const key = text(update.step_id) || text(update.id) || text(update.tool_call_id) || text(update.tool_info.id) || name
+    return {
+      type: "tool",
+      id: `antigravity:${key}`,
+      title: error ? `${name}: ${error}` : name.replaceAll("_", " "),
+      status: error || state === "failed" || state === "error" ? "failed" : state === "done" || state === "completed" || state === "success" ? "completed" : state === "active" || state === "running" ? "in_progress" : "pending",
+      kind: /(?:write|edit|patch)/i.test(name) ? "edit" : /(?:read|list|view)/i.test(name) ? "read" : /search/i.test(name) ? "search" : "execute",
+    }
+  } catch {
+    return
+  }
+}
+
 function line(agent: Agent, value: string) {
   const trimmed = value.trim()
   if (!trimmed) return ""
@@ -184,6 +207,20 @@ export async function connect(input: {
         let stderr = ""
         let settled = false
         let dropped = false
+        const seen = new Set<string>()
+        const emit = (value: string) => {
+          if (!value || seen.has(value)) return
+          seen.add(value)
+          input.emit({ type: "output", text: value, nativeID })
+        }
+        const emitLine = (value: string) => {
+          const event = tool(input.agent, value)
+          if (event) {
+            input.emit(event)
+            return
+          }
+          emit(line(input.agent, value))
+        }
         const done = (value: { code: number | null; error?: string }) => {
           if (settled) return
           settled = true
@@ -192,8 +229,7 @@ export async function connect(input: {
         }
         const flush = () => {
           if (dropped) return
-          const value = line(input.agent, buffer.toString("utf8"))
-          if (value) input.emit({ type: "output", text: value, nativeID })
+          emitLine(buffer.toString("utf8"))
           buffer = Buffer.alloc(0)
         }
         stdout.on("data", (chunk: Buffer) => {
@@ -222,9 +258,9 @@ export async function connect(input: {
               buffer = Buffer.alloc(0)
               continue
             }
-            const output = line(input.agent, Buffer.concat([buffer, value]).toString("utf8").replace(/\r$/, ""))
+            const output = Buffer.concat([buffer, value]).toString("utf8").replace(/\r$/, "")
             buffer = Buffer.alloc(0)
-            if (output) input.emit({ type: "output", text: output, nativeID })
+            emitLine(output)
           }
         })
         stderrStream.on("data", (chunk: Buffer) => {

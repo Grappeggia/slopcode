@@ -57,6 +57,7 @@ type Setup = {
 }
 
 type AgentStatus = "Ready" | "Needs setup" | "Not installed" | "Checking"
+type OrchestratorSetup = { state: "available" | "running" | "failed" | "complete"; version?: string; message?: string }
 
 const MAX_SETUP_OUTPUT = 16 * 1024
 
@@ -206,6 +207,7 @@ export function SshConnect(props: Props) {
   const [setupInput, setSetupInput] = createSignal("")
   const [checkingLogin, setCheckingLogin] = createSignal(false)
   const [agentStatuses, setAgentStatuses] = createSignal<Partial<Record<SshAgent, AgentStatus>>>({})
+  const [orchestratorSetup, setOrchestratorSetup] = createSignal<OrchestratorSetup>()
   const credentials = createSshCredentialLoader(props.ssh)
   const updates = appStorage()()
   const connections = createSshConnectionGate(props.ssh)
@@ -742,6 +744,19 @@ export function SshConnect(props: Props) {
       return false
     }
     try {
+      if (!props.ssh.orchestratorPreflight) {
+        setError("This Android build does not support the native remote session service.")
+        return false
+      }
+      const bridge = await props.ssh.orchestratorPreflight(folder)
+      if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
+      if (!bridge.ok) {
+        const missing = bridge.error?.code === "missing_executable"
+        setOrchestratorSetup({ state: missing ? "available" : "failed", message: bridge.error?.message ?? "The remote session service is unavailable." })
+        setError(missing ? "" : bridge.error?.message ?? "The remote session service could not start.")
+        return false
+      }
+      setOrchestratorSetup({ state: "complete", version: bridge.version })
       const server = selected === "codex-cli" ? await props.ssh.codexAppServerStatus(folder) : undefined
       const result = server?.preflight ?? (await props.ssh.execVersion(selected, folder))
       if (!active(request, profile) || !connected() || directory() !== folder || agent() !== selected) return false
@@ -809,6 +824,34 @@ export function SshConnect(props: Props) {
     } catch (cause) {
       if (active(request, profile)) setError(cause instanceof Error ? cause.message : "Remote CLI preflight failed.")
       return false
+    }
+  }
+
+  const installOrchestrator = async () => {
+    const profile = selectedProfile()
+    const request = onboarding.current()
+    const folder = validSshPath(directory())
+    if (!profile || !folder || busy() || !props.ssh.orchestratorInstall) return
+    setBusy(true)
+    setError("")
+    setOrchestratorSetup({ state: "running", message: "Installing the remote session service…" })
+    try {
+      const result = await props.ssh.orchestratorInstall(folder)
+      if (!active(request, profile)) return
+      if (!result.ok) {
+        setOrchestratorSetup({ state: "failed", message: result.error?.message ?? "Installation failed." })
+        setError(result.error?.message ?? "Could not install the remote session service.")
+        return
+      }
+      const ready = await checkPreflight(true, request, profile)
+      if (ready && !setup()) await saveWorkspace(request, profile)
+    } catch (cause) {
+      if (!active(request, profile)) return
+      const message = cause instanceof Error ? cause.message : "Could not install the remote session service."
+      setOrchestratorSetup({ state: "failed", message })
+      setError(message)
+    } finally {
+      if (active(request, profile)) setBusy(false)
     }
   }
 
@@ -1457,6 +1500,33 @@ export function SshConnect(props: Props) {
                 )}
               </For>
             </section>
+            <Show when={orchestratorSetup()}>
+              {(current) => (
+                <section class="rounded-lg border border-border-weak-base bg-surface-base p-4 flex flex-col gap-3" aria-label="Remote session service" aria-live="polite">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 class="text-14-medium">Remote session service</h2>
+                      <p class="text-12-regular text-text-weak">
+                        {current().state === "complete"
+                          ? `Ready${current().version ? ` · ${current().version}` : ""}`
+                          : current().message ?? "Required to provide resumable, structured agent sessions."}
+                      </p>
+                    </div>
+                    <span class={`rounded-full px-2 py-1 text-12-regular ${current().state === "complete" ? "bg-surface-success-weak text-text-success" : current().state === "failed" ? "bg-surface-critical-weak text-text-critical" : "bg-surface-weak-base text-text-weak"}`}>
+                      {current().state === "complete" ? "Ready" : current().state === "running" ? "Installing" : "Needs setup"}
+                    </span>
+                  </div>
+                  <p class="text-12-regular text-text-weak">This installs Slopcode only as the private orchestration bridge. Your selected backend remains {agentName(agent())}.</p>
+                  <Show when={current().state !== "complete" && current().state !== "running"}>
+                    <button type="button" disabled={busy() || !props.ssh.orchestratorInstall} onClick={() => void installOrchestrator()} class="w-fit min-h-12 rounded-md bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">Install session service</button>
+                  </Show>
+                  <details>
+                    <summary class="cursor-pointer text-12-regular text-text-weak">Technical details</summary>
+                    <code class="mt-2 block rounded-md border border-border-weak-base px-3 py-2 text-12-regular">npm install --prefix "$HOME/.local" -g slopcode@latest</code>
+                  </details>
+                </section>
+              )}
+            </Show>
             <Show when={preflight()}>
               <pre class="rounded-md bg-surface-base p-3 whitespace-pre-wrap text-12-regular">{preflight()}</pre>
             </Show>

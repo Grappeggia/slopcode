@@ -1,4 +1,4 @@
-import { parseInteraction, record, type OrchestratorInteraction } from "./ssh-orchestrator"
+import { ORCHESTRATOR_CAPABILITIES, parseInteraction, record, type OrchestratorBackendMode, type OrchestratorCapability, type OrchestratorInteraction } from "./ssh-orchestrator"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 
 export const REVIEW_TABS = ["changes", "files", "tests", "screenshots"] as const
@@ -34,6 +34,10 @@ export type AgentSessionState = {
   draft: string
   selectedReview: ReviewTab
   lastCursor?: string
+  lastSequence?: number
+  backendVersion?: string
+  backendMode?: OrchestratorBackendMode
+  capabilities?: OrchestratorCapability[]
   transcript: AgentSessionEntry[]
 }
 
@@ -49,6 +53,7 @@ export type AgentSessionAction =
       answer?: string
     }
   | { type: "failure.added"; id: string; message: string }
+  | { type: "backend.connected"; version: string; mode: OrchestratorBackendMode; capabilities: OrchestratorCapability[] }
 
 type Storage = {
   getItem(key: string): Promise<string | null>
@@ -257,6 +262,14 @@ export function normalizeAgentSession(value: unknown): AgentSessionState {
   const draft = safe(value.draft, MAX_PERSISTED_TEXT, true) ?? ""
   const selectedReview = oneOf(value.selectedReview, REVIEW_TABS) as ReviewTab | undefined
   const lastCursor = text(value.lastCursor, 128)
+  const lastSequence = typeof value.lastSequence === "number" && Number.isSafeInteger(value.lastSequence) && value.lastSequence > 0 ? value.lastSequence : undefined
+  const backendVersion = safe(value.backendVersion, 256)
+  const backendMode = oneOf(value.backendMode, ["acp", "app_server", "cli", "streaming_cli", "sandboxed_cli"]) as OrchestratorBackendMode | undefined
+  const raw = Array.isArray(value.capabilities) ? value.capabilities : undefined
+  const capabilities = raw
+    ? raw.filter((item): item is OrchestratorCapability => typeof item === "string" && ORCHESTRATOR_CAPABILITIES.includes(item as OrchestratorCapability))
+    : undefined
+  const validCapabilities = capabilities && capabilities.length === raw?.length && capabilities.length ? capabilities : undefined
   const transcript = Array.isArray(value.transcript)
     ? value.transcript.flatMap((item) => {
         const next = persistedEntry(item)
@@ -269,11 +282,17 @@ export function normalizeAgentSession(value: unknown): AgentSessionState {
     draft,
     selectedReview: selectedReview ?? "changes",
     ...(lastCursor ? { lastCursor } : {}),
+    ...(lastSequence ? { lastSequence } : {}),
+    ...(backendVersion ? { backendVersion } : {}),
+    ...(backendMode ? { backendMode } : {}),
+    ...(validCapabilities ? { capabilities: validCapabilities } : {}),
     transcript,
   })
 }
 
 export function reduceAgentSession(state: AgentSessionState, action: AgentSessionAction): AgentSessionState {
+  if (action.type === "backend.connected")
+    return { ...state, backendVersion: action.version, backendMode: action.mode, capabilities: action.capabilities }
   if (action.type === "draft.changed") {
     const draft = text(action.value, MAX_DRAFT, true)
     return draft === undefined ? state : { ...state, draft }
@@ -310,7 +329,10 @@ export function reduceAgentSession(state: AgentSessionState, action: AgentSessio
   const remote = id(value.sessionID)
   if (!state.sessionID || !remote || remote !== state.sessionID) return state
   const cursor = text(value.cursor, 128)
-  const current = cursor ? { ...state, lastCursor: cursor } : state
+  const sequence = typeof value.sequence === "number" && Number.isSafeInteger(value.sequence) && value.sequence > 0 ? value.sequence : undefined
+  if (cursor && state.lastCursor === cursor) return state
+  if (sequence && state.lastSequence && sequence <= state.lastSequence) return state
+  const current = { ...state, ...(cursor ? { lastCursor: cursor } : {}), ...(sequence ? { lastSequence: sequence } : {}) }
   const type = text(value.type, 128)
   if (!type) return current
   if (type === "turn.output" || type === "turn.reasoning" || type === "turn.retry") {
@@ -399,6 +421,14 @@ export function reviewItems(transcript: AgentSessionEntry[], tab: ReviewTab) {
 export function lastPrompt(state: AgentSessionState) {
   const item = state.transcript.findLast((entry) => entry.type === "user")
   return item?.type === "user" ? item.text : undefined
+}
+
+export function pendingInteraction(transcript: AgentSessionEntry[], exclude?: string) {
+  const item = transcript.findLast(
+    (entry) =>
+      (entry.type === "approval" || entry.type === "question") && !entry.resolved && entry.id !== exclude,
+  )
+  return item?.type === "approval" || item?.type === "question" ? item.interaction : undefined
 }
 
 function hash(value: string) {

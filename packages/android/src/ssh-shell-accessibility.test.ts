@@ -66,7 +66,7 @@ describe("SSH shell accessibility regressions", () => {
     expect(agentic).toContain("writeAgentSession(storage, props.workspace, value)")
     expect(agentic).toContain("value.sessionID !== state().sessionID")
     expect(agentic).toContain("Local session snapshot restored")
-    expect(agentic).toContain("It is not attached")
+    expect(agentic).toContain("not attached")
     expect(agentic).toContain("Start new session")
     expect(state).toContain("MAX_PERSISTED_AGENT_SESSION_BYTES = 96 * 1024")
     expect(state).toContain("redactAgentSessionText")

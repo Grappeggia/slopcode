@@ -102,6 +102,7 @@ type Open = (input: {
   cwd: string
   emit: (event: ACPEvent) => void
   resume?: string
+  mode?: AgentOrchestrationBackendMode
 }) => Promise<Session>
 type RequestRecord = {
   requestID: string
@@ -110,6 +111,7 @@ type RequestRecord = {
   done: Promise<Frame>
   resolve: (frame: Frame) => void
   response?: Frame
+  store?: Store
 }
 type Code =
   | "bad_request"
@@ -152,6 +154,7 @@ export class Bridge {
   #stores = new Map<string, Store>()
   #preflights = new Map<AgentOrchestrationAgentID, Result>()
   #tasks = new Set<Promise<void>>()
+  #locks = new Map<string, Promise<void>>()
   #sequence = 0
   #closed = false
 
@@ -205,14 +208,21 @@ export class Bridge {
     return value
   }
 
+  private forget(record: RequestRecord) {
+    if (this.#requests.get(`request:${record.requestID}`) === record)
+      this.#requests.delete(`request:${record.requestID}`)
+    if (this.#requests.get(`idempotency:${record.idempotencyKey}`) === record)
+      this.#requests.delete(`idempotency:${record.idempotencyKey}`)
+  }
+
   private remember(record: RequestRecord) {
     this.#requests.set(`request:${record.requestID}`, record)
     this.#requests.set(`idempotency:${record.idempotencyKey}`, record)
-    while (new Set(this.#requests.values()).size > stateLimits.requests) {
-      const first = this.#requests.values().next().value as RequestRecord | undefined
+    const transient = () => [...new Set(this.#requests.values())].filter((item) => !item.store && item.response)
+    while (transient().length > stateLimits.requests) {
+      const first = transient()[0]
       if (!first) return
-      this.#requests.delete(`request:${first.requestID}`)
-      this.#requests.delete(`idempotency:${first.idempotencyKey}`)
+      this.forget(first)
     }
   }
 
@@ -246,6 +256,7 @@ export class Bridge {
         done: Promise.resolve(response),
         resolve: () => undefined,
         response,
+        store,
       })
     }
   }
@@ -258,6 +269,13 @@ export class Bridge {
         this.error("idempotency_conflict", "request ID or idempotency key was reused with a different payload", frame)
         return undefined
       }
+      if (
+        frame.type === "session.attach" &&
+        request.response &&
+        this.sessions.get(frame.sessionID) &&
+        !this.sessions.get(frame.sessionID)?.adapter
+      )
+        return request
       this.out(await request.done)
       return undefined
     }
@@ -295,8 +313,13 @@ export class Bridge {
         store.state.requests = previous
         throw error
       })
+      record.store = store
+      const retained = new Set(store.state.requests.map((item) => item.requestID))
+      for (const item of new Set(this.#requests.values()))
+        if (item.store === store && !retained.has(item.requestID)) this.forget(item)
     }
     record.response = value
+    if (!store) this.remember(record)
     record.resolve(value)
     this.out(value)
   }
@@ -338,6 +361,28 @@ export class Bridge {
       })),
       artifacts: session.record.artifacts,
       authoritative: true as const,
+    }
+  }
+
+  private key(frame: AgentOrchestrationRequest) {
+    if (frame.type === "session.create" || frame.type === "session.list") return `workspace:${frame.workspaceID}`
+    if ("sessionID" in frame) return `session:${frame.sessionID}`
+    return undefined
+  }
+
+  private async acquire(key: string | undefined) {
+    if (!key) return () => undefined
+    const previous = this.#locks.get(key) ?? Promise.resolve()
+    let release: () => void = () => undefined
+    const current = new Promise<void>((resolve) => (release = resolve))
+    const tail = previous.then(() => current)
+    this.#locks.set(key, tail)
+    await previous
+    return () => {
+      release()
+      void tail.finally(() => {
+        if (this.#locks.get(key) === tail) this.#locks.delete(key)
+      })
     }
   }
 
@@ -405,19 +450,32 @@ export class Bridge {
       })
     }
     if (event.type === "approval" && turnID) {
-      const id = decodeInteractionID(identifier("int", scoped(sessionID, event.id)))
-      const item = { id, kind: "approval" as const, revision: 1, nativeID: event.id, title: "Approval pending" }
-      this.interactions.set(id, { sessionID, kind: item.kind, revision: item.revision, nativeID: item.nativeID })
-      session.record.pending = [...session.record.pending.filter((value) => value.id !== id), item].slice(
-        -AgentOrchestrationLimits.maxPendingInteractions,
+      const previous = session.record.pending.find(
+        (item) =>
+          item.kind === "approval" &&
+          item.nativeID === event.id &&
+          item.revision < AgentOrchestrationLimits.maxInteractionRevision,
       )
+      const id = previous?.id ?? decodeInteractionID(identifier("int"))
+      const revision = (previous?.revision ?? 0) + 1
+      const item = { id, kind: "approval" as const, revision, nativeID: event.id, title: "Approval pending" }
+      this.interactions.set(id, { sessionID, kind: item.kind, revision: item.revision, nativeID: item.nativeID })
+      const pending = [
+        ...session.record.pending.filter(
+          (value) => value.id !== id && !(value.kind === "approval" && value.nativeID === event.id),
+        ),
+        item,
+      ].slice(-AgentOrchestrationLimits.maxPendingInteractions)
+      for (const value of session.record.pending)
+        if (!pending.some((next) => next.id === value.id)) this.interactions.delete(value.id)
+      session.record.pending = pending
       const cwd = await approvalCwd(session.workspace, event.cwd)
       return this.event(sessionID, {
         type: "interaction.approval.requested",
         turnID,
         interaction: {
           id,
-          revision: 1,
+          revision,
           title: clean(event.title, 512, "Approve tool call"),
           ...(event.command ? { command: clean(event.command, 4 * 1024) } : {}),
           ...(cwd ? { cwd } : {}),
@@ -427,18 +485,31 @@ export class Bridge {
       })
     }
     if (event.type === "question" && turnID) {
-      const id = decodeInteractionID(identifier("int", scoped(sessionID, event.id)))
-      const item = { id, kind: "question" as const, revision: 1, nativeID: event.id, title: "Input required" }
-      this.interactions.set(id, { sessionID, kind: item.kind, revision: item.revision, nativeID: item.nativeID })
-      session.record.pending = [...session.record.pending.filter((value) => value.id !== id), item].slice(
-        -AgentOrchestrationLimits.maxPendingInteractions,
+      const previous = session.record.pending.find(
+        (item) =>
+          item.kind === "question" &&
+          item.nativeID === event.id &&
+          item.revision < AgentOrchestrationLimits.maxInteractionRevision,
       )
+      const id = previous?.id ?? decodeInteractionID(identifier("int"))
+      const revision = (previous?.revision ?? 0) + 1
+      const item = { id, kind: "question" as const, revision, nativeID: event.id, title: "Input required" }
+      this.interactions.set(id, { sessionID, kind: item.kind, revision: item.revision, nativeID: item.nativeID })
+      const pending = [
+        ...session.record.pending.filter(
+          (value) => value.id !== id && !(value.kind === "question" && value.nativeID === event.id),
+        ),
+        item,
+      ].slice(-AgentOrchestrationLimits.maxPendingInteractions)
+      for (const value of session.record.pending)
+        if (!pending.some((next) => next.id === value.id)) this.interactions.delete(value.id)
+      session.record.pending = pending
       return this.event(sessionID, {
         type: "interaction.question.requested",
         turnID,
         interaction: {
           id,
-          revision: 1,
+          revision,
           prompt: clean(event.prompt, 4 * 1024, "Input required"),
           ...(event.options
             ? {
@@ -519,6 +590,7 @@ export class Bridge {
 
   private async workspace(frame: Extract<AgentOrchestrationRequest, { type: "workspace.open" }>) {
     let request: RequestRecord | undefined
+    const release = await this.acquire(`workspace-path:${frame.workspace.path}`)
     try {
       if (!supported(frame.agent.id)) {
         request = await this.begin(frame)
@@ -533,8 +605,19 @@ export class Bridge {
         this.#stores.set(workspace, store)
         this.hydrate(store)
       }
+      if (store.state.workspace.id !== frame.workspace.id)
+        throw new StateError("path_forbidden", "orchestrator workspace path is already bound to another workspace")
       request = await this.begin(frame)
-      if (!request) return
+      if (!request) {
+        const saved = this.#requests.get(`request:${frame.requestID}`)
+        if (
+          saved &&
+          saved === this.#requests.get(`idempotency:${frame.idempotencyKey}`) &&
+          saved.fingerprint === fingerprint(frame)
+        )
+          this.workspaces.set(frame.workspace.id, { path: workspace, store })
+        return
+      }
       this.workspaces.set(frame.workspace.id, { path: workspace, store })
       await this.complete(
         request,
@@ -560,6 +643,8 @@ export class Bridge {
               ? "bad_request"
               : "internal"
       await this.fail(request, code, error instanceof Error ? error.message : "workspace open failed", frame)
+    } finally {
+      release()
     }
   }
 
@@ -568,6 +653,7 @@ export class Bridge {
     if (frame.type === "workspace.open") return this.workspace(frame)
     const record = await this.begin(frame)
     if (!record) return
+    const release = await this.acquire(this.key(frame))
     try {
       if (frame.type === "bridge.hello") {
         const result = await this.preflight(frame.agent, this.root)
@@ -595,17 +681,18 @@ export class Bridge {
         if (opened.store.state.sessions.length >= stateLimits.sessions)
           return this.fail(record, "too_large", "workspace session journal is full", frame, opened.store)
         const id = decodeSessionID(identifier("ses"))
+        const check = this.#preflights.get(frame.agent)
         const pending: ACPEvent[] = []
         let stored: Stored | undefined
         const adapter = await this.open({
           agent: frame.agent,
           cwd: opened.path,
+          mode: check?.mode,
           emit: (event) => {
             if (stored) return this.enqueue(id, stored, event)
             pending.push(event)
           },
         })
-        const check = this.#preflights.get(frame.agent)
         const saved: SavedSession = {
           id,
           workspaceID: frame.workspaceID,
@@ -618,30 +705,38 @@ export class Bridge {
           pending: [],
           artifacts: [],
         }
-        stored = {
-          record: saved,
-          store: opened.store,
-          workspace: opened.path,
-          adapter,
-          queue: Promise.resolve(),
-          run: 0,
+        try {
+          stored = {
+            record: saved,
+            store: opened.store,
+            workspace: opened.path,
+            adapter,
+            queue: Promise.resolve(),
+            run: 0,
+          }
+          this.sessions.set(id, stored)
+          opened.store.state.sessions = [...opened.store.state.sessions, saved]
+          this.native.set(id, scoped(id, adapter.nativeID))
+          await this.complete(
+            record,
+            {
+              version: "v1",
+              kind: "response",
+              type: "session.create",
+              requestID: frame.requestID,
+              idempotencyKey: frame.idempotencyKey,
+              sessionID: id,
+              capabilities: adapter.capabilities,
+            },
+            opened.store,
+          )
+        } catch (error) {
+          this.sessions.delete(id)
+          opened.store.state.sessions = opened.store.state.sessions.filter((item) => item.id !== id)
+          this.native.delete(id)
+          await adapter.close()
+          throw error
         }
-        this.sessions.set(id, stored)
-        opened.store.state.sessions = [...opened.store.state.sessions, saved]
-        this.native.set(id, scoped(id, adapter.nativeID))
-        await this.complete(
-          record,
-          {
-            version: "v1",
-            kind: "response",
-            type: "session.create",
-            requestID: frame.requestID,
-            idempotencyKey: frame.idempotencyKey,
-            sessionID: id,
-            capabilities: adapter.capabilities,
-          },
-          opened.store,
-        )
         for (const event of pending) this.enqueue(id, stored, event)
         await stored.queue
         return
@@ -680,6 +775,7 @@ export class Bridge {
             agent: session.record.agent,
             cwd: session.workspace,
             resume: session.record.nativeID,
+            mode: session.record.backendMode,
             emit: (event) => {
               if (adapter) return this.enqueue(frame.sessionID, session, event)
               pending.push(event)
@@ -693,7 +789,8 @@ export class Bridge {
               adapter.version === "unknown" ? session.record.backendVersion : adapter.version,
             )
             session.record.capabilities = [...adapter.capabilities]
-            session.record.state = session.record.pending.length ? "waiting" : "idle"
+            if (session.record.state === "interrupted" || session.record.state === "detached")
+              session.record.state = session.record.pending.length ? "waiting" : "idle"
             for (const event of pending) this.enqueue(frame.sessionID, session, event)
             await session.queue
           } else await adapter.close()
@@ -906,7 +1003,7 @@ export class Bridge {
             requestID: frame.requestID,
             idempotencyKey: frame.idempotencyKey,
             events,
-            ...(hasMore ? { nextCursor: available[events.length]!.cursor } : {}),
+            ...(hasMore ? { nextCursor: events.at(-1)!.cursor } : {}),
             hasMore,
           },
           session.store,
@@ -924,6 +1021,8 @@ export class Bridge {
               ? "bad_request"
               : "internal"
       await this.fail(record, code, error instanceof Error ? error.message : "remote orchestrator failed", frame)
+    } finally {
+      release()
     }
   }
 
@@ -936,6 +1035,7 @@ export class Bridge {
     this.interactions.clear()
     this.#requests.clear()
     this.#events.clear()
+    this.#locks.clear()
   }
 }
 

@@ -59,7 +59,7 @@ const complete = async () => {
   })
   send({
     method: "item/agentMessage/delta",
-    params: { threadId: thread.id, turnId: "codex-turn", itemId: "codex-message", delta: "Fixture complete" },
+    params: { threadId: thread.id, turnId: "codex-turn", itemId: "codex-message", delta: " Fixture complete " },
   })
   send({
     method: "item/completed",
@@ -152,6 +152,33 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         _meta: null,
         message: "Confirm fixture?",
         requestedSchema: { type: "object", properties: { answer: { type: "string", enum: ["Yes"] } } },
+      },
+    })
+    send({
+      id: 74,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: thread.id,
+        turnId: "codex-turn",
+        itemId: "codex-large-command",
+        command: "x".repeat(70 * 1024),
+        cwd: process.cwd(),
+        reason: "Approve large fixture frame",
+      },
+    })
+    continue
+  }
+  if (value.method === "turn/steer") {
+    send({ id: value.id, result: { turnId: "codex-turn" } })
+    continue
+  }
+  if (value.method === "turn/interrupt") {
+    send({ id: value.id, result: {} })
+    send({
+      method: "turn/completed",
+      params: {
+        threadId: thread.id,
+        turn: { id: "codex-turn", items: [], status: "interrupted", error: null },
       },
     })
     continue

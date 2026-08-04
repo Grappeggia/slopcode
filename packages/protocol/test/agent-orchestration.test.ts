@@ -305,7 +305,7 @@ describe("agent orchestration protocol contracts", () => {
         requestID: "req_replay_1",
         idempotencyKey: "idem_replay_1",
         events: [event],
-        nextCursor: "cur_2",
+        nextCursor: "cur_1",
         hasMore: true,
       },
       {
@@ -468,7 +468,7 @@ describe("agent orchestration protocol contracts", () => {
     ).rejects.toThrow()
   })
 
-  test("accepts only ordered replay events with advancing cursors and idempotency fields", async () => {
+  test("accepts only ordered replay events with lossless continuation cursors and idempotency fields", async () => {
     const value = {
       version: "v1",
       kind: "response",
@@ -476,7 +476,7 @@ describe("agent orchestration protocol contracts", () => {
       requestID: "req_replay_1",
       idempotencyKey: "idem_replay_1",
       events: [event, { ...event, cursor: "cur_2", sequence: 2, text: "Finished." }],
-      nextCursor: "cur_3",
+      nextCursor: "cur_2",
       hasMore: true,
     }
 
@@ -498,7 +498,13 @@ describe("agent orchestration protocol contracts", () => {
     await expect(
       decode(AgentOrchestrationEventReplayResponse, {
         ...value,
-        nextCursor: "cur_0",
+        nextCursor: "cur_3",
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationEventReplayResponse, {
+        ...value,
+        nextCursor: "cur_1",
       }),
     ).rejects.toThrow()
     await expect(

@@ -40,6 +40,7 @@ internal class SshTransport(
   private val lock = Any()
   private val pending = ConcurrentHashMap<String, PendingHostKey>()
   private val workspace = SshWorkspaceScope()
+  private val orchestrator = SshOrchestratorNative(workspace, ::runExec)
   private var session: Session? = null
   private var connecting: Session? = null
   private val connectAttempt = SshConnectGeneration()
@@ -395,6 +396,10 @@ internal class SshTransport(
       }
   }
 
+  fun orchestratorPreflight(raw: String): JSONObject = orchestrator.preflight(raw)
+
+  fun orchestratorInstall(raw: String): JSONObject = orchestrator.install(raw)
+
   fun start(raw: String): JSONObject {
     val request = SshStartRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "SSH agent session configuration is invalid.")
@@ -453,7 +458,7 @@ internal class SshTransport(
   }
 
   fun orchestratorStart(raw: String): JSONObject {
-    val request = SshOrchestratorRequest.parse(JSONObject(raw))
+    val request = SshOrchestratorRequest.parse(raw)
       ?: throw SshTransportException("invalid_configuration", "Remote orchestrator configuration is invalid.")
     val directory = workspace.require(request.directory)
     val next = currentSession()
@@ -754,7 +759,7 @@ internal class SshTransport(
   private fun versionToken(value: String): String? =
     Regex("(?<![0-9])v?[0-9]+(?:\\.[0-9]+){1,2}(?:[-+][0-9A-Za-z.-]+)?").find(value)?.value
 
-  private fun runExec(command: String): Triple<String, String, Int> {
+  private fun runExec(command: String, timeout: Long = EXEC_TIMEOUT_MS): Triple<String, String, Int> {
     val next = currentSession()
     val channel = next.openChannel("exec") as ChannelExec
     val stderr = ByteArrayOutputStream()
@@ -762,7 +767,7 @@ internal class SshTransport(
     channel.setErrStream(stderr)
     return try {
       channel.connect(CONNECT_TIMEOUT_MS)
-      val deadline = System.currentTimeMillis() + EXEC_TIMEOUT_MS
+      val deadline = System.currentTimeMillis() + timeout.coerceIn(1_000L, INSTALL_TIMEOUT_MS)
       val stdout = SshExecReader.read(channel.inputStream, { channel.isClosed }, deadline)
       while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(20)
       if (!channel.isClosed) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm, symlink } from "node:fs/promises"
 import net from "node:net"
 import path from "node:path"
 import { PassThrough } from "node:stream"
@@ -10,7 +10,9 @@ import { connect, type ACPEvent, type Session } from "@/remote-orchestrator/acp"
 import { argv as appServerArgv, connect as connectCodex } from "@/remote-orchestrator/codex-app-server"
 import { argv, connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
-import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
+import { inspect } from "@/remote-orchestrator/preflight"
+import { limits as stateLimits } from "@/remote-orchestrator/state"
+import { approvalCwd, contained, readText, writeText } from "@/remote-orchestrator/workspace"
 import { create as createClaudePermission } from "@/remote-orchestrator/claude-permission"
 
 const dirs: string[] = []
@@ -90,7 +92,13 @@ describe("remote orchestrator", () => {
       agent: "slopcode",
       cwd,
       emit: (event) => events.push(event),
-      start: () => spawn(process.execPath, [fixture], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+      start: () =>
+        spawn(process.execPath, [fixture], {
+          cwd,
+          env: { ...process.env, ACP_FILE_IO: "1" },
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
     })
     const turn = session.turn("fixture prompt")
     await waitFor(() => events.some((event) => event.type === "approval"))
@@ -107,7 +115,29 @@ describe("remote orchestrator", () => {
       expect.arrayContaining(["output", "reasoning", "tool", "plan", "approval", "question", "artifact"]),
     )
     expect(events.find((event) => event.type === "output")).toMatchObject({ nativeID: "native-message" })
+    expect(await Bun.file(path.join(cwd, "client-write.ts")).text()).toBe("line one\nline two\nline three")
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "artifact", path: path.join(cwd, "client-write.ts"), kind: "file" }),
+    )
     await session.close()
+  })
+
+  test("bounds ACP text files to canonical regular workspace paths", async () => {
+    const root = await temp()
+    const child = path.join(root, "child")
+    await mkdir(child)
+    const file = path.join(child, "index.ts")
+    await writeText(root, file, "one\ntwo\nthree")
+    expect(await readText(root, file, 2, 1)).toBe("two")
+    await expect(writeText(root, path.join(root, "missing", "index.ts"), "nope")).rejects.toThrow()
+    const link = path.join(child, "link.ts")
+    await symlink(file, link)
+    await expect(readText(root, link)).rejects.toThrow()
+    await expect(writeText(root, link, "nope")).rejects.toThrow()
+    await expect(writeText(root, path.join(path.dirname(root), "outside.ts"), "nope")).rejects.toThrow()
+    await expect(writeText(root, file, "x".repeat(AgentOrchestrationLimits.maxFrameBytes + 1))).rejects.toThrow(
+      "too large",
+    )
   })
 
   test("wraps Codex and Claude one-shot CLIs through stdin", async () => {
@@ -128,6 +158,7 @@ describe("remote orchestrator", () => {
           : ["workspace", "sessions", "turns", "streaming"],
       )
       expect(events).toContainEqual(expect.objectContaining({ type: "output", text: `${agent}:safe prompt` }))
+      expect(events.filter((event) => event.type === "output" && event.text === `${agent}:safe prompt`)).toHaveLength(1)
       expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"thread.started"') }))
       expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"turn.completed"') }))
       expect(session.approval("unknown", true)).toBe(false)
@@ -173,9 +204,12 @@ describe("remote orchestrator", () => {
       "artifacts",
       "replay",
       "streaming",
+      "cancel",
+      "steer",
     ])
     const turn = session.turn("safe prompt")
-    await waitFor(() => events.filter((event) => event.type === "approval").length >= 2)
+    await waitFor(() => events.filter((event) => event.type === "approval").length >= 3)
+    expect(await session.steer?.("bridge-turn", "Continue safely")).toBe(true)
     const approval = events.find((event) => event.type === "approval" && event.title === "Run fixture command")
     expect(approval).toMatchObject({
       type: "approval",
@@ -183,6 +217,7 @@ describe("remote orchestrator", () => {
       command: "printf fixture",
       cwd,
     })
+    expect(events).toContainEqual(expect.objectContaining({ type: "approval", title: "Approve large fixture frame" }))
     for (const item of events.filter(
       (event): event is Extract<ACPEvent, { type: "approval" }> => event.type === "approval",
     ))
@@ -199,7 +234,7 @@ describe("remote orchestrator", () => {
       expect.arrayContaining(["output", "reasoning", "tool", "plan", "approval", "question", "artifact"]),
     )
     expect(events.find((event) => event.type === "output")).toMatchObject({
-      text: "Fixture complete",
+      text: " Fixture complete ",
       nativeID: "codex-message",
     })
     expect(events.find((event) => event.type === "artifact")).toMatchObject({
@@ -207,6 +242,22 @@ describe("remote orchestrator", () => {
       path: path.join(cwd, "created.txt"),
       kind: "diff",
     })
+    await session.close()
+  })
+
+  test("interrupts an active Codex App Server turn", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-codex-app-server.ts")
+    const session = await connectCodex({
+      cwd,
+      emit: (event) => events.push(event),
+      start: () => spawn(process.execPath, [fixture], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
+    })
+    const turn = session.turn("interrupt fixture")
+    await waitFor(() => events.some((event) => event.type === "approval"))
+    expect(await session.cancel?.("bridge-turn")).toBe(true)
+    await turn
     await session.close()
   })
 
@@ -246,6 +297,34 @@ describe("remote orchestrator", () => {
     await session.close()
   })
 
+  test("does not drift from an explicitly selected Codex App Server backend", async () => {
+    const cwd = await temp()
+    let fallback = false
+    await expect(
+      connect({
+        agent: "codex",
+        cwd,
+        mode: "app_server",
+        emit: () => undefined,
+        codexStart: () =>
+          spawn(process.execPath, ["-e", 'process.stderr.write("app-server unavailable\\n"); process.exit(2)'], {
+            cwd,
+            shell: false,
+            stdio: ["pipe", "pipe", "pipe"],
+          }),
+        cliStart: () => {
+          fallback = true
+          return spawn(process.execPath, ["-e", "process.exit(0)"], {
+            cwd,
+            shell: false,
+            stdio: ["pipe", "pipe", "pipe"],
+          })
+        },
+      }),
+    ).rejects.toThrow("app-server unavailable")
+    expect(fallback).toBe(false)
+  })
+
   test("passes Antigravity prompts as a single argv value and parses stream JSON", async () => {
     const cwd = await temp()
     const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-cli-agent.ts")
@@ -281,6 +360,37 @@ describe("remote orchestrator", () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: "output", text: `antigravity:${prompt.replaceAll("\n", " ")}` }),
     )
+    await session.close()
+  })
+
+  test("projects Antigravity step updates as stable rich tool cards", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const updates = ["active", "done"].map((state) => JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_id: "write-main",
+        step_type: "tool",
+        tool_name: "write_to_file",
+        state,
+        tool_info: { name: "write_to_file" },
+      },
+    })).join("\n") + "\n"
+    const session = await connectCli({
+      agent: "antigravity",
+      cwd,
+      emit: (event) => events.push(event),
+      start: () => spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(updates)})`], {
+        cwd,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    })
+    await session.turn("write fixture")
+    expect(events).toEqual([
+      { type: "tool", id: "antigravity:write-main", title: "write to file", status: "in_progress", kind: "edit" },
+      { type: "tool", id: "antigravity:write-main", title: "write to file", status: "completed", kind: "edit" },
+    ])
     await session.close()
   })
 
@@ -1059,6 +1169,69 @@ describe("remote orchestrator", () => {
     await bridge.close()
   })
 
+  test("reports only capabilities supported by the selected preflight backend", async () => {
+    const root = await temp()
+    const execute = async (argv: readonly string[]) => {
+      if (argv.includes("--version")) return { code: 0, stdout: "fixture 1.0.0", stderr: "" }
+      if (argv.includes("app-server")) return { code: 1, stdout: "", stderr: "unavailable" }
+      return { code: 0, stdout: "help", stderr: "" }
+    }
+    const fallback = await inspect("codex", root, execute)
+    expect(fallback).toEqual({
+      version: "fixture 1.0.0",
+      mode: "cli",
+      capabilities: ["workspace", "sessions", "turns", "streaming"],
+    })
+    const acp = await inspect("opencode", root, execute)
+    expect(acp.mode).toBe("acp")
+    expect(acp.capabilities).not.toContain("replay")
+    let mode: string | undefined
+    const output: Frame[] = []
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => {
+        mode = input.mode
+        return {
+          nativeID: "truthful-cli",
+          capabilities: ["workspace", "sessions", "turns", "streaming"],
+          mode: "cli",
+          version: "fixture 1.0.0",
+          resumable: false,
+          async turn() {},
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+      async () => fallback,
+    )
+    await bridge.handle(frame("bridge.hello", { agent: "codex" }))
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_truthful", path: root },
+        agent: { id: "codex", capabilities: fallback.capabilities },
+        requestID: "req_truthful_workspace",
+        idempotencyKey: "idem_truthful_workspace",
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_truthful",
+        agent: "codex",
+        requestID: "req_truthful_session",
+        idempotencyKey: "idem_truthful_session",
+      }),
+    )
+    expect(mode).toBe("cli")
+    expect(output.at(-1)).toMatchObject({
+      kind: "response",
+      type: "session.create",
+      capabilities: fallback.capabilities,
+    })
+    await bridge.close()
+  })
+
   test("survives bridge restart with redacted replay, snapshots, and durable idempotency", async () => {
     const root = await temp()
     const first: Frame[] = []
@@ -1118,6 +1291,13 @@ describe("remote orchestrator", () => {
     expect(journal).not.toContain("sensitive reasoning")
     expect(journal).not.toContain("sensitive workspace value")
     expect(journal).toContain("[output redacted for resume]")
+    const attached = frame("session.attach", {
+      sessionID: response?.sessionID,
+      requestID: "req_durable_attach",
+      idempotencyKey: "idem_durable_attach",
+    })
+    await bridge.handle(attached)
+    await bridge.close()
 
     const second: Frame[] = []
     const restarted = new Bridge(
@@ -1128,16 +1308,11 @@ describe("remote orchestrator", () => {
         return session(input.emit)
       },
     )
-    await restarted.handle(
-      frame("workspace.open", {
-        workspace: { id: "wrk_durable", path: root },
-        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
-        requestID: "req_durable_restart",
-        idempotencyKey: "idem_durable_restart",
-      }),
-    )
+    await restarted.handle(opened)
+    await restarted.handle(attached)
+    expect(second.at(-1)).toMatchObject({ kind: "response", type: "session.attach", attached: true })
     await restarted.handle(created)
-    expect(opens).toBe(1)
+    expect(opens).toBe(2)
     expect(sessionResponses(second).at(-1)?.sessionID).toBe(response?.sessionID)
     await restarted.handle(
       frame("session.list", {
@@ -1178,7 +1353,7 @@ describe("remote orchestrator", () => {
       await restarted.handle(
         frame("event.replay", {
           sessionID: response?.sessionID,
-          afterCursor: replay.events[0]?.cursor,
+          afterCursor: replay.nextCursor,
           limit: 100,
           requestID: "req_durable_replay_next",
           idempotencyKey: "idem_durable_replay_next",
@@ -1186,12 +1361,13 @@ describe("remote orchestrator", () => {
       )
       const continued = second.at(-1)
       expect(continued).toMatchObject({ kind: "response", type: "event.replay", hasMore: false })
-      if (continued?.kind === "response" && continued.type === "event.replay")
+      if (continued?.kind === "response" && continued.type === "event.replay") {
+        expect(continued.events[0]?.sequence).toBe((replay.events[0]?.sequence ?? 0) + 1)
         expect(continued.events.map((item) => item.sequence)).toEqual(
           [...continued.events].map((item) => item.sequence).sort((a, b) => a - b),
         )
+      }
     }
-    await bridge.close()
     await restarted.close()
   })
 
@@ -1445,6 +1621,462 @@ describe("remote orchestrator", () => {
       })
       await bridge.close()
     }
+  })
+
+  test("rejects a nonexistent artifact beneath a symlink ancestor", async () => {
+    const root = await temp()
+    const outside = await temp()
+    const safe = path.join(root, "safe.txt")
+    await Bun.write(safe, "safe")
+    const bridge = new Bridge(
+      root,
+      () => undefined,
+      async (input) => ({
+        nativeID: "path-native",
+        capabilities: ["workspace", "sessions", "turns", "artifacts"],
+        async turn() {
+          input.emit({ type: "artifact", id: "path-artifact", name: "safe", path: safe, kind: "file" })
+        },
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_symlink_ancestor", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_symlink_ancestor", agent: "opencode" }))
+    const id = [...bridge.sessions.keys()][0]
+    await bridge.handle(frame("turn.create", { sessionID: id, agent: "opencode", prompt: "artifact" }))
+    await waitFor(() => bridge.sessions.get(id!)?.record.artifacts.length === 1)
+    await bridge.close()
+    await symlink(outside, path.join(root, "link"), "dir")
+    const journal = path.join(root, ".slopcode", "remote-orchestrator", "v1.json")
+    const saved = await Bun.file(journal).json()
+    saved.sessions[0].artifacts[0].path = path.join(root, "link", "missing.txt")
+    await Bun.write(journal, `${JSON.stringify(saved)}\n`)
+    const output: Frame[] = []
+    const restarted = new Bridge(root, (value) => output.push(value))
+    await restarted.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_symlink_ancestor", path: root },
+        agent: { id: "opencode", capabilities: ["workspace"] },
+        requestID: "req_symlink_ancestor_restart",
+        idempotencyKey: "idem_symlink_ancestor_restart",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "path_forbidden", retryable: false })
+    await restarted.close()
+  })
+
+  test("rejects a state directory replaced after workspace open", async () => {
+    const root = await temp()
+    const outside = await temp()
+    const output: Frame[] = []
+    const bridge = new Bridge(root, (value) => output.push(value))
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_state_swap", path: root },
+        agent: { id: "opencode", capabilities: ["workspace"] },
+      }),
+    )
+    const dir = path.join(root, ".slopcode", "remote-orchestrator")
+    await rename(dir, `${dir}.old`)
+    await symlink(outside, dir, "dir")
+    await bridge.handle(
+      frame("session.list", {
+        workspaceID: "wrk_state_swap",
+        requestID: "req_state_swap_list",
+        idempotencyKey: "idem_state_swap_list",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "path_forbidden", retryable: false })
+    await bridge.close()
+  })
+
+  test("cleans up a new backend when durable session creation cannot commit", async () => {
+    const root = await temp()
+    const outside = await temp()
+    const output: Frame[] = []
+    let closed = 0
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => {
+        const dir = path.join(root, ".slopcode", "remote-orchestrator")
+        await rename(dir, `${dir}.old`)
+        await symlink(outside, dir, "dir")
+        return {
+          nativeID: "rollback-native",
+          capabilities: ["workspace", "sessions", "turns"],
+          async turn() {},
+          approval: () => false,
+          question: () => false,
+          async close() {
+            closed++
+          },
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_session_rollback", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(
+      frame("session.create", {
+        workspaceID: "wrk_session_rollback",
+        agent: "opencode",
+        requestID: "req_session_rollback",
+        idempotencyKey: "idem_session_rollback",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "path_forbidden" })
+    expect(bridge.sessions.size).toBe(0)
+    expect(closed).toBe(1)
+    await bridge.close()
+  })
+
+  test("increments repeated interaction revisions and rejects stale evicted approvals", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    let emit: ((event: ACPEvent) => void) | undefined
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => {
+        emit = input.emit
+        return {
+          nativeID: "revision-native",
+          capabilities: ["workspace", "sessions", "turns", "approvals"],
+          async turn() {
+            input.emit({ type: "approval", id: "repeated", title: "First", resolve: () => undefined })
+            input.emit({ type: "approval", id: "repeated", title: "Updated", resolve: () => undefined })
+            await gate
+          },
+          approval: () => true,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_revisions", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "approvals"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_revisions", agent: "opencode" }))
+    const id = sessionResponses(output).at(-1)?.sessionID
+    await bridge.handle(frame("turn.create", { sessionID: id, agent: "opencode", prompt: "interact" }))
+    await waitFor(
+      () =>
+        output.filter((item) => item.kind === "event" && item.type === "interaction.approval.requested").length === 2,
+    )
+    const repeated = output.filter(
+      (item): item is Extract<Frame, { kind: "event"; type: "interaction.approval.requested" }> =>
+        item.kind === "event" && item.type === "interaction.approval.requested",
+    )
+    expect(repeated.map((item) => Number(item.interaction.revision))).toEqual([1, 2])
+    expect(repeated[0]?.interaction.id).toBe(repeated[1]?.interaction.id)
+    await bridge.handle(
+      frame("interaction.approval.reply", {
+        sessionID: id,
+        interactionID: repeated[0]?.interaction.id,
+        revision: 1,
+        decision: "approved",
+        requestID: "req_stale_revision",
+        idempotencyKey: "idem_stale_revision",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "interaction_conflict" })
+    await bridge.handle(
+      frame("interaction.approval.reply", {
+        sessionID: id,
+        interactionID: repeated[1]?.interaction.id,
+        revision: 2,
+        decision: "approved",
+        requestID: "req_current_revision",
+        idempotencyKey: "idem_current_revision",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({ kind: "response", type: "interaction.approval.reply" })
+    for (let index = 0; index < AgentOrchestrationLimits.maxPendingInteractions + 1; index++)
+      emit?.({ type: "approval", id: `bulk-${index}`, title: `Bulk ${index}`, resolve: () => undefined })
+    await waitFor(() =>
+      output.some(
+        (item) =>
+          item.kind === "event" &&
+          item.type === "interaction.approval.requested" &&
+          item.interaction.title === `Bulk ${AgentOrchestrationLimits.maxPendingInteractions}`,
+      ),
+    )
+    expect(bridge.sessions.get(id!)?.record.pending).toHaveLength(AgentOrchestrationLimits.maxPendingInteractions)
+    const first = output.find(
+      (item): item is Extract<Frame, { kind: "event"; type: "interaction.approval.requested" }> =>
+        item.kind === "event" && item.type === "interaction.approval.requested" && item.interaction.title === "Bulk 0",
+    )
+    await bridge.handle(
+      frame("interaction.approval.reply", {
+        sessionID: id,
+        interactionID: first?.interaction.id,
+        revision: first?.interaction.revision,
+        decision: "approved",
+        requestID: "req_evicted_revision",
+        idempotencyKey: "idem_evicted_revision",
+      }),
+    )
+    const evicted = output.at(-1)
+    release()
+    await bridge.close()
+    expect(evicted).toMatchObject({ kind: "error", code: "interaction_conflict" })
+  })
+
+  test("serializes concurrent session creation at the durable workspace limit", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => ({
+        nativeID: crypto.randomUUID(),
+        capabilities: ["workspace", "sessions", "turns"],
+        async turn() {},
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_session_limit", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    for (let index = 0; index < stateLimits.sessions - 1; index++)
+      await bridge.handle(
+        frame("session.create", {
+          workspaceID: "wrk_session_limit",
+          agent: "opencode",
+          requestID: `req_limit_session_${index}`,
+          idempotencyKey: `idem_limit_session_${index}`,
+        }),
+      )
+    await Promise.all(
+      ["a", "b"].map((suffix) =>
+        bridge.handle(
+          frame("session.create", {
+            workspaceID: "wrk_session_limit",
+            agent: "opencode",
+            requestID: `req_limit_concurrent_${suffix}`,
+            idempotencyKey: `idem_limit_concurrent_${suffix}`,
+          }),
+        ),
+      ),
+    )
+    expect(bridge.sessions.size).toBe(stateLimits.sessions)
+    expect(output.filter((item) => item.kind === "error" && item.code === "too_large")).toHaveLength(1)
+    await bridge.close()
+    const restarted = new Bridge(root, () => undefined)
+    await restarted.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_session_limit", path: root },
+        agent: { id: "opencode", capabilities: ["workspace"] },
+        requestID: "req_limit_restart",
+        idempotencyKey: "idem_limit_restart",
+      }),
+    )
+    expect(restarted.sessions.size).toBe(stateLimits.sessions)
+    await restarted.close()
+  })
+
+  test("serializes concurrent attach and retry lifecycle operations", async () => {
+    const root = await temp()
+    const first: Frame[] = []
+    const original = new Bridge(
+      root,
+      (value) => first.push(value),
+      async () => ({
+        nativeID: "serialized-native",
+        capabilities: ["workspace", "sessions", "turns", "replay"],
+        mode: "acp",
+        version: "fixture 1.0.0",
+        resumable: true,
+        async turn() {},
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await original.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_serialized", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+      }),
+    )
+    await original.handle(frame("session.create", { workspaceID: "wrk_serialized", agent: "opencode" }))
+    const id = sessionResponses(first).at(-1)?.sessionID
+    await original.close()
+
+    let opens = 0
+    let releaseAttach: () => void = () => undefined
+    const attachGate = new Promise<void>((resolve) => (releaseAttach = resolve))
+    let releaseRetry: () => void = () => undefined
+    const retryGate = new Promise<void>((resolve) => (releaseRetry = resolve))
+    let retrying = false
+    let turns = 0
+    const output: Frame[] = []
+    const restarted = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => {
+        opens++
+        await attachGate
+        return {
+          nativeID: "serialized-native",
+          capabilities: ["workspace", "sessions", "turns", "replay", "retry"],
+          mode: "acp",
+          version: "fixture 1.0.0",
+          resumable: true,
+          async turn() {
+            turns++
+          },
+          async retry() {
+            retrying = true
+            await retryGate
+            return true
+          },
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await restarted.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_serialized", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+        requestID: "req_serialized_restart",
+        idempotencyKey: "idem_serialized_restart",
+      }),
+    )
+    const attaches = ["a", "b"].map((suffix) =>
+      restarted.handle(
+        frame("session.attach", {
+          sessionID: id,
+          requestID: `req_serialized_attach_${suffix}`,
+          idempotencyKey: `idem_serialized_attach_${suffix}`,
+        }),
+      ),
+    )
+    await waitFor(() => opens === 1)
+    releaseAttach()
+    await Promise.all(attaches)
+    expect(opens).toBe(1)
+    await restarted.handle(
+      frame("turn.create", {
+        sessionID: id,
+        turnID: "trn_serialized",
+        agent: "opencode",
+        prompt: "first",
+        requestID: "req_serialized_turn",
+        idempotencyKey: "idem_serialized_turn",
+      }),
+    )
+    await waitFor(() => output.some((item) => item.kind === "event" && item.type === "turn.completed"))
+    const retry = restarted.handle(
+      frame("turn.retry", {
+        sessionID: id,
+        turnID: "trn_serialized",
+        requestID: "req_serialized_retry",
+        idempotencyKey: "idem_serialized_retry",
+      }),
+    )
+    await waitFor(() => retrying)
+    const overlap = restarted.handle(
+      frame("turn.create", {
+        sessionID: id,
+        turnID: "trn_serialized_overlap",
+        agent: "opencode",
+        prompt: "overlap",
+        requestID: "req_serialized_overlap",
+        idempotencyKey: "idem_serialized_overlap",
+      }),
+    )
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(turns).toBe(1)
+    releaseRetry()
+    await Promise.all([retry, overlap])
+    expect(turns).toBe(1)
+    expect(output.at(-1)).toMatchObject({ kind: "error", code: "bad_request" })
+    await restarted.close()
+  })
+
+  test("retains durable idempotency independently for each open workspace", async () => {
+    const root = await temp()
+    const one = path.join(root, "one")
+    const two = path.join(root, "two")
+    await mkdir(one)
+    await mkdir(two)
+    const output: Frame[] = []
+    let opens = 0
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => {
+        opens++
+        return {
+          nativeID: `retained-${opens}`,
+          capabilities: ["workspace", "sessions", "turns"],
+          async turn() {},
+          approval: () => false,
+          question: () => false,
+          async close() {},
+        }
+      },
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_retained_one", path: one },
+        agent: { id: "opencode", capabilities: ["workspace"] },
+        requestID: "req_retained_workspace_one",
+        idempotencyKey: "idem_retained_workspace_one",
+      }),
+    )
+    const created = frame("session.create", {
+      workspaceID: "wrk_retained_one",
+      agent: "opencode",
+      requestID: "req_retained_session_one",
+      idempotencyKey: "idem_retained_session_one",
+    })
+    await bridge.handle(created)
+    const id = sessionResponses(output).at(-1)?.sessionID
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_retained_two", path: two },
+        agent: { id: "opencode", capabilities: ["workspace"] },
+        requestID: "req_retained_workspace_two",
+        idempotencyKey: "idem_retained_workspace_two",
+      }),
+    )
+    for (let index = 0; index < stateLimits.requests; index++)
+      await bridge.handle(
+        frame("session.list", {
+          workspaceID: "wrk_retained_two",
+          requestID: `req_retained_list_${index}`,
+          idempotencyKey: `idem_retained_list_${index}`,
+        }),
+      )
+    await bridge.handle(created)
+    expect(opens).toBe(1)
+    expect(sessionResponses(output).at(-1)?.sessionID).toBe(id)
+    await bridge.close()
   })
 
   test("routes supported turn controls only to the active provider turn", async () => {
