@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "test": "bun test src",
+    "test:visual": "playwright test --config=playwright.config.ts",
     "build:web": "vite build",
     "build:android": "./gradlew :app:assembleDebug",
     "test:android-ui": "bun run build:web && ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.slopcode.android.AndroidUiInstrumentedTest",
@@ -17,6 +18,7 @@
     "solid-js": "catalog:"
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
     "@typescript/native-preview": "catalog:",
