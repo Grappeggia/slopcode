@@ -3,7 +3,7 @@ set -euo pipefail
 
 package=dev.slopcode.android
 test_class=dev.slopcode.android.SshTransportInstrumentedTest
-remote_root=/home/agent/temp
+remote_root=/home/marcos/temp
 adb_bin=${ADB:-adb}
 serial=${ANDROID_SERIAL:-}
 key_name=id

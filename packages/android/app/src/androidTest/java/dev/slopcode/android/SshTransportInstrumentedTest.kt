@@ -464,7 +464,7 @@ class SshTransportInstrumentedTest {
   }
 
   companion object {
-    private const val REMOTE_ROOT = "/home/agent/temp"
+    private const val REMOTE_ROOT = "/home/marcos/temp"
     private const val FIXTURE_DIR = "ssh-e2e"
     private const val HIDDEN_SENTINEL = ".slopcode-android-e2e-sentinel"
     private const val NETWORK_RESTORE_DELAY_MS = 2_000L

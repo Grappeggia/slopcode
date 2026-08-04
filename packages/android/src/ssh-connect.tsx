@@ -421,8 +421,8 @@ export function SshConnect(props: Props) {
     }
   }
 
-  const start = () => {
-    const normalized = normalizeSshTarget(target())
+  const start = (value = target()) => {
+    const normalized = normalizeSshTarget(value)
     const parsed = normalized ? parseSshTarget(normalized) : undefined
     if (!normalized || !parsed) {
       setError("Enter an SSH target such as user@mac.example.com or user@[::1]:2222.")
@@ -541,7 +541,7 @@ export function SshConnect(props: Props) {
     )
   }
 
-  const connect = async () => {
+  const connect = async (value = password()) => {
     if (busy()) return
     const normalized = normalizeSshTarget(target())
     const parsed = normalized ? parseSshTarget(normalized) : undefined
@@ -551,7 +551,7 @@ export function SshConnect(props: Props) {
       setError("The SSH target is invalid.")
       return
     }
-    if (auth() === "password" && !password()) {
+    if (auth() === "password" && !value) {
       setError("Enter the SSH password, or choose private-key authentication.")
       return
     }
@@ -561,6 +561,7 @@ export function SshConnect(props: Props) {
     }
     const request = onboarding.current()
     const attempt = connections.start()
+    if (auth() === "password" && value !== password()) setPassword(value)
     setBusy(true)
     setError("")
     setPreflight()
@@ -573,7 +574,7 @@ export function SshConnect(props: Props) {
         username: parsed.user,
         directory: validSshPath(directory()) ?? "/",
         auth: auth(),
-        ...(auth() === "password" ? { password: password() } : { privateKey: privateKey(), passphrase: passphrase() }),
+        ...(auth() === "password" ? { password: value } : { privateKey: privateKey(), passphrase: passphrase() }),
         saveCredentials: true,
       })
       if (result.status === "host_key_required") {
@@ -947,11 +948,13 @@ export function SshConnect(props: Props) {
           onSubmit={(event) => {
             event.preventDefault()
             if (!started()) {
-              start()
+              const field = event.currentTarget.elements.namedItem("target")
+              start(field instanceof HTMLInputElement ? field.value : target())
               return
             }
             if (!connected()) {
-              void connect()
+              const field = event.currentTarget.elements.namedItem("password")
+              void connect(field instanceof HTMLInputElement ? field.value : password())
               return
             }
             if (step() === "agent") void finish()
@@ -1072,6 +1075,7 @@ export function SshConnect(props: Props) {
                   </span>
                   <input
                     required
+                    name="target"
                     type="text"
                     autocomplete="off"
                     placeholder="user@mac.example.com"
@@ -1139,6 +1143,7 @@ export function SshConnect(props: Props) {
                 SSH password
                 <input
                   required
+                  name="password"
                   type="password"
                   autocomplete="current-password"
                   value={password()}

@@ -55,16 +55,16 @@ describe("direct SSH workspace state", () => {
   test("persists the bounded recent-folder model used by onboarding", async () => {
     const secure = storage()
     const next = [
-      "/home/agent/temp/one",
-      "/home/agent/temp/two",
-      "/home/agent/temp/three",
-      "/home/agent/temp/four",
+      "/home/marcos/temp/one",
+      "/home/marcos/temp/two",
+      "/home/marcos/temp/three",
+      "/home/marcos/temp/four",
     ].reduce<SshWorkspaceState>((current, folder) => rememberSshFolder(current, folder), state)
 
     await writeSshWorkspace(secure, next)
 
     await expect(readSshWorkspace(secure)).resolves.toMatchObject({
-      recentFolders: ["/home/agent/temp/four", "/home/agent/temp/three", "/home/agent/temp/two"],
+      recentFolders: ["/home/marcos/temp/four", "/home/marcos/temp/three", "/home/marcos/temp/two"],
     })
   })
 })

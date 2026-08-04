@@ -794,15 +794,15 @@ try {
   localSnapshot = await snapshotLocalStorage(currentURL)
   const fixture = {
     version: 1,
-    target: "agent@fixture.test",
-    profile: "agent@fixture.test:22",
-    host: "fixture.test",
+    target: "agent@void",
+    profile: "agent@void:22",
+    host: "void",
     port: 22,
     username: "agent",
-    directory: "/home/agent/temp",
+    directory: "/home/marcos/temp",
     agent: "opencode-cli",
-    recentTargets: ["agent@fixture.test"],
-    recentFolders: ["/home/agent/temp"],
+    recentTargets: ["agent@void"],
+    recentFolders: ["/home/marcos/temp"],
   }
   await native(currentURL, "storageSet", namespace, workspaceKey, JSON.stringify(fixture))
   currentURL = await launch()

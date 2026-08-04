@@ -11,7 +11,7 @@ import {
 } from "./ssh-agent-session-state"
 
 const workspace = {
-  profile: "agent@fixture.test:22",
+  profile: "agent@void:22",
   directory: "/work/project",
   agent: "codex-cli",
 } as const

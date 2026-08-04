@@ -98,7 +98,7 @@ describe("android security source regressions", () => {
     expect(harness).toContain("antigravity-cli")
     expect(instrumented).toContain("SshAgent.entries")
     expect(harness).toContain("real native SSH transport coverage")
-    expect(instrumented).toContain('private const val REMOTE_ROOT = "/home/agent/temp"')
+    expect(instrumented).toContain('private const val REMOTE_ROOT = "/home/marcos/temp"')
     expect(instrumented).toContain("sshPrivateKeyFile")
     expect(instrumented).toContain("sshPasswordFile")
     expect(instrumented).toContain("HIDDEN_SENTINEL")

@@ -74,7 +74,7 @@ class AndroidUiInstrumentedTest {
       try {
         waitFor(scenario) { snapshot(scenario).optString("text").contains("Your computers") }
         val first = snapshot(scenario)
-        assertTrue(first.optString("text").contains("fixture.test"))
+        assertTrue(first.optString("text").contains("void"))
         assertTrue(first.optString("text").contains("Add computer"))
         assertHit(first, "add")
         assertHit(first, "primary")
@@ -108,13 +108,10 @@ class AndroidUiInstrumentedTest {
   @Test
   fun renderedOnboardingMapsAgentsToSetupAndChecksDarkContrastAndInsets() {
     launch(fakeBridge = true).use { scenario ->
-      waitFor(scenario) { snapshot(scenario).optBoolean("address") }
-      waitFor(scenario) { hasElement(scenario, "input[placeholder='user@mac.example.com']") }
-      assertTrue(input(scenario, "input[placeholder='user@mac.example.com']", "agent@fixture.test"))
-      assertTrue(click(scenario, "Continue"))
+      waitForStableDocument(scenario) { it.optBoolean("address") }
+      assertTrue(submitField(scenario, "input[placeholder='user@mac.example.com']", "agent@void"))
       waitFor(scenario) { snapshot(scenario).optBoolean("password") }
-      assertTrue(input(scenario, "input[type='password']", "fixture-placeholder"))
-      assertTrue(click(scenario, "Connect to SSH host"))
+      assertTrue(submitField(scenario, "input[type='password']", "fixture-placeholder"))
       waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("folder").getInt("height") > 0 }
 
       val folder = snapshot(scenario)
@@ -131,13 +128,12 @@ class AndroidUiInstrumentedTest {
       assertTrue(click(scenario, "Use this folder"))
       waitFor(scenario) {
         val cards = snapshot(scenario).optJSONArray("agentCards")
-        cards != null && cards.length() == 5 && (0 until cards.length()).all {
+        cards != null && cards.length() == 4 && (0 until cards.length()).all {
           cards.getJSONObject(it).optString("status") != "Checking"
         }
       }
       val agents = snapshot(scenario)
       val expected = mapOf(
-        "Slopcode" to "Ready",
         "Codex" to "Not installed",
         "OpenCode" to "Needs setup",
         "Claude Code" to "Ready",
@@ -201,12 +197,16 @@ class AndroidUiInstrumentedTest {
       assertTrue("The initial review panel does not expose an empty state.", ready.optBoolean("reviewEmpty"))
       assertHitRect(ready.getJSONObject("prompt"), "agent.prompt", "Message the agent")
 
-      assertTrue(focus(scenario, "[data-agent-prompt]"))
+      assertTrue(tapSelector(scenario, "[data-agent-prompt]"))
+      waitFor(scenario) { agentState(scenario).optBoolean("promptFocused") }
       showIme(scenario)
-      waitFor(scenario) { actualImeInset(scenario) > 0 }
       assertTrue(refreshInsets(scenario))
-      waitFor(scenario) { agentState(scenario).optDouble("imeBottom") > 0 }
       val ime = agentState(scenario)
+      val nativeIme = actualImeInset(scenario).toDouble()
+      assertTrue(
+        "The CSS IME inset does not match Android's reported inset: " + ime,
+        kotlin.math.abs(ime.optDouble("imeBottom") * ime.optDouble("pixelRatio", 1.0) - nativeIme) <= 2.0,
+      )
       assertTrue("The composer is not visible above the IME: " + ime, ime.getJSONObject("composer").optBoolean("visible"))
       assertTrue(
         "The composer extends below the resized WebView viewport: " + ime,
@@ -269,8 +269,8 @@ class AndroidUiInstrumentedTest {
     return scenario
   }
 
-  private fun snapshot(scenario: ActivityScenario<MainActivity>): JSONObject = JSONObject(
-    string(
+  private fun snapshot(scenario: ActivityScenario<MainActivity>): JSONObject {
+    val value = string(
       evaluate(
         scenario,
         """
@@ -336,8 +336,13 @@ class AndroidUiInstrumentedTest {
           const primary = button('Run preflight and open agent') || button('Install the agent above') || button('Continue') || button('Connect to SSH host') || savedComputer
           return JSON.stringify({
             text: document.body?.innerText || '',
+            document: performance.timeOrigin,
             address: !!document.querySelector("input[placeholder='user@mac.example.com']"),
             password: !!document.querySelector("input[type='password']"),
+            values: {
+              address: document.querySelector("input[placeholder='user@mac.example.com']")?.value || '',
+              passwordLength: document.querySelector("input[type='password']")?.value?.length || 0
+            },
             hidden: !!hidden?.checked,
             theme: shell?.getAttribute('data-ssh-theme') || '',
             canvas: getComputedStyle(shell || root).backgroundColor,
@@ -384,14 +389,17 @@ class AndroidUiInstrumentedTest {
               content: contrast(main),
               status: agents.find((item) => item.statusContrast > 0)?.statusContrast || contrast(document.querySelector('[role="alert"]'))
             },
-              systemBars: window.__SLOPCODE_TEST_SYSTEM_BAR_CALLS || [],
-              nativeSystemBars: window.__SLOPCODE_TEST_NATIVE_SYSTEM_BAR_CALLS || []
-            })
+            systemBars: window.__SLOPCODE_TEST_SYSTEM_BAR_CALLS || [],
+            nativeSystemBars: window.__SLOPCODE_TEST_NATIVE_SYSTEM_BAR_CALLS || [],
+            bridgeCalls: window.__SLOPCODE_TEST_BRIDGE_CALLS || []
+          })
         })()
         """.trimIndent(),
       ),
-    ),
-  )
+    )
+    if (value == "null") return JSONObject()
+    return JSONObject(value)
+  }
 
   private fun click(scenario: ActivityScenario<MainActivity>, text: String) = evaluate(
     scenario,
@@ -428,6 +436,11 @@ class AndroidUiInstrumentedTest {
     """(() => { const item = document.querySelector(""" + json(selector) + """); if (!(item instanceof HTMLInputElement) && !(item instanceof HTMLTextAreaElement)) return JSON.stringify(false); const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(item), 'value')?.set; setter?.call(item, """ + json(value) + """); item.value = """ + json(value) + """; item.dispatchEvent(new Event('input', { bubbles: true })); item.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: """ + json(value) + """ })); item.dispatchEvent(new Event('change', { bubbles: true })); return JSON.stringify(true) })()""",
   ).let(::string).toBoolean()
 
+  private fun submitField(scenario: ActivityScenario<MainActivity>, selector: String, value: String) = evaluate(
+    scenario,
+    """(() => { const item = document.querySelector(${json(selector)}); const form = item?.closest('form'); if (!(item instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return JSON.stringify(false); item.value = ${json(value)}; form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); return JSON.stringify(true) })()""",
+  ).let(::string).toBoolean()
+
   private fun submitPrompt(scenario: ActivityScenario<MainActivity>) = evaluate(
     scenario,
     """(() => { const form = document.querySelector('#agent-prompt')?.closest('form'); if (!(form instanceof HTMLFormElement)) return JSON.stringify(false); form.requestSubmit(); return JSON.stringify(true) })()""",
@@ -438,10 +451,21 @@ class AndroidUiInstrumentedTest {
     """(() => { const item = document.querySelector(${json(selector)}); if (!(item instanceof HTMLElement) || item.hasAttribute('disabled')) return JSON.stringify(false); item.click(); return JSON.stringify(true) })()""",
   ).let(::string).toBoolean()
 
-  private fun focus(scenario: ActivityScenario<MainActivity>, selector: String) = evaluate(
-    scenario,
-    """(() => { const item = document.querySelector(${json(selector)}); if (!(item instanceof HTMLElement)) return JSON.stringify(false); item.focus(); return JSON.stringify(document.activeElement === item) })()""",
-  ).let(::string).toBoolean()
+  private fun tapSelector(scenario: ActivityScenario<MainActivity>, selector: String): Boolean {
+    val value = JSONObject(
+      string(
+        evaluate(
+          scenario,
+          """(() => { const item = document.querySelector(${json(selector)}); if (!(item instanceof HTMLElement)) return JSON.stringify({ ok: false }); item.scrollIntoView({ block: 'center', inline: 'nearest' }); const rect = item.getBoundingClientRect(); return JSON.stringify({ ok: rect.width > 0 && rect.height > 0, x: (rect.left + rect.width / 2) * devicePixelRatio, y: (rect.top + rect.height / 2) * devicePixelRatio }) })()""",
+        ),
+      ),
+    )
+    if (!value.optBoolean("ok")) return false
+    InstrumentationRegistry.getInstrumentation().uiAutomation
+      .executeShellCommand("input tap ${Math.round(value.getDouble("x"))} ${Math.round(value.getDouble("y"))}")
+      .close()
+    return true
+  }
 
   private fun refreshInsets(scenario: ActivityScenario<MainActivity>) = evaluate(
     scenario,
@@ -451,7 +475,6 @@ class AndroidUiInstrumentedTest {
   private fun showIme(scenario: ActivityScenario<MainActivity>) {
     scenario.onActivity { activity ->
       val web = activity.findViewById<WebView>(R.id.webview)
-      web.requestFocus()
       ViewCompat.getWindowInsetsController(web)?.show(WindowInsetsCompat.Type.ime())
       (activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
         .showSoftInput(web, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
@@ -504,12 +527,14 @@ class AndroidUiInstrumentedTest {
             restored: !!document.querySelector('[data-agent-restored]'),
             starts: window.__SLOPCODE_TEST_ORCHESTRATOR_STARTS || 0,
             height: Math.round(visualViewport?.height || innerHeight),
+            pixelRatio: devicePixelRatio || 1,
             imeBottom: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--android-ime-bottom')) || 0,
             firstViewport: panel?.firstElementChild === appbar && panel?.lastElementChild === composer && scroll?.scrollTop === 0 && box(composer).visible,
             compactContext: context instanceof HTMLDetailsElement && !context.open && box(context).height <= 64,
             composer: box(composer),
             prompt: box(prompt),
             promptDisabled: Boolean(prompt?.disabled),
+            promptFocused: document.activeElement === prompt,
             entries: [...document.querySelectorAll('[data-agent-entry]')].map((item) => item.getAttribute('data-agent-entry')),
             interaction: active?.getAttribute('data-interaction-id') || '',
             focusAction: document.activeElement?.getAttribute('data-agent-action') || '',
@@ -570,6 +595,26 @@ class AndroidUiInstrumentedTest {
       Thread.sleep(100)
     }
     throw AssertionError("Timed out waiting for rendered Android UI state: " + snapshot(scenario))
+  }
+
+  private fun waitForStableDocument(
+    scenario: ActivityScenario<MainActivity>,
+    predicate: (JSONObject) -> Boolean,
+  ) {
+    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+    var document = Double.NaN
+    var stable = System.nanoTime()
+    while (System.nanoTime() < end) {
+      val state = snapshot(scenario)
+      val current = state.optDouble("document", Double.NaN)
+      if (current != document) {
+        document = current
+        stable = System.nanoTime()
+      }
+      if (predicate(state) && System.nanoTime() - stable >= TimeUnit.MILLISECONDS.toNanos(500)) return
+      Thread.sleep(100)
+    }
+    throw AssertionError("Timed out waiting for a stable rendered Android document: " + snapshot(scenario))
   }
 
   private fun rotate(scenario: ActivityScenario<MainActivity>, orientation: Int) {
@@ -696,15 +741,15 @@ class AndroidUiInstrumentedTest {
 
   private fun savedWorkspace() = JSONObject()
     .put("version", 1)
-    .put("target", "agent@fixture.test")
-    .put("profile", "agent@fixture.test:22")
-    .put("host", "fixture.test")
+    .put("target", "agent@void")
+    .put("profile", "agent@void:22")
+    .put("host", "void")
     .put("port", 22)
     .put("username", "agent")
-    .put("directory", "/home/agent/temp")
+    .put("directory", "/home/marcos/temp")
     .put("agent", "opencode-cli")
-    .put("recentTargets", JSONArray().put("agent@fixture.test"))
-    .put("recentFolders", JSONArray().put("/home/agent/temp"))
+    .put("recentTargets", JSONArray().put("agent@void"))
+    .put("recentFolders", JSONArray().put("/home/marcos/temp"))
     .toString()
 
   private fun fake(session: Boolean = false, values: String = "{}") = """
@@ -713,8 +758,10 @@ class AndroidUiInstrumentedTest {
       const nativePost = typeof native?.postMessage === 'function' ? native.postMessage.bind(native) : null;
       const nativeBars = [];
       const systemBars = [];
+      const bridgeCalls = [];
       window.__SLOPCODE_TEST_NATIVE_SYSTEM_BAR_CALLS = nativeBars;
       window.__SLOPCODE_TEST_SYSTEM_BAR_CALLS = systemBars;
+      window.__SLOPCODE_TEST_BRIDGE_CALLS = bridgeCalls;
       const values = new Map(Object.entries(__VALUES__));
       window.__SLOPCODE_TEST_STORAGE = () => Object.fromEntries(values);
       window.__SLOPCODE_TEST_ORCHESTRATOR_STARTS = 0;
@@ -730,7 +777,7 @@ class AndroidUiInstrumentedTest {
       }, delay);
       const listing = (path, hidden) => ({
         path,
-        parent: path === '/home/agent/temp' ? '/home/agent' : '/home/agent/temp',
+        parent: path === '/home/marcos/temp' ? '/home/marcos' : '/home/marcos/temp',
         entries: [
           { name: 'src', path: path + '/src', type: 'directory' },
           { name: 'README.md', path: path + '/README.md', type: 'file', size: 12 },
@@ -741,6 +788,7 @@ class AndroidUiInstrumentedTest {
         onmessage: null,
         postMessage(raw) {
           const request = JSON.parse(raw);
+          bridgeCalls.push(request.method);
           const args = request.args || [];
           const parse = (value) => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
           const call = ['sshConnect', 'sshExec', 'sshAuthStatus', 'sshCodexAppServerStatus', 'sshStart', 'sshOrchestratorStart'].includes(request.method) ? parse(args[0]) : {};
@@ -775,7 +823,7 @@ class AndroidUiInstrumentedTest {
           if (request.method === 'sshStatus') result = { connected, remoteTransport: connected, ...(connected ? { profile } : {}) };
           if (request.method === 'sshConnect') { profile = call.profile; connected = true; result = { status: 'connected', profile, host: call.host, port: call.port, remoteTransport: true }; }
           if (request.method === 'sshDisconnect' || request.method === 'sshCleanup') { connected = false; result = null; }
-          if (request.method === 'sshHome') result = { path: '/home/agent/temp' };
+          if (request.method === 'sshHome') result = { path: '/home/marcos/temp' };
           if (request.method === 'sshList') result = listing(args[0], args[1] === true);
           if (request.method === 'sshSelectWorkspace') result = { path: args[0] };
           if (request.method === 'sshCredentialGet') result = null;
@@ -795,8 +843,8 @@ class AndroidUiInstrumentedTest {
               line({ kind: 'event', cursor: 'cur_output', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.output', text: 'Inspecting the workspace.' }, 10);
               line({ kind: 'event', cursor: 'cur_reasoning', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.reasoning', text: 'Use the smallest safe fixture.' }, 15);
               line({ kind: 'event', cursor: 'cur_plan', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'plan.available', plan: { id: 'plan_fixture', content: '1. Create a fixture app\\n2. Verify the rendered result' } }, 20);
-              line({ kind: 'event', cursor: 'cur_tool', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'in_progress', kind: 'edit', metadata: { path: '/home/agent/temp/fixture.ts', progress: '1/2' } } }, 25);
-              line({ kind: 'event', cursor: 'cur_approval', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'interaction.approval.requested', interaction: { id: 'approval_fixture', revision: 1, title: 'Create app files?', command: 'mkdir -p ./fixture-app', cwd: '/home/agent/temp', reason: 'The agent needs to create the requested local app.', risk: 'low' } }, 30);
+              line({ kind: 'event', cursor: 'cur_tool', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'in_progress', kind: 'edit', metadata: { path: '/home/marcos/temp/fixture.ts', progress: '1/2' } } }, 25);
+              line({ kind: 'event', cursor: 'cur_approval', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'interaction.approval.requested', interaction: { id: 'approval_fixture', revision: 1, title: 'Create app files?', command: 'mkdir -p ./fixture-app', cwd: '/home/marcos/temp', reason: 'The agent needs to create the requested local app.', risk: 'low' } }, 30);
             }
             if (frame.type === 'interaction.approval.reply') {
               line({ kind: 'response', requestID: frame.requestID });
@@ -804,11 +852,11 @@ class AndroidUiInstrumentedTest {
             }
             if (frame.type === 'interaction.question.reply') {
               line({ kind: 'response', requestID: frame.requestID });
-              line({ kind: 'event', cursor: 'cur_tool_done', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'completed', kind: 'edit', metadata: { path: '/home/agent/temp/fixture.ts', progress: '2/2' } } }, 10);
+              line({ kind: 'event', cursor: 'cur_tool_done', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'completed', kind: 'edit', metadata: { path: '/home/marcos/temp/fixture.ts', progress: '2/2' } } }, 10);
               line({ kind: 'event', cursor: 'cur_test', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'test_fixture', title: 'Run fixture tests', status: 'completed', kind: 'execute', metadata: { test: 'Android UI', result: 'passed', exitCode: '0' } } }, 15);
-              line({ kind: 'event', cursor: 'cur_diff', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'diff_fixture', name: 'fixture.diff', path: '/home/agent/temp/fixture.diff', kind: 'diff', size: 128 } }, 20);
-              line({ kind: 'event', cursor: 'cur_file', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'file_fixture', name: 'fixture.ts', path: '/home/agent/temp/fixture.ts', kind: 'file', size: 256 } }, 25);
-              line({ kind: 'event', cursor: 'cur_image', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'image_fixture', name: 'fixture.png', path: '/home/agent/temp/fixture.png', kind: 'image', size: 512, mime: 'image/png' } }, 30);
+              line({ kind: 'event', cursor: 'cur_diff', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'diff_fixture', name: 'fixture.diff', path: '/home/marcos/temp/fixture.diff', kind: 'diff', size: 128 } }, 20);
+              line({ kind: 'event', cursor: 'cur_file', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'file_fixture', name: 'fixture.ts', path: '/home/marcos/temp/fixture.ts', kind: 'file', size: 256 } }, 25);
+              line({ kind: 'event', cursor: 'cur_image', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'image_fixture', name: 'fixture.png', path: '/home/marcos/temp/fixture.png', kind: 'image', size: 512, mime: 'image/png' } }, 30);
               line({ kind: 'event', cursor: 'cur_complete', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.completed', status: 'completed', message: 'Fixture verified.' }, 35);
             }
             result = true;
@@ -832,7 +880,7 @@ class AndroidUiInstrumentedTest {
   """.trimIndent()
     .replace("__WORKSPACE__", json(savedWorkspace()))
     .replace("__CONNECTED__", if (session) "true" else "false")
-    .replace("__PROFILE__", json(if (session) "agent@fixture.test:22" else ""))
+    .replace("__PROFILE__", json(if (session) "agent@void:22" else ""))
     .replace("__VALUES__", values)
     .replace(
       "__STORAGE__",

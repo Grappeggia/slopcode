@@ -21,7 +21,7 @@ class RemoteJobHttpTest {
         username = "slopcode",
         password = "secret",
         workspaceID = "wrk_remote",
-        directory = "/home/agent/temp",
+        directory = "/home/marcos/temp",
         agent = "codex-cli",
         prompt = "run tests",
         config = JSONObject(),

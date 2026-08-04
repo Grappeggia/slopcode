@@ -6,9 +6,9 @@ import type { SshWorkspaceState } from "./ssh-workspace-state"
 
 const workspace: SshWorkspaceState = {
   version: 1,
-  target: "agent@fixture.test",
-  profile: "agent@fixture.test:22",
-  host: "fixture.test",
+  target: "agent@void",
+  profile: "agent@void:22",
+  host: "void",
   port: 22,
   username: "agent",
   directory: "/work/fixture",
