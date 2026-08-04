@@ -14,7 +14,6 @@ import {
 
 describe("SSH agent orchestration frames", () => {
   test("maps all Android agents and uses protocol-safe reply fields", () => {
-    expect(agentID("slopcode-cli")).toBe("slopcode")
     expect(agentID("codex-cli")).toBe("codex")
     expect(agentID("opencode-cli")).toBe("opencode")
     expect(agentID("claude-code")).toBe("claude")
@@ -74,6 +73,25 @@ describe("SSH agent orchestration frames", () => {
     })
     expect(completed.phase).toBe("completed")
     expect(completed.interaction).toBeUndefined()
+  })
+
+  test("joins adjacent streamed output chunks into one readable item", () => {
+    const initial = { phase: "ready" as const, items: [], sessionID: "ses_1" }
+    const first = reduceOrchestratorEvent(initial, {
+      kind: "event",
+      sessionID: "ses_1",
+      type: "turn.output",
+      cursor: "cur_1",
+      text: "Created ",
+    })
+    const second = reduceOrchestratorEvent(first, {
+      kind: "event",
+      sessionID: "ses_1",
+      type: "turn.output",
+      cursor: "cur_2",
+      text: "tetris.html",
+    })
+    expect(second.items).toEqual([{ id: "turn.output:cur_1", type: "output", text: "Created tetris.html" }])
   })
 
   test("scopes native events to the active orchestrator channel", async () => {

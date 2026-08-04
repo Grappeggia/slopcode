@@ -303,6 +303,24 @@ internal class SshTransport(
       }
   }
 
+  fun update(raw: String): JSONObject {
+    val request = SshVersionRequest.parse(JSONObject(raw))
+      ?: throw SshTransportException("invalid_configuration", "CLI update configuration is invalid.")
+    val directory = workspace.require(request.directory)
+    val result = runExec(SshCommand.update(request.agent, directory))
+    val combined = "${result.first}\n${result.second}".trim().take(MAX_OUTPUT_CHARS)
+    val current = marker(combined, "__SLOPCODE_CURRENT__")?.let(::versionToken).orEmpty()
+    val latest = marker(combined, "__SLOPCODE_LATEST__")?.let(::versionToken)
+    return JSONObject()
+      .put("agent", request.agent.id)
+      .put("executable", request.agent.binary)
+      .put("exitCode", result.third)
+      .put("output", combined)
+      .put("ok", result.third == 0)
+      .put("currentVersion", current)
+      .apply { latest?.takeIf(String::isNotBlank)?.let { put("latestVersion", it) } }
+  }
+
   fun authStatus(raw: String): JSONObject {
     val request = SshVersionRequest.parse(JSONObject(raw))
       ?: throw SshTransportException("invalid_configuration", "CLI authentication check is invalid.")
@@ -388,7 +406,7 @@ internal class SshTransport(
       if (orchestratorChannel?.isConnected == true) throw SshTransportException("session_busy", "The remote orchestrator is already running.")
     }
     val channel = next.openChannel("exec") as ChannelExec
-    val pty = request.setup != SshSetupAction.INSTALL
+    val pty = request.setup != null || request.operation == "interactive"
     channel.setPty(pty)
     if (pty) channel.setPtyType("xterm-256color", request.cols, request.rows, request.width, request.height)
     channel.setCommand(
@@ -408,7 +426,7 @@ internal class SshTransport(
       val input = channel.inputStream
       synchronized(lock) {
         this.channel = channel
-        this.output = if (request.operation == "interactive" || request.setup == SshSetupAction.LOGIN) channel.outputStream else null
+        this.output = if (request.operation == "interactive" || request.setup != null) channel.outputStream else null
         this.channelID = id
       }
       emit(JSONObject().put("type", "started").put("id", id).put("operation", request.operation).put("agent", request.agent.id))
@@ -727,6 +745,15 @@ internal class SshTransport(
     }
   }
 
+  private fun marker(value: String, name: String): String? =
+    value.lineSequence()
+      .firstOrNull { it.startsWith(name) }
+      ?.removePrefix(name)
+      ?.trim()
+
+  private fun versionToken(value: String): String? =
+    Regex("(?<![0-9])v?[0-9]+(?:\\.[0-9]+){1,2}(?:[-+][0-9A-Za-z.-]+)?").find(value)?.value
+
   private fun runExec(command: String): Triple<String, String, Int> {
     val next = currentSession()
     val channel = next.openChannel("exec") as ChannelExec
@@ -735,8 +762,8 @@ internal class SshTransport(
     channel.setErrStream(stderr)
     return try {
       channel.connect(CONNECT_TIMEOUT_MS)
-      val stdout = readBounded(channel.inputStream)
       val deadline = System.currentTimeMillis() + EXEC_TIMEOUT_MS
+      val stdout = SshExecReader.read(channel.inputStream, { channel.isClosed }, deadline)
       while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(20)
       if (!channel.isClosed) {
         channel.disconnect()
@@ -798,20 +825,6 @@ internal class SshTransport(
     } finally {
       runCatching { channel.disconnect() }
     }
-  }
-
-  private fun readBounded(input: InputStream): String {
-    val output = ByteArrayOutputStream()
-    val buffer = ByteArray(4 * 1024)
-    var remaining = MAX_OUTPUT_BYTES
-    while (remaining > 0) {
-      val count = input.read(buffer, 0, minOf(buffer.size, remaining))
-      if (count < 0) break
-      if (count == 0) continue
-      output.write(buffer, 0, count)
-      remaining -= count
-    }
-    return output.toString(StandardCharsets.UTF_8.name()).take(MAX_OUTPUT_CHARS)
   }
 
   private fun currentSession() = synchronized(lock) {
@@ -887,7 +900,6 @@ internal class SshTransport(
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val EXEC_TIMEOUT_MS = 15_000L
     private const val MAX_SFTP_ENTRIES = 256
-    private const val MAX_OUTPUT_BYTES = 128 * 1024
     private const val MAX_OUTPUT_CHARS = 16 * 1024
     private const val MAX_EVENT_OUTPUT_CHARS = 8 * 1024
     private const val MAX_INPUT_BYTES = 128 * 1024

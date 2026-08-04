@@ -29,6 +29,7 @@ function text(value: unknown) {
 }
 
 function agent(value: unknown): SshAgent | undefined {
+  if (value === "slopcode-cli") return "opencode-cli"
   return typeof value === "string" && SSH_AGENTS.includes(value as SshAgent) ? (value as SshAgent) : undefined
 }
 

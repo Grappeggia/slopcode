@@ -34,7 +34,6 @@ type Props = {
 }
 
 function agentName(value: SshWorkspaceState["agent"]) {
-  if (value === "slopcode-cli") return "Slopcode"
   if (value === "codex-cli") return "Codex"
   if (value === "opencode-cli") return "OpenCode"
   if (value === "antigravity-cli") return "Antigravity"
@@ -353,8 +352,8 @@ export function SshAgenticSession(props: Props) {
             >
               <p class="text-14-medium">Antigravity headless session</p>
               <p class="mt-1 text-12-regular text-text-weak">
-                Antigravity runs through its one-shot CLI. Prompts and text output are supported; structured tool and
-                approval events are not available here.
+                Antigravity runs in a sandboxed project scoped to this workspace. Its one-shot CLI does not expose
+                structured approvals, so this mode automatically accepts its in-project actions.
               </p>
             </section>
           </Show>

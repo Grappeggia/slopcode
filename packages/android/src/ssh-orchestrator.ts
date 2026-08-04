@@ -1,6 +1,6 @@
 import type { SshAgent, SshOrchestratorEvent, SshTransport } from "./ssh"
 
-export type OrchestratorAgent = "slopcode" | "opencode" | "codex" | "claude" | "antigravity"
+export type OrchestratorAgent = "opencode" | "codex" | "claude" | "antigravity"
 
 export type OrchestratorInteraction = {
   id: string
@@ -53,7 +53,6 @@ function id(value: unknown) {
 }
 
 export function agentID(value: SshAgent): OrchestratorAgent {
-  if (value === "slopcode-cli") return "slopcode"
   if (value === "opencode-cli") return "opencode"
   if (value === "codex-cli") return "codex"
   if (value === "antigravity-cli") return "antigravity"
@@ -211,6 +210,18 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
       id: `${type}:${cursor ?? crypto.randomUUID()}`,
       type: type === "turn.output" ? "output" : type === "turn.reasoning" ? "reasoning" : "retry",
       text: content,
+    }
+    const last = state.items[state.items.length - 1]
+    if (last?.type === item.type && "text" in last) {
+      const items = [
+        ...state.items.slice(0, -1),
+        { ...last, text: last.text + item.text },
+      ]
+      return {
+        ...base,
+        phase: type === "turn.retry" ? "running" : "running",
+        items: items.slice(-MAX_ITEMS),
+      }
     }
     return {
       ...base,

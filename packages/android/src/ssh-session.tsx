@@ -15,7 +15,6 @@ type Props = {
 const MAX_OUTPUT = 128 * 1024
 
 function name(agent: SshWorkspaceState["agent"]) {
-  if (agent === "slopcode-cli") return "Slopcode CLI"
   if (agent === "codex-cli") return "Codex CLI"
   if (agent === "opencode-cli") return "OpenCode CLI"
   if (agent === "antigravity-cli") return "Antigravity CLI"

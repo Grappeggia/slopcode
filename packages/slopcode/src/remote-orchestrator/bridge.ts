@@ -21,6 +21,13 @@ const clean = (value: string, size = 2_000, fallback = "") => {
   )
   return output || fallback
 }
+const streamText = (value: string, size = AgentOrchestrationLimits.maxTextBytes) => {
+  const normalized = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+  return [...normalized].reduce(
+    (result, character) => (bytes(result) + bytes(character) <= size ? result + character : result),
+    "",
+  )
+}
 const native = (value: string) => clean(value, 512, "native")
 const identifier = (prefix: string, value: string = randomUUID()) =>
   `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 48)}`
@@ -232,7 +239,7 @@ export class Bridge {
       this.event(sessionID, {
         type: "turn.output",
         turnID,
-        text: clean(event.text, AgentOrchestrationLimits.maxTextBytes, "Agent output unavailable"),
+        text: streamText(event.text, AgentOrchestrationLimits.maxTextBytes),
         ...(event.nativeID ? { metadata: { nativeID: native(event.nativeID) } } : {}),
       })
       return
@@ -241,7 +248,7 @@ export class Bridge {
       this.event(sessionID, {
         type: "turn.reasoning",
         turnID,
-        text: clean(event.text, AgentOrchestrationLimits.maxTextBytes, "Agent reasoning unavailable"),
+        text: streamText(event.text, AgentOrchestrationLimits.maxTextBytes),
         ...(event.nativeID ? { metadata: { nativeID: native(event.nativeID) } } : {}),
       })
       return

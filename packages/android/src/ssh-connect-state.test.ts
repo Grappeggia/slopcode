@@ -175,7 +175,7 @@ describe("SSH onboarding transitions", () => {
         connectedDirectory: folder,
         target: "marcos@mac.example.com",
         directory: folder,
-        agent: "slopcode-cli",
+        agent: "opencode-cli",
       }),
     ).toBeUndefined()
     closing.resolve(undefined)
@@ -197,14 +197,14 @@ describe("SSH onboarding transitions", () => {
       connected: true,
       profile: "marcos@mac.example.com:22",
       directory: "/Users/marcos/old-workspace",
-      agent: "slopcode-cli",
+      agent: "opencode-cli",
     }
     const leave = leaveSshOnboarding({
       connections: gate,
       onboarding: generation,
       reset: () => {
         const next = resetSshOnboarding()
-        state = { connected: next.connected, profile: "", directory: next.directory, agent: "slopcode-cli" }
+        state = { connected: next.connected, profile: "", directory: next.directory, agent: "opencode-cli" }
       },
     })
 
@@ -258,13 +258,13 @@ describe("SSH onboarding transitions", () => {
       connectedDirectory: "/Users/marcos/temp",
       target: "marcos@mac.example.com",
       directory: "/Users/marcos/temp",
-      agent: "slopcode-cli" as const,
+      agent: "opencode-cli" as const,
     }
 
     expect(connectedSshWorkspace(input)).toEqual({
       target: "marcos@mac.example.com",
       directory: "/Users/marcos/temp",
-      agent: "slopcode-cli",
+      agent: "opencode-cli",
     })
     expect(connectedSshWorkspace({ ...input, target: "marcos@other.example.com" })).toBeUndefined()
     expect(connectedSshWorkspace({ ...input, directory: "/Users/marcos/draft" })).toBeUndefined()

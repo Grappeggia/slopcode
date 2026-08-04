@@ -19,6 +19,7 @@ import {
   parseSshListing,
   parseSshAuthStatus,
   parseSshPreflight,
+  parseSshUpdateCheck,
   parseSshOrchestratorEventMessage,
   parseSshOrchestratorStart,
   parseSshWorkspaceSelection,
@@ -104,6 +105,7 @@ export type AndroidNativeBridge = {
   sshList?(path: string, showHidden?: boolean): Promise<unknown>
   sshSelectWorkspace?(path: string): Promise<unknown>
   sshExec?(input: string): Promise<unknown>
+  sshUpdateCheck?(input: string): Promise<unknown>
   sshAuthStatus?(input: string): Promise<unknown>
   sshCodexAppServerStatus?(input: string): Promise<unknown>
   sshStart?(input: string): Promise<unknown>
@@ -205,6 +207,7 @@ export function getAndroidBridge(
     sshList: (path, showHidden = false) => call("sshList", path, showHidden),
     sshSelectWorkspace: (path) => call("sshSelectWorkspace", path),
     sshExec: (input) => call("sshExec", input),
+    sshUpdateCheck: (input) => call("sshUpdateCheck", input),
     sshAuthStatus: (input) => call("sshAuthStatus", input),
     sshCodexAppServerStatus: (input) => call("sshCodexAppServerStatus", input),
     sshStart: (input) => call("sshStart", input),
@@ -302,6 +305,16 @@ export function sshTransportBridge(bridge: AndroidNativeBridge | undefined): Ssh
         parseSshAuthStatus,
         "Android returned an invalid SSH authentication result.",
       ),
+    ...(bridge.sshUpdateCheck
+      ? {
+          checkUpdate: (agent: SshAgent, directory: string) =>
+            result(
+              bridge.sshUpdateCheck!(JSON.stringify({ agent, directory })),
+              parseSshUpdateCheck,
+              "Android returned an invalid SSH update result.",
+            ),
+        }
+      : {}),
     codexAppServerStatus: async (directory) => {
       const fallback = () =>
         checkCodexAppServer(

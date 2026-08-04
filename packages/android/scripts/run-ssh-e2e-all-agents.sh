@@ -52,9 +52,9 @@ if [[ ! -f "$SSH_PASSWORD_FILE" || ! -r "$SSH_PASSWORD_FILE" ]]; then
 fi
 
 case "$SSH_E2E_SETUP_AGENT" in
-  slopcode-cli|codex-cli|opencode-cli|claude-code|antigravity-cli) ;;
+  codex-cli|opencode-cli|claude-code|antigravity-cli) ;;
   *)
-    echo "SSH_E2E_SETUP_AGENT must be one of: slopcode-cli, codex-cli, opencode-cli, claude-code, antigravity-cli." >&2
+    echo "SSH_E2E_SETUP_AGENT must be one of: codex-cli, opencode-cli, claude-code, antigravity-cli." >&2
     exit 2
     ;;
 esac
@@ -160,7 +160,7 @@ echo "Running real native SSH transport coverage against $SSH_HOST:$port. Remote
 run firstUseRequiresTrustAndBothSupportedAuthenticationMethodsWork
 run sftpListsScopedWorkspaceWithBreadcrumbDataAndHidesDotfilesByDefault
 run configuredMissingAgentUsesTheAllowlistedInstallChecklist
-run allFiveAgentsPassPreflightSkipLoginAndCompleteOneShotPrompts
+run allFourAgentsPassPreflightSkipLoginAndCompleteOneShotPrompts
 run interactivePtyAcceptsInputResizeCtrlCDisconnectAndReconnect
 run changedHostKeyIsRejectedWithoutAcceptingTheReplacement
 run wrongPasswordIsActionable
@@ -179,4 +179,4 @@ run networkLossDropsActivePtyThenReconnectsAndResumes true
 echo "Running deterministic local Android model coverage for persisted jobs, reconnect cursors, duplicate events, and notification actions."
 ./gradlew :app:testDebugUnitTest --tests dev.slopcode.android.RemoteJobModelsTest --tests dev.slopcode.android.SshModelsTest
 
-echo "Native SSH release-candidate E2E passed for all five allowlisted agents. No protected credential values were logged."
+echo "Native SSH release-candidate E2E passed for all four allowlisted agents. No protected credential values were logged."

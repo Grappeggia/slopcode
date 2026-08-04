@@ -582,7 +582,7 @@ class AndroidUiInstrumentedTest {
     .put("port", 22)
     .put("username", "agent")
     .put("directory", "/home/agent/temp")
-    .put("agent", "slopcode-cli")
+    .put("agent", "opencode-cli")
     .put("recentTargets", JSONArray().put("agent@fixture.test"))
     .put("recentFolders", JSONArray().put("/home/agent/temp"))
     .toString()

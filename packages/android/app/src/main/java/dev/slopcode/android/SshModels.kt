@@ -2,6 +2,8 @@ package dev.slopcode.android
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 internal object SshPath {
   fun normalize(value: String): String? {
@@ -87,15 +89,14 @@ internal enum class SshAgent(
   val loginArgs: List<String>,
   val installScript: String? = null,
 ) {
-  SLOPCODE("slopcode-cli", "slopcode", listOf("run"), listOf("auth", "list"), listOf("npm", "install", "-g", "slopcode@latest"), listOf("slopcode", "auth", "login")),
-  CODEX("codex-cli", "codex", listOf("exec"), listOf("login", "status"), listOf("npm", "install", "-g", "@openai/codex"), listOf("codex", "login")),
+  CODEX("codex-cli", "codex", listOf("exec"), listOf("login", "status"), listOf("npm", "install", "-g", "@openai/codex"), listOf("codex", "login", "--device-auth")),
   OPENCODE("opencode-cli", "opencode", listOf("run"), listOf("auth", "list"), listOf("npm", "install", "-g", "opencode-ai"), listOf("opencode", "auth", "login")),
   CLAUDE("claude-code", "claude", listOf("-p"), listOf("auth", "status"), listOf("npm", "install", "-g", "@anthropic-ai/claude-code"), listOf("claude")),
   ANTIGRAVITY(
     "antigravity-cli",
     "agy",
     emptyList(),
-    listOf("models"),
+    listOf("--print", "Reply exactly READY"),
     emptyList(),
     listOf("agy"),
     "curl -fsSL https://antigravity.google/cli/install.sh | bash",
@@ -116,6 +117,8 @@ internal enum class SshSetupAction(val id: String) {
 }
 
 internal object SshCommand {
+  private const val SUDO_PROMPT = "[Slopcode] Administrator password: "
+
   fun interactive(agent: SshAgent, directory: String) = command(directory, agent.binary)
 
   fun prompt(agent: SshAgent, directory: String) = command(directory, agent.binary, *agent.promptArgs.toTypedArray())
@@ -124,8 +127,9 @@ internal object SshCommand {
 
   fun authStatus(agent: SshAgent, directory: String) = command(directory, agent.binary, *agent.authArgs.toTypedArray())
 
-  fun install(agent: SshAgent, directory: String) = agent.installScript?.let { script(directory, it) }
-    ?: command(directory, *agent.installArgs.toTypedArray())
+  fun update(agent: SshAgent, directory: String) = script(directory, if (agent.installScript == null) npmUpdate(agent) else antigravityUpdate(agent))
+
+  fun install(agent: SshAgent, directory: String) = script(directory, agent.installScript?.let(::curlInstall) ?: npmInstall(agent.installArgs.last()))
 
   fun login(agent: SshAgent, directory: String) = command(directory, *agent.loginArgs.toTypedArray())
 
@@ -134,6 +138,50 @@ internal object SshCommand {
   fun orchestrator(directory: String) = command(directory, "slopcode", "remote-orchestrator", "--stdio")
 
   private fun command(directory: String, vararg args: String) = script(directory, "exec ${args.joinToString(" ") { argument(it) }}")
+
+  private fun npmUpdate(agent: SshAgent) =
+    "printf '%s%s\\n' '__SLOPCODE_CURRENT__' \"\u0024(${argument(agent.binary)} --version 2>/dev/null || true)\"; " +
+      "if command -v npm >/dev/null 2>&1; then " +
+      "printf '%s%s\\n' '__SLOPCODE_LATEST__' \"\u0024(npm view ${argument(agent.installArgs.last())} version 2>/dev/null || true)\"; " +
+      "else printf '%s\\n' '__SLOPCODE_LATEST__'; fi"
+
+  private fun antigravityUpdate(agent: SshAgent) =
+    "printf '%s%s\\n' '__SLOPCODE_CURRENT__' \"\u0024(${argument(agent.binary)} --version 2>/dev/null || true)\"; " +
+      "if command -v curl >/dev/null 2>&1; then " +
+      "os=\"\u0024(uname -s)\"; arch=\"\u0024(uname -m)\"; " +
+      "if [ \"\u0024os\" = 'Darwin' ]; then os=darwin; elif [ \"\u0024os\" = 'Linux' ]; then os=linux; else os=unknown; fi; " +
+      "if [ \"\u0024arch\" = 'x86_64' ] || [ \"\u0024arch\" = 'amd64' ]; then arch=amd64; elif [ \"\u0024arch\" = 'arm64' ] || [ \"\u0024arch\" = 'aarch64' ]; then arch=arm64; else arch=unknown; fi; " +
+      "platform=\"\u0024{os}_\u0024{arch}\"; " +
+      "if [ \"\u0024os\" = linux ] && ( [ -f /lib/libc.musl-x86_64.so.1 ] || [ -f /lib/libc.musl-aarch64.so.1 ] || ldd /bin/ls 2>&1 | grep -q musl ); then platform=\"linux_\u0024{arch}_musl\"; fi; " +
+      "latest=\"\u0024(curl -fsSL \"https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/\u0024{platform}.json\" 2>/dev/null | sed -n 's/.*\"version\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)\"; " +
+      "printf '%s%s\\n' '__SLOPCODE_LATEST__' \"\u0024latest\"; " +
+      "else printf '%s\\n' '__SLOPCODE_LATEST__'; fi"
+
+  private fun npmInstall(packageName: String) =
+    "if command -v npm >/dev/null 2>&1; then " +
+      "npm install --prefix \"\u0024HOME/.local\" -g ${argument(packageName)}; " +
+      "elif command -v apt-get >/dev/null 2>&1; then " +
+      "if [ \"\u0024(id -u)\" -eq 0 ]; then " +
+      "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm; " +
+      "elif command -v sudo >/dev/null 2>&1; then " +
+      "sudo -S -p \"$SUDO_PROMPT\" sh -c \"DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm\"; " +
+      "else printf '%s\\n' 'npm is missing and this account cannot use apt without sudo.' >&2; exit 126; fi; " +
+      "command -v npm >/dev/null 2>&1 || { printf '%s\\n' 'npm installation did not provide an executable npm.' >&2; exit 127; }; " +
+      "npm install --prefix \"\u0024HOME/.local\" -g ${argument(packageName)}; " +
+      "else printf '%s\\n' 'Install npm or Node.js on this computer before installing this agent.' >&2; exit 127; fi"
+
+  private fun curlInstall(value: String) =
+    "if command -v curl >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then " +
+      "$value; " +
+      "elif command -v apt-get >/dev/null 2>&1; then " +
+      "if [ \"\u0024(id -u)\" -eq 0 ]; then " +
+      "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl bash; " +
+      "elif command -v sudo >/dev/null 2>&1; then " +
+      "sudo -S -p \"$SUDO_PROMPT\" sh -c \"DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl bash\"; " +
+      "else printf '%s\\n' 'curl/bash are missing and this account cannot use apt without sudo.' >&2; exit 126; fi; " +
+      "command -v curl >/dev/null 2>&1 && command -v bash >/dev/null 2>&1 || { printf '%s\\n' 'curl installation did not provide curl and bash.' >&2; exit 127; }; " +
+      "$value; " +
+      "else printf '%s\\n' 'Install curl and bash on this computer before installing this agent.' >&2; exit 127; fi"
 
   private fun script(directory: String, value: String) =
     buildString {
@@ -152,6 +200,31 @@ internal object SshCommand {
   private fun argument(value: String) = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\u0024", "\\\u0024").replace("`", "\\`")}\""
 
   private fun quote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
+}
+
+internal object SshExecReader {
+  fun read(input: InputStream, closed: () -> Boolean, deadline: Long): String {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(4 * 1024)
+    while (true) {
+      val available = input.available()
+      if (available > 0) {
+        val count = input.read(buffer, 0, minOf(buffer.size, available))
+        if (count > 0 && output.size() < MAX_OUTPUT_BYTES) {
+          output.write(buffer, 0, minOf(count, MAX_OUTPUT_BYTES - output.size()))
+        }
+        continue
+      }
+      if (closed()) break
+      if (System.currentTimeMillis() >= deadline) {
+        throw SshTransportException("exec_timeout", "Remote CLI preflight timed out.")
+      }
+      Thread.sleep(20)
+    }
+    return output.toString(Charsets.UTF_8.name()).take(16 * 1024)
+  }
+
+  private const val MAX_OUTPUT_BYTES = 128 * 1024
 }
 
 internal data class SshConnectionRequest(
@@ -282,11 +355,13 @@ internal fun SshAgent.loggedIn(output: String, exitCode: Int): Boolean {
   if (this == SshAgent.ANTIGRAVITY) {
     if (Regex("\\b(?:please\\s+)?sign\\s+in\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
     if (Regex("\\b(?:auth(?:entication)?|login|error|not-authenticated)\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
-    return Regex("(?m)^(?:gemini|claude|gpt)(?:[-_][a-z0-9.]+)+$", RegexOption.IGNORE_CASE).containsMatchIn(value)
+    return Regex("\\bREADY\\b", RegexOption.IGNORE_CASE).containsMatchIn(value) ||
+      Regex("(?m)^(?:gemini|claude|gpt)(?:[-_][a-z0-9.]+)+$", RegexOption.IGNORE_CASE).containsMatchIn(value)
   }
   if (value.isEmpty()) return true
   if (Regex("\\\"loggedIn\\\"\\s*:\\s*false", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
   if (Regex("\\b(not|no|none|未)\\b.{0,32}\\b(logged|auth|credential)", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
+  if (Regex("\\bno\\s+accounts?\\s+found\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
   if (Regex("\\b0\\s+credentials?\\b", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
   return true
 }

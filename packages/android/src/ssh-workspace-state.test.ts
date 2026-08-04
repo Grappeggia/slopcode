@@ -48,6 +48,10 @@ describe("direct SSH workspace state", () => {
     expect(normalizeSshWorkspace({ ...state, target: "marcos@host;bad" })).toBeUndefined()
   })
 
+  test("migrates a saved Slopcode CLI selection to OpenCode", () => {
+    expect(normalizeSshWorkspace({ ...state, agent: "slopcode-cli" })).toMatchObject({ agent: "opencode-cli" })
+  })
+
   test("persists the bounded recent-folder model used by onboarding", async () => {
     const secure = storage()
     const next = [

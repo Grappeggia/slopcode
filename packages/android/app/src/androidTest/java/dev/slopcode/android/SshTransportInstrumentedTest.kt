@@ -119,7 +119,7 @@ class SshTransportInstrumentedTest {
   }
 
   @Test
-  fun allFiveAgentsPassPreflightSkipLoginAndCompleteOneShotPrompts() {
+  fun allFourAgentsPassPreflightSkipLoginAndCompleteOneShotPrompts() {
     val fixture = fixture()
     val ssh = connected(fixture)
     val events = events()
@@ -153,8 +153,8 @@ class SshTransportInstrumentedTest {
     val events = events()
     try {
       assertEquals(fixture.directory, ssh.selectWorkspace(fixture.directory).optString("path"))
-      assertPreflight(ssh, SshAgent.SLOPCODE, fixture)
-      val session = ssh.start(start("interactive", SshAgent.SLOPCODE, fixture))
+      assertPreflight(ssh, SshAgent.OPENCODE, fixture)
+      val session = ssh.start(start("interactive", SshAgent.OPENCODE, fixture))
       assertSession(session)
       ssh.resize(100, 30, 0, 0)
       ssh.input("SSH_INTERACTIVE_E2E\\n")
@@ -249,8 +249,8 @@ class SshTransportInstrumentedTest {
     var offline = false
     try {
       assertEquals(fixture.directory, ssh.selectWorkspace(fixture.directory).optString("path"))
-      assertPreflight(ssh, SshAgent.SLOPCODE, fixture)
-      val active = ssh.start(start("interactive", SshAgent.SLOPCODE, fixture))
+      assertPreflight(ssh, SshAgent.OPENCODE, fixture)
+      val active = ssh.start(start("interactive", SshAgent.OPENCODE, fixture))
       assertSession(active)
       offline = true
       shell("svc wifi disable")
@@ -278,7 +278,7 @@ class SshTransportInstrumentedTest {
       val resumed = ssh.start(
         start(
           "prompt",
-          SshAgent.SLOPCODE,
+          SshAgent.OPENCODE,
           fixture,
           "Reply with exactly SSH_NETWORK_RESUME_OK and then exit. Do not write files or run commands.",
         ),

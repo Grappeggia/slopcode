@@ -86,7 +86,7 @@ describe("android security source regressions", () => {
     expect(session).toContain("Remote agent session")
     expect(session).toContain("Approval required")
     expect(session).toContain("Diagnostics")
-    expect(session).toContain("Antigravity headless session")
+    expect(session).toContain("Antigravity runs in a sandboxed project scoped to this workspace")
     expect(session).toContain("Open Interactive CLI")
     const pty = await Bun.file(`${root}/src/ssh-session.tsx`).text()
     expect(pty).toContain("Return to agentic session")

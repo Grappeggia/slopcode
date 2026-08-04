@@ -11,9 +11,12 @@ import {
   parseSshListing,
   parseSshTarget,
   parseSshPreflight,
+  parseSshUpdateCheck,
   parseSshStart,
   parseSshWorkspaceSelection,
   sshSetupRecipe,
+  sshLoginFlow,
+  sshLoginGuidance,
   sshProfile,
   validSshPath,
 } from "./ssh"
@@ -210,15 +213,16 @@ describe("direct SSH boundary parsing", () => {
   })
 
   test("uses only fixed setup recipes and accepts only bounded setup events", () => {
-    expect(sshSetupRecipe("slopcode-cli", "install")).toBe("npm install -g slopcode@latest")
-    expect(sshSetupRecipe("slopcode-cli", "login")).toBe("slopcode auth login")
-    expect(sshSetupRecipe("codex-cli", "login")).toBe("codex login")
+    expect(sshSetupRecipe("codex-cli", "login")).toBe("codex login --device-auth")
     expect(sshSetupRecipe("opencode-cli", "login")).toBe("opencode auth login")
     expect(sshSetupRecipe("claude-code", "login")).toBe("claude")
-    expect(sshSetupRecipe("antigravity-cli", "install")).toBe(
-      "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-    )
+    expect(sshSetupRecipe("antigravity-cli", "install")).toContain("curl -fsSL https://antigravity.google/cli/install.sh | bash")
+    expect(sshSetupRecipe("antigravity-cli", "install")).toContain("apt-get")
     expect(sshSetupRecipe("antigravity-cli", "login")).toBe("agy")
+    expect(sshLoginFlow("codex-cli")).toBe("device-code")
+    expect(sshLoginFlow("opencode-cli")).toBe("provider-method")
+    expect(sshLoginFlow("claude-code")).toBe("ssh-browser-code")
+    expect(sshLoginGuidance("antigravity-cli")).toContain("SSH")
     expect(parseSshStart({ id: "ssh_setup1", status: "started", operation: "install" })).toEqual({
       id: "ssh_setup1",
       status: "started",
@@ -236,5 +240,28 @@ describe("direct SSH boundary parsing", () => {
         "nonce-1",
       ),
     ).toBeUndefined()
+  })
+
+  test("parses bounded installed-agent update results", () => {
+    expect(
+      parseSshUpdateCheck({
+        agent: "codex-cli",
+        executable: "codex",
+        exitCode: 0,
+        output: "__SLOPCODE_CURRENT__codex-cli 0.146.0\n__SLOPCODE_LATEST__0.147.0",
+        ok: true,
+        currentVersion: "0.146.0",
+        latestVersion: "0.147.0",
+      }),
+    ).toEqual({
+      agent: "codex-cli",
+      executable: "codex",
+      exitCode: 0,
+      output: "__SLOPCODE_CURRENT__codex-cli 0.146.0\n__SLOPCODE_LATEST__0.147.0",
+      ok: true,
+      currentVersion: "0.146.0",
+      latestVersion: "0.147.0",
+    })
+    expect(parseSshUpdateCheck({ agent: "bash", currentVersion: "1", output: "", exitCode: 0, ok: true })).toBeUndefined()
   })
 })

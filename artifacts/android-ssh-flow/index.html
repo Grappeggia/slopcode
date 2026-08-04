@@ -406,13 +406,13 @@
         <p>Sanitized emulator evidence for the computer → workspace → agentic-session flow.</p>
       </header>
 
-      <section class="toolbar" aria-label="Gallery appearance">
+      <section class="toolbar" aria-label="Screenshot theme">
         <div class="appearance-heading">
           <div>
-            <strong>Gallery appearance</strong>
-            <p class="appearance-copy">Choose a comfortable reading theme.</p>
+            <strong>Screenshot theme</strong>
+            <p class="appearance-copy">Show only Android captures made in the selected theme.</p>
           </div>
-          <div class="theme-toggle" role="group" aria-label="Choose gallery appearance">
+          <div class="theme-toggle" role="group" aria-label="Choose screenshot theme">
             <button class="theme-button" type="button" data-theme-option="light" aria-pressed="false">Light</button>
             <button class="theme-button" type="button" data-theme-option="dark" aria-pressed="true">Dark</button>
           </div>
@@ -430,14 +430,14 @@
         <div id="agent-tabs" class="tabs" role="tablist" aria-labelledby="agent-label">
           <button
             class="tab"
-            id="tab-slopcode"
+            id="tab-opencode"
             role="tab"
             aria-controls="agent-flow"
             aria-selected="true"
             tabindex="0"
-            data-agent="slopcode-cli"
+            data-agent="opencode-cli"
           >
-            Slopcode
+            OpenCode
           </button>
           <button
             class="tab"
@@ -449,17 +449,6 @@
             data-agent="codex-cli"
           >
             Codex
-          </button>
-          <button
-            class="tab"
-            id="tab-opencode"
-            role="tab"
-            aria-controls="agent-flow"
-            aria-selected="false"
-            tabindex="-1"
-            data-agent="opencode-cli"
-          >
-            OpenCode
           </button>
           <button
             class="tab"
@@ -488,8 +477,8 @@
       </section>
 
       <div class="notice">
-        Release gate: every upgrade must produce a fresh complete run for all five agents. The selector changes both the
-        agent status and the agent-specific evidence below; shared onboarding evidence is shown for context.
+        Release gate: every upgrade must produce a fresh complete run for all four agents. The selectors change the
+        agent status and show only screenshots captured in the selected Android theme.
       </div>
 
       <section aria-labelledby="shared-heading">
@@ -510,21 +499,29 @@
       const shared = document.querySelector("#shared")
       const flow = document.querySelector("#agent-flow")
       const heading = document.querySelector("#agent-heading")
-      let selectedAgent = "slopcode-cli"
+      let selectedAgent = "opencode-cli"
+      let selectedTheme = "light"
+      let manifest
 
       function applyTheme(value, persist = true) {
         const theme = value === "light" ? "light" : "dark"
+        selectedTheme = theme
         document.documentElement.dataset.theme = theme
         themeButtons.forEach((button) => {
           button.setAttribute("aria-pressed", String(button.dataset.themeOption === theme))
         })
         if (persist) localStorage.setItem("slopcode-gallery-theme", theme)
+        if (manifest) render(manifest)
       }
 
       themeButtons.forEach((button) => {
         button.addEventListener("click", () => applyTheme(button.dataset.themeOption))
       })
-      applyTheme(localStorage.getItem("slopcode-gallery-theme") ?? "dark", false)
+      applyTheme(localStorage.getItem("slopcode-gallery-theme") ?? "light", false)
+
+      function screenshotTheme(value) {
+        return /(?:^|[-_])dark(?:[-_.]|$)/i.test(value.src) ? "dark" : "light"
+      }
 
       function item(value) {
         const entry = document.createElement("li")
@@ -571,14 +568,18 @@
 
       function render(data) {
         const selected = data.agents[selectedAgent]
-        shared.replaceChildren(...data.shared.map(item))
-        heading.textContent = `${selected.label} flow`
+        const sharedItems = data.shared.filter((value) => screenshotTheme(value) === selectedTheme)
+        const agentItems = selected.screenshots.filter((value) => screenshotTheme(value) === selectedTheme)
+        shared.replaceChildren(
+          ...(sharedItems.length ? sharedItems.map(item) : [empty(`No ${selectedTheme} shared-flow screenshots are available.`)]),
+        )
+        heading.textContent = `${selected.label} flow · ${selectedTheme}`
         flow.replaceChildren(
-          ...(selected.screenshots.length
-            ? selected.screenshots.map(item)
+          ...(agentItems.length
+            ? agentItems.map(item)
             : [
                 empty(
-                  `No fresh ${selected.label} evidence is published yet. Run the all-agents SSH gallery job before treating this build as release-ready.`,
+                  `No ${selectedTheme} ${selected.label} screenshots are available yet. Capture this agent in ${selectedTheme} mode before treating the gallery as theme-complete.`,
                 ),
               ]),
         )
@@ -604,6 +605,7 @@
           return response.json()
         })
         .then((data) => {
+          manifest = data
           tabs.forEach((tab, index) => {
             tab.addEventListener("click", () => choose(tab.dataset.agent, data))
             tab.addEventListener("keydown", (event) => {

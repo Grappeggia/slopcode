@@ -1,22 +1,33 @@
-export const SSH_AGENTS = ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code", "antigravity-cli"] as const
+export const SSH_AGENTS = ["opencode-cli", "codex-cli", "claude-code", "antigravity-cli"] as const
 export type SshAgent = (typeof SSH_AGENTS)[number]
 export const SSH_SETUP_ACTIONS = ["install", "login"] as const
 export type SshSetupAction = (typeof SSH_SETUP_ACTIONS)[number]
+export type SshLoginFlow = "device-code" | "provider-method" | "ssh-browser-code"
+
+export function sshLoginFlow(agent: SshAgent): SshLoginFlow {
+  if (agent === "codex-cli") return "device-code"
+  if (agent === "opencode-cli") return "provider-method"
+  return "ssh-browser-code"
+}
+
+export function sshLoginGuidance(agent: SshAgent) {
+  if (agent === "codex-cli") return "Codex is using OAuth device authentication. Open the link on this phone and enter the code; no browser callback is needed on the computer."
+  if (agent === "opencode-cli") return "OpenCode will ask which provider and login method to use. Choose that provider’s device or headless method when one is offered."
+  if (agent === "antigravity-cli") return "Antigravity detects SSH and shows a secure Google sign-in link plus a code to return to this screen."
+  return "Claude Code detects SSH and shows a browser sign-in link plus a code to return to this screen."
+}
 
 export function sshSetupRecipe(agent: SshAgent, action: SshSetupAction) {
   const install =
-    agent === "slopcode-cli"
-      ? "npm install -g slopcode@latest"
-      : agent === "codex-cli"
-        ? "npm install -g @openai/codex"
-        : agent === "opencode-cli"
-          ? "npm install -g opencode-ai"
-          : agent === "claude-code"
-            ? "npm install -g @anthropic-ai/claude-code"
-            : "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    agent === "codex-cli"
+      ? 'npm install --prefix "$HOME/.local" -g @openai/codex (uses apt-get to install Node.js/npm if npm is missing)'
+      : agent === "opencode-cli"
+        ? 'npm install --prefix "$HOME/.local" -g opencode-ai (uses apt-get to install Node.js/npm if npm is missing)'
+        : agent === "claude-code"
+          ? 'npm install --prefix "$HOME/.local" -g @anthropic-ai/claude-code (uses apt-get to install Node.js/npm if npm is missing)'
+          : "curl -fsSL https://antigravity.google/cli/install.sh | bash (uses apt-get to install curl/bash if they are missing)"
   if (action === "install") return install
-  if (agent === "slopcode-cli") return "slopcode auth login"
-  if (agent === "codex-cli") return "codex login"
+  if (agent === "codex-cli") return "codex login --device-auth"
   if (agent === "opencode-cli") return "opencode auth login"
   if (agent === "antigravity-cli") return "agy"
   return "claude"
@@ -86,6 +97,11 @@ export type SshAuthStatus = SshPreflight & {
   loggedIn: boolean
 }
 
+export type SshUpdateCheck = SshPreflight & {
+  currentVersion: string
+  latestVersion?: string
+}
+
 export type SshCodexAppServerStatus = {
   executable: "codex"
   state: "ready" | "needs_sign_in" | "not_installed" | "unavailable"
@@ -133,6 +149,7 @@ export type SshTransport = {
   selectWorkspace(path: string): Promise<string>
   execVersion(agent: SshAgent, directory: string): Promise<SshPreflight>
   execAuthStatus(agent: SshAgent, directory: string): Promise<SshAuthStatus>
+  checkUpdate?: (agent: SshAgent, directory: string) => Promise<SshUpdateCheck>
   codexAppServerStatus(directory: string): Promise<SshCodexAppServerStatus>
   start(input: {
     operation: "interactive" | "prompt" | SshSetupAction
@@ -372,6 +389,14 @@ export function parseSshAuthStatus(value: unknown): SshAuthStatus | undefined {
   if (!object(value) || typeof value.loggedIn !== "boolean") return
   const preflight = parseSshPreflight(value)
   return preflight ? { ...preflight, loggedIn: value.loggedIn } : undefined
+}
+
+export function parseSshUpdateCheck(value: unknown): SshUpdateCheck | undefined {
+  if (!object(value) || typeof value.currentVersion !== "string" || value.currentVersion.length > 128) return
+  const preflight = parseSshPreflight(value)
+  if (!preflight) return
+  const latestVersion = typeof value.latestVersion === "string" && value.latestVersion.length <= 128 ? value.latestVersion : undefined
+  return { ...preflight, currentVersion: value.currentVersion, ...(latestVersion ? { latestVersion } : {}) }
 }
 
 export function codexAppServerStatus(

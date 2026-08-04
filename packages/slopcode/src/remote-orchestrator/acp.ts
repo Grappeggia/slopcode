@@ -76,6 +76,14 @@ const safe = (value: string, size: number, fallback = "") => {
   )
   return output || fallback
 }
+const streamText = (value: unknown, size = AgentOrchestrationLimits.maxTextBytes) => {
+  if (typeof value !== "string") return ""
+  const clean = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+  return [...clean].reduce(
+    (result, character) => (bytes(result) + bytes(character) <= size ? result + character : result),
+    "",
+  )
+}
 const text = (value: unknown, size = AgentOrchestrationLimits.maxTextBytes, fallback = "") =>
   typeof value === "string" ? safe(value, size, fallback) : fallback
 const status = (value: unknown): "pending" | "in_progress" | "completed" | "failed" =>
@@ -83,7 +91,7 @@ const status = (value: unknown): "pending" | "in_progress" | "completed" | "fail
 const content = (value: unknown) => {
   if (!value || typeof value !== "object") return undefined
   const item = value as { type?: unknown; text?: unknown; uri?: unknown; name?: unknown }
-  if (item.type === "text") return { text: text(item.text) }
+  if (item.type === "text") return { text: streamText(item.text) }
   if (item.type === "resource_link")
     return { path: text(item.uri, AgentOrchestrationLimits.maxPathBytes), name: text(item.name, 256, "resource") }
   return undefined

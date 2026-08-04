@@ -13,7 +13,7 @@ import {
 describe("SSH session handoff", () => {
   test("opens Antigravity directly in interactive PTY mode", () => {
     expect(initialSshMode("antigravity-cli")).toBe("interactive")
-    expect(initialSshMode("slopcode-cli")).toBe("prompt")
+    expect(initialSshMode("opencode-cli")).toBe("prompt")
     expect(initialSshMode("codex-cli")).toBe("prompt")
   })
 

@@ -4,9 +4,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.json.JSONObject
 import org.json.JSONArray
+import java.io.ByteArrayInputStream
 
 class SshModelsTest {
   @Test
@@ -36,7 +38,6 @@ class SshModelsTest {
 
   @Test
   fun `only allowlisted agents parse`() {
-    assertEquals(SshAgent.SLOPCODE, SshAgent.parse("slopcode-cli"))
     assertEquals(SshAgent.CODEX, SshAgent.parse("codex-cli"))
     assertEquals(SshAgent.OPENCODE, SshAgent.parse("opencode-cli"))
     assertEquals(SshAgent.CLAUDE, SshAgent.parse("claude-code"))
@@ -46,16 +47,16 @@ class SshModelsTest {
 
   @Test
   fun `setup recipes are fixed and do not accept a command from the request`() {
-    assertTrue(SshCommand.install(SshAgent.SLOPCODE, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"slopcode@latest\""))
-    assertTrue(SshCommand.install(SshAgent.CODEX, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"@openai/codex\""))
-    assertTrue(SshCommand.install(SshAgent.OPENCODE, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"opencode-ai\""))
-    assertTrue(SshCommand.install(SshAgent.CLAUDE, "/tmp/project").contains("exec \"npm\" \"install\" \"-g\" \"@anthropic-ai/claude-code\""))
+    assertTrue(SshCommand.install(SshAgent.CODEX, "/tmp/project").contains("npm install --prefix \"\u0024HOME/.local\" -g \"@openai/codex\""))
+    assertTrue(SshCommand.install(SshAgent.OPENCODE, "/tmp/project").contains("npm install --prefix \"\u0024HOME/.local\" -g \"opencode-ai\""))
+    assertTrue(SshCommand.install(SshAgent.CLAUDE, "/tmp/project").contains("npm install --prefix \"\u0024HOME/.local\" -g \"@anthropic-ai/claude-code\""))
     assertTrue(SshCommand.install(SshAgent.ANTIGRAVITY, "/tmp/project").contains("curl -fsSL https://antigravity.google/cli/install.sh | bash"))
-    assertTrue(SshCommand.login(SshAgent.SLOPCODE, "/tmp/project").contains("exec \"slopcode\" \"auth\" \"login\""))
-    assertTrue(SshCommand.login(SshAgent.CODEX, "/tmp/project").contains("exec \"codex\" \"login\""))
+    assertTrue(SshCommand.login(SshAgent.CODEX, "/tmp/project").contains("exec \"codex\" \"login\" \"--device-auth\""))
     assertTrue(SshCommand.login(SshAgent.OPENCODE, "/tmp/project").contains("exec \"opencode\" \"auth\" \"login\""))
     assertTrue(SshCommand.login(SshAgent.CLAUDE, "/tmp/project").contains("exec \"claude\""))
     assertTrue(SshCommand.login(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\""))
+    assertTrue(SshCommand.update(SshAgent.CODEX, "/tmp/project").contains("npm view \"@openai/codex\" version"))
+    assertTrue(SshCommand.update(SshAgent.ANTIGRAVITY, "/tmp/project").contains("manifests/\u0024{platform}.json"))
     assertNull(SshStartRequest.parse(JSONObject("""{"operation":"bash","agent":"codex-cli","directory":"/tmp/project"}""")))
   }
 
@@ -73,13 +74,17 @@ class SshModelsTest {
     assertTrue(SshCommand.authStatus(SshAgent.CODEX, "/tmp/project").contains("exec \"codex\" \"login\" \"status\""))
     assertTrue(SshCommand.authStatus(SshAgent.CLAUDE, "/tmp/project").contains("exec \"claude\" \"auth\" \"status\""))
     assertTrue(SshCommand.version(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\" \"--version\""))
-    assertTrue(SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project").contains("exec \"agy\" \"models\""))
+    assertTrue(
+      SshCommand.authStatus(SshAgent.ANTIGRAVITY, "/tmp/project").contains(
+        "exec \"agy\" \"--print\" \"Reply exactly READY\"",
+      ),
+    )
     assertTrue(SshAgent.CODEX.loggedIn("Logged in using ChatGPT", 0))
     assertTrue(SshAgent.OPENCODE.loggedIn("4 credentials", 0))
     assertFalse(SshAgent.CLAUDE.loggedIn("{\"loggedIn\":false}", 0))
-    assertFalse(SshAgent.SLOPCODE.loggedIn("0 credentials", 0))
     assertFalse(SshAgent.CODEX.loggedIn("Logged in using ChatGPT", 1))
     assertTrue(SshAgent.ANTIGRAVITY.loggedIn("gemini-3.6-flash-high\nclaude-sonnet-4-6\ngpt-oss-120b-medium", 0))
+    assertTrue(SshAgent.ANTIGRAVITY.loggedIn("{\"content\":\"READY\"}", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("authentication failed", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("gemini-3.6-flash-high\nerror: login failed", 0))
@@ -98,6 +103,17 @@ class SshModelsTest {
     )
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("unexpected", 0))
     assertFalse(SshAgent.ANTIGRAVITY.loggedIn("gemini-3.6-flash-high", 1))
+  }
+
+  @Test
+  fun `exec reader times out while an unauthenticated command keeps stdout open`() {
+    assertThrows(SshTransportException::class.java) {
+      SshExecReader.read(
+        ByteArrayInputStream(ByteArray(0)),
+        { false },
+        10,
+      )
+    }
   }
 
   @Test

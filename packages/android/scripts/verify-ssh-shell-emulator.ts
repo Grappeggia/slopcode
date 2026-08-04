@@ -800,7 +800,7 @@ try {
     port: 22,
     username: "agent",
     directory: "/home/agent/temp",
-    agent: "slopcode-cli",
+    agent: "opencode-cli",
     recentTargets: ["agent@fixture.test"],
     recentFolders: ["/home/agent/temp"],
   }

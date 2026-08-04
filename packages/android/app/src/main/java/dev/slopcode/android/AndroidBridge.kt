@@ -597,6 +597,11 @@ class AndroidBridge(
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH exec request")
           sshAsync(id, replyProxy) { ssh.version(raw) }
         }
+        "sshUpdateCheck" -> {
+          arity(args, 1)
+          val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH update check")
+          sshAsync(id, replyProxy) { ssh.update(raw) }
+        }
         "sshAuthStatus" -> {
           arity(args, 1)
           val raw = argPayload(args, 0, MAX_VALUE_BYTES) ?: error("Invalid SSH authentication check")

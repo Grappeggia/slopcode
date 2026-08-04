@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import net from "node:net"
 import path from "node:path"
 import { PassThrough } from "node:stream"
 import { spawn } from "node:child_process"
@@ -10,6 +11,7 @@ import { argv as appServerArgv, connect as connectCodex } from "@/remote-orchest
 import { argv, connect as connectCli } from "@/remote-orchestrator/cli"
 import { Bridge, run } from "@/remote-orchestrator/bridge"
 import { approvalCwd, contained } from "@/remote-orchestrator/workspace"
+import { create as createClaudePermission } from "@/remote-orchestrator/claude-permission"
 
 const dirs: string[] = []
 type Frame = typeof AgentOrchestrationFrame.Type
@@ -31,6 +33,32 @@ const frame = (type: string, value: Record<string, unknown>) =>
 const waitFor = async (condition: () => boolean) => {
   for (let index = 0; index < 2_000 && !condition(); index++) await Bun.sleep(1)
   expect(condition()).toBe(true)
+}
+const claudePermissionRequest = async (config: string, tool: string, input: Record<string, unknown>) => {
+  const value = await Bun.file(config).json()
+  const server = value.mcpServers.slopcode_approval
+  const socket = server.args[2]
+  const token = server.args[4]
+  return new Promise<string>((resolve, reject) => {
+    const client = net.createConnection(socket)
+    const id = crypto.randomUUID()
+    let rest = ""
+    client.once("connect", () => {
+      client.write(`${JSON.stringify({ token })}\n`)
+      client.write(`${JSON.stringify({ id, tool, input })}\n`)
+    })
+    client.setEncoding("utf8")
+    client.on("data", (chunk: string) => {
+      rest += chunk
+      const index = rest.indexOf("\n")
+      if (index < 0) return
+      const response = JSON.parse(rest.slice(0, index))
+      client.destroy()
+      if (response.id !== id || typeof response.output !== "string") return reject(new Error("unexpected Claude approval"))
+      resolve(response.output)
+    })
+    client.once("error", reject)
+  })
 }
 type SessionResponse = Frame & { kind: "response"; type: "session.create"; sessionID: string }
 const sessionResponses = (output: Frame[]) =>
@@ -81,7 +109,7 @@ describe("remote orchestrator", () => {
     await session.close()
   })
 
-  test("wraps Codex and Claude one-shot CLIs through stdin with reduced capabilities", async () => {
+  test("wraps Codex and Claude one-shot CLIs through stdin", async () => {
     const cwd = await temp()
     const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-cli-agent.ts")
     for (const agent of ["codex", "claude"] as const) {
@@ -93,7 +121,7 @@ describe("remote orchestrator", () => {
         start: () => spawn(process.execPath, [fixture, agent], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
       })
       await session.turn("safe prompt")
-      expect(session.capabilities).toEqual(["workspace", "sessions", "turns"])
+      expect(session.capabilities).toEqual(agent === "claude" ? ["workspace", "sessions", "turns", "approvals"] : ["workspace", "sessions", "turns"])
       expect(events).toContainEqual(expect.objectContaining({ type: "output", text: `${agent}:safe prompt` }))
       expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"thread.started"') }))
       expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"turn.completed"') }))
@@ -101,6 +129,19 @@ describe("remote orchestrator", () => {
       expect(session.question("unknown", "answer")).toBe(false)
       await session.close()
     }
+  })
+
+  test("round-trips Claude CLI permissions through the native approval seam", async () => {
+    const cwd = await temp()
+    const events: ACPEvent[] = []
+    const permission = await createClaudePermission({ cwd, emit: (event) => events.push(event) })
+    const request = claudePermissionRequest(permission.config, "Write", { file_path: "index.html", content: "safe" })
+    await waitFor(() => events.some((event) => event.type === "approval"))
+    const approval = events.find((event): event is Extract<ACPEvent, { type: "approval" }> => event.type === "approval")
+    expect(approval).toMatchObject({ title: "Claude wants to use Write", command: "index.html", cwd })
+    if (approval) expect(permission.approval(approval.id, true)).toBe(true)
+    expect(JSON.parse(await request)).toEqual({ behavior: "allow", updatedInput: { file_path: "index.html", content: "safe" } })
+    await permission.close()
   })
 
   test("uses the allowlisted Codex App Server lifecycle and maps rich events", async () => {
@@ -206,7 +247,7 @@ describe("remote orchestrator", () => {
       cwd,
       emit: (event) => events.push(event),
       start: (agent, dir, text, format) => {
-        value = argv(agent, text, format)
+        value = argv(agent, text, format, undefined, dir)
         return spawn(process.execPath, [fixture, agent, text], {
           cwd: dir,
           shell: false,
@@ -215,19 +256,18 @@ describe("remote orchestrator", () => {
       },
     })
     await session.turn(prompt)
-    expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", "--", prompt])
+    expect(value).toEqual(["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"])
     expect(events).toContainEqual(
       expect.objectContaining({ type: "output", text: `antigravity:${prompt.replaceAll("\n", " ")}` }),
     )
     await session.close()
   })
 
-  test("keeps option-shaped Antigravity prompts after the end-of-options delimiter", () => {
+  test("keeps option-shaped Antigravity prompts in the named prompt argument", () => {
     for (const prompt of ["--help", "--dangerously-skip-permissions"]) {
       const value = argv("antigravity", prompt)
-      expect(value).toEqual(["agy", "--print", "--output-format", "stream-json", "--", prompt])
-      expect(value.slice(value.indexOf("--") + 1)).toEqual([prompt])
-      expect(argv("antigravity", prompt, "text")).toEqual(["agy", "--print", "--", prompt])
+      expect(value).toEqual(["agy", "--new-project", "--add-dir", ".", "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"])
+      expect(argv("antigravity", prompt, "text")).toEqual(["agy", "--new-project", "--add-dir", ".", "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt])
     }
   })
 
@@ -242,7 +282,7 @@ describe("remote orchestrator", () => {
       cwd,
       emit: (event) => events.push(event),
       start: (agent, dir, text, format) => {
-        const value = argv(agent, text, format)
+        const value = argv(agent, text, format, undefined, dir)
         launches.push(value)
         return spawn(process.execPath, [fixture, ...value.slice(1)], {
           cwd: dir,
@@ -254,8 +294,8 @@ describe("remote orchestrator", () => {
     })
     await session.turn(prompt)
     expect(launches).toEqual([
-      ["agy", "--print", "--output-format", "stream-json", "--", prompt],
-      ["agy", "--print", "--", prompt],
+      ["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"],
+      ["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt],
     ])
     expect(events).toContainEqual(expect.objectContaining({ type: "output", text: "fallback-ok" }))
     await session.close()

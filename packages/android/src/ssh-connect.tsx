@@ -3,6 +3,8 @@ import {
   normalizeSshTarget,
   parseSshTarget,
   SSH_AGENTS,
+  sshLoginFlow,
+  sshLoginGuidance,
   sshSetupRecipe,
   sshProfile,
   validSshPath,
@@ -11,12 +13,20 @@ import {
   type SshFolderEntry,
   type SshFolderListing,
   type SshCodexAppServerStatus,
+  type SshUpdateCheck,
   type SshSetupAction,
   type SshTransport,
 } from "./ssh"
 import { canOpenExternalUrl, getAndroidBridge } from "./bridge"
 import { installAndroidBack } from "./android-back"
-import { persistSshWorkspace } from "./platform"
+import { appStorage, persistSshWorkspace } from "./platform"
+import {
+  newerSshVersion,
+  readSshUpdateRecord,
+  shouldCheckSshUpdate,
+  writeSshUpdateRecord,
+  type SshUpdatePreference,
+} from "./ssh-updates"
 import type { SshWorkspaceState } from "./ssh-workspace-state"
 import { SshShell } from "./ssh-shell"
 import {
@@ -40,6 +50,7 @@ type Auth = SshConnectAuth
 type Step = "auth" | "folder" | "agent"
 type Setup = {
   action: SshSetupAction
+  reason?: "missing" | "upgrade"
   id?: string
   output: string
   state: "available" | "running" | "failed" | "complete"
@@ -50,7 +61,6 @@ type AgentStatus = "Ready" | "Needs setup" | "Not installed" | "Checking"
 const MAX_SETUP_OUTPUT = 16 * 1024
 
 function agentName(value: SshAgent) {
-  if (value === "slopcode-cli") return "Slopcode"
   if (value === "codex-cli") return "Codex"
   if (value === "opencode-cli") return "OpenCode"
   if (value === "antigravity-cli") return "Antigravity"
@@ -58,7 +68,6 @@ function agentName(value: SshAgent) {
 }
 
 function agentDescription(value: SshAgent) {
-  if (value === "slopcode-cli") return "slopcode / slopcode run"
   if (value === "codex-cli") return "codex / codex exec"
   if (value === "opencode-cli") return "opencode / opencode run"
   if (value === "antigravity-cli") return "agy / Antigravity CLI"
@@ -104,12 +113,62 @@ function appendOutput(current: string, next: string) {
   return `${current}${next}`.slice(-MAX_SETUP_OUTPUT)
 }
 
+function cleanSetupOutput(value: string) {
+  return value
+    .replace(/\u001b\]8;[^\u0007]*\u0007/g, (match) => match.match(/https:\/\/[^\u0007]+/)?.[0] ?? "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\([0-9A-Z]/g, "")
+    .replace(/\r/g, "\n")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+}
+
 function setupUrls(value: string) {
-  return [...value.matchAll(/https:\/\/[^\s<>()]+/g)]
+  const urls = [...cleanSetupOutput(value).matchAll(/https:\/\/(?:(?!https:\/\/)[^\s<>()])+/g)]
     .map((item) => item[0].replace(/[.,;:!?]+$/, ""))
     .filter(canOpenExternalUrl)
+  const best = new Map<string, { value: string; score: number }>()
+  urls.forEach((value) => {
+    const url = new URL(value)
+    const score = ["client_id", "state", "code_challenge", "redirect_uri", "scope", "user_code"].filter((key) =>
+      url.searchParams.has(key),
+    ).length
+    const key = `${url.origin}${url.pathname}`
+    const previous = best.get(key)
+    if (!previous || score > previous.score || (score === previous.score && value.length < previous.value.length)) {
+      best.set(key, { value, score })
+    }
+  })
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score || a.value.length - b.value.length)
+    .map((item) => item.value)
+    .slice(0, 3)
+}
+
+function setupCodes(value: string) {
+  const output = cleanSetupOutput(value)
+  const matches = [
+    ...output.matchAll(/(?:enter|use|paste)(?:\s+the)?\s+(?:device\s+)?code\s*:?\s*([A-Z0-9][A-Z0-9-]{3,31})/gi),
+    ...output.matchAll(/(?:device|user|verification|authorization)\s+code\s*:?\s*([A-Z0-9][A-Z0-9-]{3,31})/gi),
+    ...output.matchAll(/\bcode\s*:\s*([A-Z0-9][A-Z0-9-]{3,31})/gi),
+    ...output.matchAll(/(?:one-time|one time)\s+code[^\n]*\n\s*([A-Z0-9][A-Z0-9-]{3,31})/gi),
+  ]
+  return matches
+    .map((item) => item[1].toUpperCase())
+    .filter((item) => !["AUTHORIZATION", "CODE", "DEVICE", "NONE", "SIGNIN", "TRUE"].includes(item))
     .filter((item, index, values) => values.indexOf(item) === index)
     .slice(0, 3)
+}
+
+function setupNeedsInput(action: SshSetupAction, output: string) {
+  if (action === "install") return /administrator password|sudo password/i.test(output)
+  return /(?:paste|enter|type|select|choose|password|passphrase|api[\s-]?key|token|secret|press\s+[a-z])/i.test(
+    cleanSetupOutput(output),
+  )
+}
+
+function setupInputType(action: SshSetupAction, output: string) {
+  if (action === "install") return "password"
+  return /password|passphrase|api[\s-]?key|token|secret/i.test(output) ? "password" : "text"
 }
 
 export function SshConnect(props: Props) {
@@ -123,7 +182,7 @@ export function SshConnect(props: Props) {
   const [passphrase, setPassphrase] = createSignal("")
   const [directory, setDirectory] = createSignal(props.initial?.directory ?? "")
   const [homePath, setHomePath] = createSignal("/")
-  const [agent, setAgent] = createSignal<SshAgent>(props.initial?.agent ?? "slopcode-cli")
+  const [agent, setAgent] = createSignal<SshAgent>(props.initial?.agent ?? "opencode-cli")
   const [listing, setListing] = createSignal<SshFolderListing>()
   const [browsePath, setBrowsePath] = createSignal("/")
   const [browseOpen, setBrowseOpen] = createSignal(true)
@@ -142,10 +201,13 @@ export function SshConnect(props: Props) {
   const [preflight, setPreflight] = createSignal<string>()
   const [appServer, setAppServer] = createSignal<SshCodexAppServerStatus>()
   const [setup, setSetup] = createSignal<Setup>()
+  const [upgrade, setUpgrade] = createSignal<SshUpdateCheck>()
+  const [rememberUpgrade, setRememberUpgrade] = createSignal(false)
   const [setupInput, setSetupInput] = createSignal("")
   const [checkingLogin, setCheckingLogin] = createSignal(false)
   const [agentStatuses, setAgentStatuses] = createSignal<Partial<Record<SshAgent, AgentStatus>>>({})
   const credentials = createSshCredentialLoader(props.ssh)
+  const updates = appStorage()()
   const connections = createSshConnectionGate(props.ssh)
   const onboarding = createSshOnboardingGeneration()
   const selectedProfile = createMemo(() => {
@@ -264,15 +326,24 @@ export function SshConnect(props: Props) {
     if (!active(request, profile) || setup() !== current) return
     setSetup({ ...current, state: "complete" })
     if (current.action === "install") {
-      const ready = await checkPreflight(false, request, profile)
-      if (ready && active(request, profile)) setSetup({ action: "login", state: "available", output: "" })
-      if (active(request, profile)) setBusy(false)
+      const ready = await checkPreflight(true, request, profile)
+      if (ready && active(request, profile)) {
+        setSetup()
+        await saveWorkspace(request, profile)
+        if (active(request, profile)) setBusy(false)
+        return
+      }
+      if (active(request, profile) && setup()?.action === "login") {
+        void startSetup("login", request, profile)
+        return
+      }
+      if (active(request, profile) && setup()?.state !== "running") setBusy(false)
       return
     }
     const ready = await checkPreflight(false, request, profile)
     if (ready) await saveWorkspace(request, profile)
     if (active(request, profile)) setCheckingLogin(false)
-    if (active(request, profile)) setBusy(false)
+    if (active(request, profile) && setup()?.state !== "running") setBusy(false)
   }
 
   async function loadCredentials(value: string) {
@@ -313,6 +384,8 @@ export function SshConnect(props: Props) {
     setPreflight(next.preflight)
     setAppServer(next.appServer)
     setSetup(next.setup)
+    setUpgrade()
+    setRememberUpgrade(false)
     setSetupInput(next.setupInput)
     setCheckingLogin(next.checkingLogin)
     setAgentStatuses(next.agentStatuses)
@@ -403,6 +476,8 @@ export function SshConnect(props: Props) {
     setBusy(false)
     setAgent(value)
     setSetup()
+    setUpgrade()
+    setRememberUpgrade(false)
     setPreflight()
     setAppServer()
     setError("")
@@ -600,6 +675,63 @@ export function SshConnect(props: Props) {
       },
     })
 
+  const checkAgentUpdate = async (folder: string, request: number, profile: string | undefined) => {
+    const selected = agent()
+    if (!profile || !props.ssh.checkUpdate) return true
+    const previous = await readSshUpdateRecord(updates, profile, selected)
+    if (!shouldCheckSshUpdate(previous)) return true
+    let result: SshUpdateCheck | undefined
+    try {
+      result = await props.ssh.checkUpdate(selected, folder)
+    } catch {
+      await writeSshUpdateRecord(updates, profile, selected, {
+        checkedAt: Date.now(),
+        ...(previous?.preference ? { preference: previous.preference } : {}),
+      }).catch(() => undefined)
+      return true
+    }
+    await writeSshUpdateRecord(updates, profile, selected, {
+      checkedAt: Date.now(),
+      ...(previous?.preference ? { preference: previous.preference } : {}),
+    }).catch(() => undefined)
+    if (!result.ok || !result.latestVersion || !newerSshVersion(result.currentVersion, result.latestVersion)) return true
+    if (previous?.preference === "skip") return true
+    if (previous?.preference === "upgrade") {
+      setSetup({ action: "install", reason: "upgrade", state: "available", output: "" })
+      setError("")
+      void startSetup("install", request, profile, "upgrade")
+      return false
+    }
+    setUpgrade(result)
+    setRememberUpgrade(false)
+    setError("")
+    return false
+  }
+
+  const resolveUpgrade = async (choice: SshUpdatePreference) => {
+    const result = upgrade()
+    const profile = selectedProfile()
+    if (!result || !profile || busy()) return
+    const request = onboarding.current()
+    const remember = rememberUpgrade()
+    setUpgrade()
+    setRememberUpgrade(false)
+    setBusy(true)
+    if (remember) {
+      await writeSshUpdateRecord(updates, profile, result.agent, {
+        checkedAt: Date.now(),
+        preference: choice,
+      }).catch(() => undefined)
+    }
+    if (choice === "skip") {
+      await saveWorkspace(request, profile)
+      if (active(request, profile)) setBusy(false)
+      return
+    }
+    setSetup({ action: "install", reason: "upgrade", state: "available", output: "" })
+    await startSetup("install", request, profile, "upgrade")
+  }
+
   const checkPreflight = async (offerLogin = true, request = onboarding.current(), profile = selectedProfile()) => {
     if (!active(request, profile) || !connected()) return false
     const folder = validSshPath(directory())
@@ -631,8 +763,9 @@ export function SshConnect(props: Props) {
         server?.output || result.output || result.error || `${result.executable} exited with ${result.exitCode}.`,
       )
       if (result.exitCode === 127) {
-        setSetup({ action: "install", state: "available", output: "" })
+        setSetup({ action: "install", reason: "missing", state: "available", output: "" })
         setError("")
+        if (offerLogin) void startSetup("install", request, profile)
         return false
       }
       if (!result.ok) {
@@ -656,14 +789,21 @@ export function SshConnect(props: Props) {
           setError(server.error ?? server.message)
           return false
         }
+        if (!(await checkAgentUpdate(folder, request, profile))) return false
         setSetup()
         setAgentStatuses((current) => ({ ...current, [selected]: "Ready" }))
         setError("")
         return true
       }
       setAgentStatuses((current) => ({ ...current, [selected]: "Needs setup" }))
-      setSetup({ action: "login", state: "available", output: "" })
-      setError(`Sign in to ${agentName(agent())} on the remote computer to continue.`)
+      const previous = setup()
+      setSetup({ action: "login", state: "available", output: previous?.action === "login" ? previous.output : "" })
+      if (offerLogin) {
+        setError("")
+        void startSetup("login", request, profile)
+      } else {
+        setError(`Sign in to ${agentName(agent())} on the remote computer to continue.`)
+      }
       return false
     } catch (cause) {
       if (active(request, profile)) setError(cause instanceof Error ? cause.message : "Remote CLI preflight failed.")
@@ -709,17 +849,20 @@ export function SshConnect(props: Props) {
     }
   }
 
-  const startSetup = async (action: SshSetupAction) => {
-    if (busy() || !connected()) return
-    const request = onboarding.current()
-    const profile = selectedProfile()
+  const startSetup = async (
+    action: SshSetupAction,
+    request = onboarding.current(),
+    profile = selectedProfile(),
+    reason: Setup["reason"] = action === "install" ? "missing" : undefined,
+  ) => {
+    if (!connected() || setup()?.state === "running") return
     const selected = agent()
     const folder = directory()
     setBusy(true)
     setError("")
     setSetupInput("")
     setCheckingLogin(false)
-    setSetup({ action, state: "running", output: "" })
+    setSetup({ action, reason, state: "running", output: "" })
     try {
       const result = await props.ssh.start({ operation: action, agent: selected, directory: folder })
       if (!active(request, profile) || agent() !== selected || directory() !== folder) return
@@ -727,7 +870,7 @@ export function SshConnect(props: Props) {
     } catch (cause) {
       if (!active(request, profile) || agent() !== selected || directory() !== folder) return
       const message = cause instanceof Error ? cause.message : `Could not start ${agentName(agent())} ${action}.`
-      setSetup({ action, state: "failed", output: `${message}\n` })
+      setSetup({ action, reason, state: "failed", output: `${message}\n` })
       setError(message)
       setBusy(false)
     }
@@ -736,16 +879,16 @@ export function SshConnect(props: Props) {
   const sendSetupInput = async () => {
     const current = setup()
     const value = setupInput()
-    if (!current || current.action !== "login" || current.state !== "running" || !value) return
+    if (!current || !setupNeedsInput(current.action, current.output) || current.state !== "running" || !value) return
     const request = onboarding.current()
     const profile = selectedProfile()
     try {
-      await props.ssh.input(`${value}\n`)
+      await props.ssh.input(`${value}${current.action === "login" ? "\r" : "\n"}`)
       if (!active(request, profile) || setup() !== current) return
       setSetupInput("")
     } catch (cause) {
       if (active(request, profile) && setup() === current)
-        setError(cause instanceof Error ? cause.message : "Could not send login input.")
+        setError(cause instanceof Error ? cause.message : "Could not send setup input.")
     }
   }
 
@@ -793,7 +936,7 @@ export function SshConnect(props: Props) {
     setError("")
     const ready = await checkPreflight(true, request, profile)
     if (ready && !setup()) await saveWorkspace(request, profile)
-    if (active(request, profile)) setBusy(false)
+    if (active(request, profile) && setup()?.state !== "running") setBusy(false)
   }
 
   return (
@@ -1300,7 +1443,7 @@ export function SshConnect(props: Props) {
                         <span
                           class={`rounded-full px-2 py-1 text-12-regular ${agentStatuses()[value] === "Ready" ? "bg-surface-success-weak text-text-success" : agentStatuses()[value] === "Not installed" ? "bg-surface-critical-weak text-text-critical" : "bg-surface-weak-base text-text-weak"}`}
                         >
-                          {agentStatuses()[value] ?? (value === "slopcode-cli" ? "Recommended" : "Checking")}
+                          {agentStatuses()[value] ?? (value === "opencode-cli" ? "Recommended" : "Checking")}
                         </span>
                       </span>
                       <span class="block text-12-regular text-text-weak">{agentDescription(value)}</span>
@@ -1354,6 +1497,50 @@ export function SshConnect(props: Props) {
                 </p>
               </section>
             </Show>
+            <Show when={upgrade()}>
+              {(available) => (
+                <section
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Agent upgrade available"
+                  class="rounded-lg border border-border-brand-base bg-surface-base p-4 flex flex-col gap-3"
+                >
+                  <div>
+                    <h2 class="text-16-medium">Upgrade {agentName(available().agent)}?</h2>
+                    <p class="text-12-regular text-text-weak">
+                      A newer version is available on this computer: {available().currentVersion} → {available().latestVersion}.
+                      Upgrade before starting this session?
+                    </p>
+                  </div>
+                  <label class="flex min-h-12 items-center gap-2 text-12-regular">
+                    <input
+                      type="checkbox"
+                      checked={rememberUpgrade()}
+                      onChange={(event) => setRememberUpgrade(event.currentTarget.checked)}
+                    />
+                    Remember my preference
+                  </label>
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy()}
+                      onClick={() => void resolveUpgrade("upgrade")}
+                      class="rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base disabled:opacity-50"
+                    >
+                      Upgrade
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy()}
+                      onClick={() => void resolveUpgrade("skip")}
+                      class="rounded-md border border-border-weak-base px-4 py-3 text-12-regular disabled:opacity-50"
+                    >
+                      Skip and Continue
+                    </button>
+                  </div>
+                </section>
+              )}
+            </Show>
             <Show when={setup()}>
               {(current) => (
                 <section
@@ -1364,14 +1551,31 @@ export function SshConnect(props: Props) {
                   <div>
                     <h2 class="text-14-medium">
                       {current().action === "install"
-                        ? `${agentName(agent())} is not installed`
+                        ? current().reason === "upgrade"
+                          ? `Upgrade ${agentName(agent())}`
+                          : `${agentName(agent())} is not installed`
                         : `Sign in to ${agentName(agent())}`}
                     </h2>
                     <p class="text-12-regular text-text-weak">
                       {current().action === "install"
-                        ? "We will prepare the selected agent on your computer, then verify that it is ready."
+                        ? current().reason === "upgrade"
+                          ? "A newer version is available. We will upgrade the selected agent on your computer, then verify that it is ready."
+                          : "We will prepare the selected agent on your computer, then verify that it is ready."
                         : "Complete sign-in on your computer. Slopcode will verify the agent before opening the session."}
                     </p>
+                    <Show when={current().action === "login"}>
+                      <p class="text-12-regular text-text-weak">
+                        <span class="text-text-strong">
+                          {sshLoginFlow(agent()) === "device-code"
+                            ? "Device-code sign-in"
+                            : sshLoginFlow(agent()) === "provider-method"
+                              ? "Provider sign-in"
+                              : "Remote browser sign-in"}
+                        </span>
+                        {" · "}
+                        {sshLoginGuidance(agent())}
+                      </p>
+                    </Show>
                   </div>
                   <ol class="grid grid-cols-3 gap-2" aria-label="Agent setup progress">
                     <li
@@ -1399,14 +1603,66 @@ export function SshConnect(props: Props) {
                   </details>
                   <Show when={current().output}>
                     <pre class="max-h-52 overflow-y-auto rounded-md border border-border-weak-base p-3 whitespace-pre-wrap text-12-regular">
-                      {current().output}
+                      {cleanSetupOutput(current().output)}
                     </pre>
                   </Show>
                   <Show when={current().action === "login" && current().state === "running"}>
+                    <Show when={setupCodes(current().output).length > 0}>
+                      <div class="rounded-lg border border-border-brand-base bg-surface-raised-base p-3">
+                        <p class="text-12-medium">Device code</p>
+                        <p class="mt-1 text-12-regular text-text-weak">Enter this code on the sign-in page:</p>
+                        <For each={setupCodes(current().output)}>
+                          {(code) => <code class="mt-2 block text-20-medium tracking-widest">{code}</code>}
+                        </For>
+                      </div>
+                    </Show>
+                    <Show when={setupNeedsInput(current().action, current().output)}>
+                      <div class="flex flex-col gap-2">
+                        <p class="text-12-regular text-text-weak">
+                          If the agent asks for a code, password, API key, or provider choice, enter it here. Sign-in input is never saved by Slopcode.
+                        </p>
+                        <div class="flex gap-2">
+                          <input
+                            type={setupInputType(current().action, current().output)}
+                            autocomplete="off"
+                            value={setupInput()}
+                            onInput={(event) => setSetupInput(event.currentTarget.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault()
+                                void sendSetupInput()
+                              }
+                            }}
+                            placeholder="Reply to the login prompt"
+                            aria-label="Login prompt input"
+                            class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void sendSetupInput()}
+                            disabled={!setupInput() || checkingLogin()}
+                            class="rounded-md border border-border-weak-base px-3 py-2 text-12-regular disabled:opacity-50"
+                          >
+                            Send
+                          </button>
+                        </div>
+                      </div>
+                    </Show>
+                    <button
+                      type="button"
+                      onClick={() => void checkLogin()}
+                      disabled={checkingLogin()}
+                      class="w-fit text-12-regular underline disabled:opacity-50"
+                    >
+                      {checkingLogin() ? "Checking sign-in…" : "I completed sign-in — check again"}
+                    </button>
+                  </Show>
+                  <Show when={current().action === "install" && current().state === "running" && setupNeedsInput(current().action, current().output)}>
                     <div class="flex flex-col gap-2">
+                      <p class="text-12-regular text-text-weak">This computer needs administrator access to install its package manager. This password is sent once to the remote installer and is not saved.</p>
                       <div class="flex gap-2">
                         <input
-                          type="text"
+                          type={setupInputType(current().action, current().output)}
                           autocomplete="off"
                           value={setupInput()}
                           onInput={(event) => setSetupInput(event.currentTarget.value)}
@@ -1416,8 +1672,8 @@ export function SshConnect(props: Props) {
                               void sendSetupInput()
                             }
                           }}
-                          placeholder="Reply to the login prompt"
-                          aria-label="Login prompt input"
+                          placeholder="Administrator password"
+                          aria-label="Administrator password"
                           class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular"
                         />
                         <button
@@ -1429,14 +1685,6 @@ export function SshConnect(props: Props) {
                           Send
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void checkLogin()}
-                        disabled={checkingLogin()}
-                        class="w-fit text-12-regular underline disabled:opacity-50"
-                      >
-                        {checkingLogin() ? "Checking sign-in…" : "I completed sign-in — check again"}
-                      </button>
                     </div>
                   </Show>
                   <For each={setupUrls(current().output)}>
@@ -1462,11 +1710,13 @@ export function SshConnect(props: Props) {
                     <button
                       type="button"
                       disabled={busy()}
-                      onClick={() => void startSetup(current().action)}
+                      onClick={() => void startSetup(current().action, onboarding.current(), selectedProfile(), current().reason)}
                       class="rounded-md bg-surface-brand-base px-4 py-3 text-12-regular text-text-on-brand-base disabled:opacity-50"
                     >
                       {current().state === "failed"
-                        ? `Retry ${current().action}`
+                        ? current().reason === "upgrade"
+                          ? "Retry upgrade"
+                          : `Retry ${current().action}`
                         : current().action === "install"
                           ? `Install ${agentName(agent())} on host`
                           : `Start ${agentName(agent())} sign-in`}
@@ -1490,7 +1740,7 @@ export function SshConnect(props: Props) {
             <div class="flex flex-wrap gap-3">
               <button
                 type="submit"
-                disabled={busy()}
+                disabled={busy() || Boolean(upgrade())}
                 class="sticky bottom-0 z-20 rounded-md bg-surface-brand-base text-text-on-brand-base px-4 py-3 disabled:opacity-50 sm:static"
               >
                 {!started()

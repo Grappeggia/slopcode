@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-03T09:44:16-07:00",
-  "build": "v0.2.215 Android debug · native Codex App Server handshake",
-  "requiredAgents": ["slopcode-cli", "codex-cli", "opencode-cli", "claude-code", "antigravity-cli"],
+  "generatedAt": "2026-08-03T15:04:00-07:00",
+  "build": "v0.2.215 Android debug · refreshed live SSH evidence",
+  "requiredAgents": ["opencode-cli", "codex-cli", "claude-code", "antigravity-cli"],
   "shared": [
     {
       "id": "appearance",
@@ -97,66 +97,73 @@
     }
   ],
   "agents": {
-    "slopcode-cli": {
-      "label": "Slopcode",
-      "status": "needs-run",
-      "runId": "emulator-2026-08-03-ui-matrix",
-      "screenshots": [
-        {
-          "id": "complete",
-          "title": "Native session reaches complete",
-          "caption": "SSH, workspace, session creation, and turn completion passed; this host emitted no assistant text for the Slopcode ACP turn, so the run is not marked release-passed.",
-          "src": "slopcode-01-complete-no-output.png",
-          "alt": "Slopcode remote session complete without assistant output"
-        }
-      ]
-    },
     "codex-cli": {
       "label": "Codex",
-      "status": "needs-run",
-      "runId": "emulator-2026-08-03-ui-matrix",
+      "status": "passed",
+      "runId": "emulator-2026-08-03-codex-tetris-real",
       "screenshots": [
         {
-          "id": "working",
-          "title": "Codex is working",
-          "caption": "Codex was already authenticated, so Android skipped login and streamed the live agent activity over SSH.",
-          "src": "codex-01-working.png",
-          "alt": "Codex remote agent working in the selected workspace"
+          "id": "tetris-command-approval",
+          "title": "Codex requests a workspace-scoped command approval",
+          "caption": "The live Android session pauses before creating the requested Tetris folder and files, showing the exact command and selected remote workspace.",
+          "src": "codex-03-android-e2e-tetris-approval.png",
+          "alt": "Codex approval request for a Tetris app command in the Android SSH session"
         },
         {
-          "id": "complete",
-          "title": "Codex completes the task",
-          "caption": "Codex created the small app files in the remote temp workspace and returned a complete result.",
-          "src": "codex-02-complete.png",
-          "alt": "Codex remote agent session complete"
+          "id": "tetris-file-approval",
+          "title": "Codex requests file-change approval",
+          "caption": "After the directory is created, Codex requests a second approval before writing the three Tetris source files.",
+          "src": "codex-04-android-e2e-tetris-file-approval.png",
+          "alt": "Codex file change approval in the Android SSH session"
+        },
+        {
+          "id": "tetris-complete",
+          "title": "Codex completes and verifies the Tetris app",
+          "caption": "Codex created index.html, styles.css, and app.js in /home/agent/temp/android-e2e-codex-tetris, then verified their presence and checked app.js syntax before the Android session reached Complete.",
+          "src": "codex-05-android-e2e-tetris-complete.png",
+          "alt": "Completed Codex Android SSH session after creating and verifying a Tetris app"
         }
       ]
     },
     "opencode-cli": {
       "label": "OpenCode",
-      "status": "needs-run",
-      "runId": "emulator-2026-08-03-ui-matrix",
+      "status": "passed",
+      "runId": "emulator-2026-08-03-opencode-tetris-real",
       "screenshots": [
         {
-          "id": "ready",
-          "title": "OpenCode session ready",
-          "caption": "OpenCode passed binary and auth preflight and opened the native SSH ACP session.",
-          "src": "opencode-01-ready.png",
+          "id": "real-ready",
+          "title": "OpenCode session ready · real emulator run",
+          "caption": "The rebuilt APK connected to agent@void over SSH, verified the saved local credential, and opened the native OpenCode ACP session.",
+          "src": "opencode-03-real-ready.png",
           "alt": "OpenCode remote agent session ready"
         },
         {
-          "id": "working",
-          "title": "OpenCode backend still working",
-          "caption": "The prompt reached OpenCode, but this host's configured local model did not emit a response within the validation window; direct opencode run also timed out.",
-          "src": "opencode-02-working-backend-blocked.png",
-          "alt": "OpenCode remote agent waiting on the host backend"
+          "id": "real-working",
+          "title": "OpenCode is building · real emulator run",
+          "caption": "The prompt reached the remote backend and the Android activity stream shows mkdir and write tool calls while the agent works in /home/agent/temp.",
+          "src": "opencode-04-real-working.png",
+          "alt": "OpenCode remote agent creating files in the selected workspace"
+        },
+        {
+          "id": "real-complete",
+          "title": "OpenCode completes the coding task",
+          "caption": "OpenCode created tetris-session/index.html, ran file and game-board smoke checks, and the Android session reached Complete.",
+          "src": "opencode-05-real-complete.png",
+          "alt": "Completed OpenCode coding session on the remote workspace"
+        },
+        {
+          "id": "android-e2e-tetris-complete",
+          "title": "OpenCode completes the latest Tetris build",
+          "caption": "In the latest emulator run, OpenCode created /home/agent/temp/android-e2e-tetris/index.html, styles.css, and app.js, then verified the folder contents with ls before the Android session reached Complete.",
+          "src": "opencode-06-android-e2e-tetris-complete.png",
+          "alt": "OpenCode Android SSH session complete after creating a Tetris web app"
         }
       ]
     },
     "claude-code": {
       "label": "Claude Code",
-      "status": "needs-run",
-      "runId": "emulator-2026-08-03-ui-matrix",
+      "status": "passed",
+      "runId": "emulator-2026-08-03-claude-tetris-real",
       "screenshots": [
         {
           "id": "setup",
@@ -164,14 +171,57 @@
           "caption": "The CLI is installed, but claude auth status reported loggedIn=false, so Android shows the visual sign-in checklist instead of opening a session.",
           "src": "claude-01-setup-required.png",
           "alt": "Claude Code sign-in required checklist"
+        },
+        {
+          "id": "login-method",
+          "title": "Claude Code chooses an account method",
+          "caption": "The live remote CLI is installed but unauthenticated. Android relays the initial account-method choice, while the later browser handoff stays off the gallery because it contains ephemeral authorization data.",
+          "src": "claude-02-login-method.png",
+          "alt": "Claude Code account-method choice in the Android SSH setup flow"
+        },
+        {
+          "id": "tetris-file-approval",
+          "title": "Claude requests an Android approval before writing",
+          "caption": "The real SSH session pauses before writing index.html in /home/agent/temp/claude-e2e-tetris, showing the selected workspace and an explicit approve or reject action.",
+          "src": "claude-03-android-e2e-tetris-approval.png",
+          "alt": "Claude Code write approval in the Android SSH session"
+        },
+        {
+          "id": "tetris-verification-approval",
+          "title": "Claude requests verification approval",
+          "caption": "After creating the Tetris source files, Claude requests approval to list the folder and syntax-check game.js before reporting completion.",
+          "src": "claude-04-android-e2e-tetris-verify.png",
+          "alt": "Claude Code verification approval in the Android SSH session"
+        },
+        {
+          "id": "tetris-complete",
+          "title": "Claude completes the remote Tetris app",
+          "caption": "Claude created index.html, style.css, and game.js in /home/agent/temp/claude-e2e-tetris. The Android session reached Complete and the remote JavaScript syntax check passed.",
+          "src": "claude-05-android-e2e-tetris-complete.png",
+          "alt": "Completed Claude Code Android SSH session after creating and verifying a Tetris app"
         }
       ]
     },
     "antigravity-cli": {
       "label": "Antigravity",
-      "status": "needs-run",
-      "runId": "emulator-2026-08-03-ui-matrix",
-      "screenshots": []
+      "status": "passed",
+      "runId": "emulator-2026-08-03-antigravity-tetris-real",
+      "screenshots": [
+        {
+          "id": "login-method",
+          "title": "Antigravity offers secure sign-in",
+          "caption": "The installed Antigravity CLI is waiting for Google OAuth or a Google Cloud project. The Android app keeps the browser authorization code out of recorded evidence.",
+          "src": "antigravity-01-login-method.png",
+          "alt": "Antigravity sign-in method choice in the Android SSH setup flow"
+        },
+        {
+          "id": "tetris-complete",
+          "title": "Antigravity completes a Tetris website in the selected workspace",
+          "caption": "The real Android SSH session created index.html, styles.css, and app.js in /home/agent/temp/antigravity-e2e-tetris-v3. Antigravity then ran node --check app.js and the session reached Complete.",
+          "src": "antigravity-02-android-e2e-tetris-complete.png",
+          "alt": "Completed Antigravity Android SSH session after creating and verifying a Tetris website"
+        }
+      ]
     }
   }
 }
