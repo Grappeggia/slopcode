@@ -40,3 +40,5 @@ Antigravity final review: complete (commit e889cb3eaf, initial review found two 
 Android audit remediation: complete for the renderer/native lifecycle scope. Task 1 onboarding, Task 2 shell/accessibility, Task 3 lifecycle/deep-link recovery, Task 4 credential-gated SSH E2E harness, and Task 5 notification/release certification are implemented and independently reviewed; live SSH/FCM remain explicit unavailable checks without credentials.
 
 Final Android validation: `bun test src` 114/114, `bun run typecheck`, `bun run build:web`, `./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin`, `bun run test:android-ui` 3/3 instrumented tests, and `bun scripts/verify-ssh-shell-emulator.ts` 8/8 visual fixtures with cleanup verification. The emulator keyboard and interactive PTY portions remain unavailable because no live authenticated SSH fixture is configured.
+
+Android rich agentic loop release baseline: complete (commit afaf133be5; Android 123/123, Slopcode orchestrator 23/23, protocol 7/7, typechecks and Android build/compile checks passed).

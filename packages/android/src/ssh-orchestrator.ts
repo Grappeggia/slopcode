@@ -241,7 +241,10 @@ export function reduceOrchestratorEvent(state: OrchestratorState, value: RecordV
       status,
       ...(text(value.tool.kind, 64) ? { kind: text(value.tool.kind, 64) } : {}),
     }
-    const items = [...state.items.filter((current) => current.id !== toolID), item].slice(-MAX_ITEMS)
+    const index = state.items.findIndex((current) => current.id === toolID)
+    const items = (
+      index < 0 ? [...state.items, item] : state.items.map((current, currentIndex) => (currentIndex === index ? item : current))
+    ).slice(-MAX_ITEMS)
     return { ...base, phase: "running", items }
   }
   if (type === "plan.available" && record(value.plan)) {

@@ -1,40 +1,40 @@
-# Task 1 implementation report
+## implementation
 
-## Changed files
+Partial Task 1 implementation at the requested timebox:
 
-- `packages/android/src/ssh-connect.tsx`
-- `packages/android/src/ssh-connect-state.ts`
-- `packages/android/src/ssh-connect-state.test.ts`
+- Added a bounded Android agent-session projection reducer for immediate user prompts and typed output, reasoning, retry, plan, tool, artifact, approval, question, completion, and failure entries.
+- Added stable-ID replacement for projected tools and changed the existing orchestrator reducer to update tool cards in place instead of removing and appending them.
+- Added review derivation for Changes, Files, Tests, and Screenshots using only reported tool/artifact metadata.
+- Added allowlisted local persistence helpers for draft, transcript projection, selected review tab, and last cursor, scoped by an opaque stable workspace/session key. Unknown credential-shaped fields and metadata are discarded by normalization.
+- The projection and persistence helpers are not yet wired into `ssh-agentic-session.tsx`; the existing direct SSH, agentic UI, interactive terminal, and Diagnostics behavior remain unchanged.
 
-## Result
+## tests with RED/GREEN evidence
 
-- Reset onboarding credentials, pending host-key verification, setup state, workspace state, and errors on computer, authentication, Change, Add, and cancellation paths.
-- Guard saved-credential reads with a revision and current-profile check, preventing a late response from populating a different target or a changed authentication method.
-- Bind shell navigation and saved workspace persistence to the active native connection profile and canonical selected directory.
-- Follow-up review fixes: manual password, passphrase, and key selection now invalidate saved-credential reads even for the same profile; a monotonic onboarding generation fences host trust, SFTP, agent checks, preflight, setup, persistence continuation, and disconnect completions.
-- Cleanup follow-up: stale connect/home completions serialize a profile-checked native disconnect that cannot affect a newer attempt; intentional disconnect clears its captured local connection identity even if an unrelated transition advanced onboarding state.
-- Leave follow-up: local connected/profile/workspace state is reset synchronously before awaiting native disconnect, so a late folder result cannot leave the UI claiming an unavailable transport.
-- Leave-race coverage follow-up: the component now uses a small leave-transition helper exercised with a deferred native disconnect, a newer connection attempt, and changed directory/agent state; completion of the old disconnect cannot restore or clear that newer state.
+- RED: `bun test src/ssh-agent-session-state.test.ts src/ssh-orchestrator.test.ts` initially failed because `ssh-agent-session-state.ts` did not exist and because a repeated `tool.updated` event moved the tool behind later output (5 passed, 2 failed, 1 module-load error).
+- GREEN: the same targeted command passes 11/11 tests with 47 assertions after implementation.
+- FAIL then GREEN: `bun run typecheck` initially failed with three widened test-fixture `agent: string` errors. After narrowing the fixture with `as const`, `bun run typecheck` passes.
+- Not run due to the user-requested timebox: full Android package tests, web/Android builds, DOM/accessibility fixture tests, Gradle unit tests, and connected Android instrumented tests.
 
-## Verification
+## files changed
 
-- `bun test src/ssh-connect-state.test.ts src/ssh-workspace-state.test.ts` — 13 pass.
-- `bun run typecheck` — pass.
-- `bun run build` — pass (web and Android debug APK).
-- `bun test src` — 100 pass.
+- `.superpowers/sdd/progress.md` — preserved the pre-existing rich-agentic-loop baseline note per repository instructions.
+- `.superpowers/sdd/task-1-report.md` — this implementation and validation report.
+- `packages/android/src/ssh-agent-session-state.ts` — new projection, review, normalization, persistence, and scope-key behavior.
+- `packages/android/src/ssh-agent-session-state.test.ts` — reducer, persistence, review, secret-field filtering, cursor, and scope tests.
+- `packages/android/src/ssh-orchestrator.ts` — stable in-place tool updates.
+- `packages/android/src/ssh-orchestrator.test.ts` — regression coverage for stable tool ordering.
 
-## Commit
+## self-review
 
-`5a9c4f1ea263c2f0160b9d3644983b4823c0040e` (`fix(android): reset SSH onboarding state safely`).
+- Scope stayed within Android state/orchestrator files plus task bookkeeping; no protocol, TUI, gallery, release, relay, desktop, or QR files changed.
+- Projection input is bounded and allowlisted, entries are capped at 160, and tool updates preserve their original transcript position.
+- Review selectors do not infer file contents, screenshots, diffs, or test results that were not reported by the orchestrator.
+- No credentials were read, written, logged, or added to fixtures. Persistence normalization rejects unknown top-level credential fields and entry metadata.
+- The targeted implementation and tests typecheck cleanly. `git diff --check` passes.
 
-Follow-up race-fix commit: `9bb2c7599142c4ac1548902c4e2f70e68b1bc320` (`test(android): gate live SSH E2E fixture`; shared-index commit containing the reviewed Task 1 race fix).
+## concerns
 
-Cleanup follow-up commit: `b8011da164507fb6c885d9d6f31675e91952f019` (`fix(android): clean stale SSH connections safely`).
-
-Leave follow-up commit: `542bde35bb02933a46d3a595421d8fc04ba04be6` (`fix(android): clear SSH state before disconnect`).
-
-Leave-race coverage follow-up commit: `200c2a2987cae0ceda6aa42e7c391f42c4c44eb6` (`test(android): cover SSH leave reconnect race`).
-
-## Blockers
-
-No implementation blocker. Live SSH validation remains unavailable without the protected emulator fixture credentials.
+- Task 1 is not complete: `ssh-agentic-session.tsx` still uses the stacked dashboard and does not consume or persist the new projection.
+- The compact app bar/sheet, first-viewport IME-sticky composer, immediate rendered prompt, conversation/reasoning components, typed live regions, and review tabs/sheets are not implemented in the UI.
+- No new DOM/accessibility fixture or Android instrumented ready → prompt → stream → approval/question → review → complete coverage was added.
+- Allowlisting prevents structural credential fields from being persisted, but arbitrary user/agent transcript text can itself contain sensitive material; a product-level redaction policy is still needed if transcript persistence must guarantee removal of secrets embedded in text.

@@ -94,6 +94,24 @@ describe("SSH agent orchestration frames", () => {
     expect(second.items).toEqual([{ id: "turn.output:cur_1", type: "output", text: "Created tetris.html" }])
   })
 
+  test("updates tools in place so streamed status changes do not reorder the transcript", () => {
+    const initial = { phase: "ready" as const, items: [], sessionID: "ses_1" }
+    const first = reduceOrchestratorEvent(initial, {
+      type: "tool.updated",
+      cursor: "cur_1",
+      tool: { id: "tool_1", title: "Run tests", status: "in_progress", kind: "execute" },
+    })
+    const output = reduceOrchestratorEvent(first, { type: "turn.output", cursor: "cur_2", text: "Checking…" })
+    const completed = reduceOrchestratorEvent(output, {
+      type: "tool.updated",
+      cursor: "cur_3",
+      tool: { id: "tool_1", title: "Run tests", status: "completed", kind: "execute" },
+    })
+
+    expect(completed.items.map((item) => item.id)).toEqual(["tool_1", "turn.output:cur_2"])
+    expect(completed.items[0]).toMatchObject({ id: "tool_1", status: "completed" })
+  })
+
   test("scopes native events to the active orchestrator channel", async () => {
     let emit: (event: SshOrchestratorEvent) => void = () => undefined
     const inputs: string[] = []
