@@ -191,55 +191,63 @@ class AndroidUiInstrumentedTest {
   }
 
   @Test
-  fun renderedAgenticSessionExposesLargeSessionApprovalQuestionAndDiagnosticControls() {
+  fun renderedAgenticSessionCompletesAndRestoresAcrossImeAndWebViewRecreation() {
     launch(fakeBridge = true, session = true).use { scenario ->
-      waitFor(scenario) {
-        val state = snapshot(scenario)
-        state.optString("text").contains("Your agent is in control") && state.optString("text").contains("Ready")
-      }
-      val ready = snapshot(scenario)
-      assertHit(ready, "menu")
-      assertHit(ready, "disconnect")
-      assertHit(ready, "prompt")
-      assertTrue(scrollIntoView(scenario, "#agent-prompt"))
-      waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("send").getBoolean("visible") }
-      assertHit(snapshot(scenario), "send")
-      assertTrue(scrollButtonIntoView(scenario, "Stop"))
-      waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("stop").getBoolean("visible") }
-      assertHit(snapshot(scenario), "stop")
-      assertTrue(clickAria(scenario, "Open navigation"))
-      waitFor(scenario) { snapshot(scenario).optString("drawerOpen") == "true" }
-      assertHit(snapshot(scenario), "activeSession")
-      assertTrue(closeNavigation(scenario))
-      waitFor(scenario) { snapshot(scenario).optString("drawerOpen").isEmpty() }
+      waitFor(scenario) { agentState(scenario).optString("phase") == "ready" }
+      val ready = agentState(scenario)
+      assertTrue("The composer is not in the unscrolled first viewport: " + ready, ready.optBoolean("firstViewport"))
+      assertTrue("The compact context disclosure expanded unexpectedly.", ready.optBoolean("compactContext"))
+      assertEquals(4, ready.optInt("reviewTabs"))
+      assertTrue("The initial review panel does not expose an empty state.", ready.optBoolean("reviewEmpty"))
+      assertHitRect(ready.getJSONObject("prompt"), "agent.prompt", "Message the agent")
 
-      assertTrue(scrollIntoView(scenario, "summary"))
-      assertHit(snapshot(scenario), "diagnostics")
-      assertTrue(clickSummary(scenario, "Diagnostics"))
-      waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("interactive").getInt("height") > 0 }
-      assertTrue(scrollIntoView(scenario, "details[open] button"))
-      waitFor(scenario) { snapshot(scenario).getJSONObject("buttons").getJSONObject("interactive").getBoolean("visible") }
-      val diagnostics = snapshot(scenario)
-      assertHit(diagnostics, "diagnostics")
-      assertHit(diagnostics, "interactive")
+      assertTrue(focus(scenario, "[data-agent-prompt]"))
+      showIme(scenario)
+      waitFor(scenario) { actualImeInset(scenario) > 0 }
+      assertTrue(refreshInsets(scenario))
+      waitFor(scenario) { agentState(scenario).optDouble("imeBottom") > 0 }
+      val ime = agentState(scenario)
+      assertTrue("The composer is not visible above the IME: " + ime, ime.getJSONObject("composer").optBoolean("visible"))
+      assertTrue(
+        "The composer extends below the resized WebView viewport: " + ime,
+        ime.getJSONObject("composer").getDouble("bottom") <= ime.getDouble("height") + 1.0,
+      )
+      hideIme(scenario)
 
-      assertTrue(input(scenario, "#agent-prompt", "Build a small fixture app"))
+      assertTrue(input(scenario, "[data-agent-prompt]", "Build a small fixture app"))
       assertTrue(submitPrompt(scenario))
-      waitFor(scenario) { snapshot(scenario).optString("text").contains("Approval required") }
-      val approval = snapshot(scenario)
-      assertHit(approval, "approve")
-      assertHit(approval, "reject")
+      waitFor(scenario) { agentState(scenario).getJSONArray("entries").toString().contains("user") }
+      waitFor(scenario) { agentState(scenario).optString("interaction") == "approval_fixture" }
+      val approval = agentState(scenario)
+      assertTrue(approval.getJSONArray("entries").toString().contains("output"))
+      assertTrue(approval.getJSONArray("entries").toString().contains("reasoning"))
+      assertTrue(approval.getJSONArray("entries").toString().contains("tool"))
+      assertEquals("approve", approval.optString("focusAction"))
+      assertTrue(clickSelector(scenario, "[data-agent-action='approve']"))
 
-      assertTrue(click(scenario, "Approve"))
-      waitFor(scenario) { snapshot(scenario).optString("text").contains("Question") }
-      val question = snapshot(scenario)
-      assertHit(question, "questionInput")
-      assertHit(question, "questionSend")
-      val options = question.getJSONObject("buttons").getJSONArray("questionOptions")
-      assertTrue("Question options were not rendered.", options.length() >= 2)
-      (0 until options.length()).forEach {
-        assertHitRect(options.getJSONObject(it).getJSONObject("rect"), "question option", "question option")
+      waitFor(scenario) { agentState(scenario).optString("interaction") == "question_fixture" }
+      assertEquals("question_fixture", agentState(scenario).optString("focusAnswer"))
+      assertTrue(hasElement(scenario, "label[for='agent-answer-question_fixture']"))
+      assertTrue(input(scenario, "[data-agent-answer='question_fixture']", "Use TypeScript"))
+      assertTrue(clickSelector(scenario, "[data-agent-action='answer']"))
+      waitFor(scenario) { agentState(scenario).getJSONArray("entries").toString().contains("completion") }
+
+      mapOf("changes" to 2, "files" to 3, "tests" to 1, "screenshots" to 1).forEach { (tab, count) ->
+        assertTrue(clickSelector(scenario, "[data-review-tab='" + tab + "']"))
+        waitFor(scenario) { agentState(scenario).optString("review") == tab }
+        assertEquals("Unexpected projected review count for " + tab + ".", count, agentState(scenario).optInt("reviewItems"))
       }
+      val complete = agentState(scenario)
+      assertTrue("Completion is not exposed as a polite live status.", complete.optBoolean("completionLive"))
+
+      recreateWithFakeBridge(scenario)
+      waitFor(scenario) { agentState(scenario).optBoolean("restored") }
+      val restored = agentState(scenario)
+      assertTrue("The recreated WebView did not restore a detached snapshot: " + restored, restored.optBoolean("detached"))
+      assertTrue("The detached transcript lost completion.", restored.getJSONArray("entries").toString().contains("completion"))
+      assertTrue("The detached composer is enabled.", restored.optBoolean("promptDisabled"))
+      assertEquals("screenshots", restored.optString("review"))
+      assertEquals("A detached restore started a new remote session.", 0, restored.optInt("starts"))
     }
   }
 
@@ -425,6 +433,118 @@ class AndroidUiInstrumentedTest {
     """(() => { const form = document.querySelector('#agent-prompt')?.closest('form'); if (!(form instanceof HTMLFormElement)) return JSON.stringify(false); form.requestSubmit(); return JSON.stringify(true) })()""",
   ).let(::string).toBoolean()
 
+  private fun clickSelector(scenario: ActivityScenario<MainActivity>, selector: String) = evaluate(
+    scenario,
+    """(() => { const item = document.querySelector(${json(selector)}); if (!(item instanceof HTMLElement) || item.hasAttribute('disabled')) return JSON.stringify(false); item.click(); return JSON.stringify(true) })()""",
+  ).let(::string).toBoolean()
+
+  private fun focus(scenario: ActivityScenario<MainActivity>, selector: String) = evaluate(
+    scenario,
+    """(() => { const item = document.querySelector(${json(selector)}); if (!(item instanceof HTMLElement)) return JSON.stringify(false); item.focus(); return JSON.stringify(document.activeElement === item) })()""",
+  ).let(::string).toBoolean()
+
+  private fun refreshInsets(scenario: ActivityScenario<MainActivity>) = evaluate(
+    scenario,
+    """(() => { window.dispatchEvent(new Event('resize')); window.visualViewport?.dispatchEvent(new Event('resize')); return JSON.stringify(true) })()""",
+  ).let(::string).toBoolean()
+
+  private fun showIme(scenario: ActivityScenario<MainActivity>) {
+    scenario.onActivity { activity ->
+      val web = activity.findViewById<WebView>(R.id.webview)
+      web.requestFocus()
+      ViewCompat.getWindowInsetsController(web)?.show(WindowInsetsCompat.Type.ime())
+      (activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+        .showSoftInput(web, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+    }
+  }
+
+  private fun hideIme(scenario: ActivityScenario<MainActivity>) {
+    scenario.onActivity { activity ->
+      val web = activity.findViewById<WebView>(R.id.webview)
+      ViewCompat.getWindowInsetsController(web)?.hide(WindowInsetsCompat.Type.ime())
+      (activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+        .hideSoftInputFromWindow(web.windowToken, 0)
+    }
+  }
+
+  private fun actualImeInset(scenario: ActivityScenario<MainActivity>): Int {
+    val result = AtomicReference(0)
+    scenario.onActivity { activity ->
+      val web = activity.findViewById<WebView>(R.id.webview)
+      result.set(ViewCompat.getRootWindowInsets(web)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0)
+    }
+    return result.get()
+  }
+
+  private fun agentState(scenario: ActivityScenario<MainActivity>) = JSONObject(
+    string(
+      evaluate(
+        scenario,
+        """
+        (() => {
+          const box = (item) => {
+            if (!(item instanceof Element)) return { width: 0, height: 0, top: -1, bottom: -1, left: -1, right: -1, visible: false };
+            const rect = item.getBoundingClientRect();
+            const viewport = visualViewport || { width: innerWidth, height: innerHeight };
+            const style = getComputedStyle(item);
+            return { width: Math.round(rect.width), height: Math.round(rect.height), top: Math.round(rect.top), bottom: Math.round(rect.bottom), left: Math.round(rect.left), right: Math.round(rect.right), visible: rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < viewport.width && rect.bottom > 0 && rect.top < viewport.height && style.display !== 'none' && style.visibility !== 'hidden' };
+          };
+          const workspace = document.querySelector('[data-agent-workspace]');
+          const panel = document.querySelector('[data-agent-panel]');
+          const appbar = document.querySelector('[data-agent-app-bar]');
+          const scroll = document.querySelector('[data-agent-scroll]');
+          const context = document.querySelector('[data-agent-context]');
+          const composer = document.querySelector('[data-agent-composer]');
+          const prompt = document.querySelector('[data-agent-prompt]');
+          const completion = document.querySelector('[data-agent-entry="completion"]');
+          const active = document.querySelector('[data-agent-interaction-active="true"]');
+          return JSON.stringify({
+            phase: workspace?.getAttribute('data-agent-phase') || '',
+            detached: workspace?.getAttribute('data-agent-detached') === 'true' && !document.querySelector('[data-ssh-active-session]'),
+            restored: !!document.querySelector('[data-agent-restored]'),
+            starts: window.__SLOPCODE_TEST_ORCHESTRATOR_STARTS || 0,
+            height: Math.round(visualViewport?.height || innerHeight),
+            imeBottom: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--android-ime-bottom')) || 0,
+            firstViewport: panel?.firstElementChild === appbar && panel?.lastElementChild === composer && scroll?.scrollTop === 0 && box(composer).visible,
+            compactContext: context instanceof HTMLDetailsElement && !context.open && box(context).height <= 64,
+            composer: box(composer),
+            prompt: box(prompt),
+            promptDisabled: Boolean(prompt?.disabled),
+            entries: [...document.querySelectorAll('[data-agent-entry]')].map((item) => item.getAttribute('data-agent-entry')),
+            interaction: active?.getAttribute('data-interaction-id') || '',
+            focusAction: document.activeElement?.getAttribute('data-agent-action') || '',
+            focusAnswer: document.activeElement?.getAttribute('data-agent-answer') || '',
+            reviewTabs: document.querySelectorAll('[data-review-tab]').length,
+            review: document.querySelector('[data-review-panel]')?.getAttribute('data-review-selected') || '',
+            reviewEmpty: !!document.querySelector('[data-review-empty]'),
+            reviewItems: document.querySelectorAll('[data-review-item]').length,
+            completionLive: completion?.getAttribute('role') === 'status' && completion?.getAttribute('aria-live') === 'polite' && !!document.querySelector('[data-agent-status-live][aria-live="polite"]')
+          });
+        })()
+        """.trimIndent(),
+      ),
+    ),
+  )
+
+  private fun recreateWithFakeBridge(scenario: ActivityScenario<MainActivity>) {
+    val values = string(
+      evaluate(
+        scenario,
+        "JSON.stringify(window.__SLOPCODE_TEST_STORAGE?.() || {})",
+      ),
+    )
+    scenario.onActivity {
+      script?.remove()
+      script = null
+    }
+    scenario.recreate()
+    scenario.onActivity { activity ->
+      val web = activity.findViewById<WebView>(R.id.webview)
+      script = WebViewCompat.addDocumentStartJavaScript(web, fake(session = true, values = values), setOf(ORIGIN))
+      web.reload()
+    }
+  }
+
   private fun toggleHidden(scenario: ActivityScenario<MainActivity>) = evaluate(
     scenario,
     """(() => { const details = [...document.querySelectorAll('details')].find((item) => item.querySelector('summary')?.innerText.trim() === 'More'); const item = details?.querySelector("input[type='checkbox']"); if (!(item instanceof HTMLInputElement)) return JSON.stringify(false); details.open = true; item.checked = true; item.dispatchEvent(new Event('change', { bubbles: true })); return JSON.stringify(true) })()""",
@@ -587,7 +707,7 @@ class AndroidUiInstrumentedTest {
     .put("recentFolders", JSONArray().put("/home/agent/temp"))
     .toString()
 
-  private fun fake(session: Boolean = false) = """
+  private fun fake(session: Boolean = false, values: String = "{}") = """
     (() => {
       const native = window.SlopcodeAndroid;
       const nativePost = typeof native?.postMessage === 'function' ? native.postMessage.bind(native) : null;
@@ -595,7 +715,9 @@ class AndroidUiInstrumentedTest {
       const systemBars = [];
       window.__SLOPCODE_TEST_NATIVE_SYSTEM_BAR_CALLS = nativeBars;
       window.__SLOPCODE_TEST_SYSTEM_BAR_CALLS = systemBars;
-      const values = new Map();
+      const values = new Map(Object.entries(__VALUES__));
+      window.__SLOPCODE_TEST_STORAGE = () => Object.fromEntries(values);
+      window.__SLOPCODE_TEST_ORCHESTRATOR_STARTS = 0;
       const workspace = __WORKSPACE__;
       let connected = __CONNECTED__;
       let profile = __PROFILE__;
@@ -634,7 +756,10 @@ class AndroidUiInstrumentedTest {
             return;
           }
           if (request.method === 'systemInsets') {
-            if (nativePost) nativePost(raw);
+            if (nativePost) {
+              nativePost(raw);
+              return;
+            }
             reply(port, request.id, { top: 0, right: 0, bottom: 0, left: 0, imeBottom: 0 });
             return;
           }
@@ -661,23 +786,30 @@ class AndroidUiInstrumentedTest {
           }
           if (request.method === 'sshCodexAppServerStatus') result = { executable: 'codex', state: 'not_installed', ready: false, handshake: 'not_run', message: 'Install Codex before its App Server can start.', output: 'codex: not found', preflight: { agent: 'codex-cli', executable: 'codex', exitCode: 127, output: 'not found', ok: false } };
           if (request.method === 'sshAuthStatus') result = { agent: call.agent, executable: call.agent, exitCode: 0, output: call.agent === 'opencode-cli' ? 'sign in required' : 'signed in', ok: true, loggedIn: call.agent !== 'opencode-cli' };
-          if (request.method === 'sshOrchestratorStart') { channel = 'ssh_orchestrator'; result = { id: channel, status: 'started' }; }
+          if (request.method === 'sshOrchestratorStart') { window.__SLOPCODE_TEST_ORCHESTRATOR_STARTS += 1; channel = 'ssh_orchestrator'; result = { id: channel, status: 'started' }; }
           if (request.method === 'sshOrchestratorInput') {
             if (frame.type === 'workspace.open') line({ kind: 'response', requestID: frame.requestID, workspace: { id: 'wrk_android' } });
             if (frame.type === 'session.create') line({ kind: 'response', requestID: frame.requestID, sessionID: 'ssh_fixture' });
             if (frame.type === 'turn.create' || typeof frame.prompt === 'string') {
               line({ kind: 'response', requestID: frame.requestID, turnID: 'turn_fixture' });
-              line({ kind: 'event', sessionID: 'ssh_fixture', type: 'plan.available', plan: { id: 'plan_fixture', content: '1. Create a fixture app\\n2. Verify the rendered result' } }, 10);
-              line({ kind: 'event', sessionID: 'ssh_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'running', kind: 'write' } }, 15);
-              line({ kind: 'event', sessionID: 'ssh_fixture', type: 'interaction.approval.requested', interaction: { id: 'approval_fixture', revision: 1, title: 'Create app files?', command: 'mkdir -p ./fixture-app', cwd: '/home/agent/temp', reason: 'The agent needs to create the requested local app.', risk: 'low' } }, 20);
+              line({ kind: 'event', cursor: 'cur_output', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.output', text: 'Inspecting the workspace.' }, 10);
+              line({ kind: 'event', cursor: 'cur_reasoning', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.reasoning', text: 'Use the smallest safe fixture.' }, 15);
+              line({ kind: 'event', cursor: 'cur_plan', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'plan.available', plan: { id: 'plan_fixture', content: '1. Create a fixture app\\n2. Verify the rendered result' } }, 20);
+              line({ kind: 'event', cursor: 'cur_tool', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'in_progress', kind: 'edit', metadata: { path: '/home/agent/temp/fixture.ts', progress: '1/2' } } }, 25);
+              line({ kind: 'event', cursor: 'cur_approval', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'interaction.approval.requested', interaction: { id: 'approval_fixture', revision: 1, title: 'Create app files?', command: 'mkdir -p ./fixture-app', cwd: '/home/agent/temp', reason: 'The agent needs to create the requested local app.', risk: 'low' } }, 30);
             }
             if (frame.type === 'interaction.approval.reply') {
               line({ kind: 'response', requestID: frame.requestID });
-              line({ kind: 'event', sessionID: 'ssh_fixture', type: 'interaction.question.requested', interaction: { id: 'question_fixture', revision: 1, prompt: 'Which language should the fixture use?', options: ['Use TypeScript', 'Use JavaScript'], allowFreeform: true } }, 20);
+              line({ kind: 'event', cursor: 'cur_question', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'interaction.question.requested', interaction: { id: 'question_fixture', revision: 1, prompt: 'Which language should the fixture use?', allowFreeform: true } }, 20);
             }
             if (frame.type === 'interaction.question.reply') {
               line({ kind: 'response', requestID: frame.requestID });
-              line({ kind: 'event', sessionID: 'ssh_fixture', type: 'turn.completed', status: 'completed' }, 20);
+              line({ kind: 'event', cursor: 'cur_tool_done', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'tool_fixture', title: 'Create app files', status: 'completed', kind: 'edit', metadata: { path: '/home/agent/temp/fixture.ts', progress: '2/2' } } }, 10);
+              line({ kind: 'event', cursor: 'cur_test', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'tool.updated', tool: { id: 'test_fixture', title: 'Run fixture tests', status: 'completed', kind: 'execute', metadata: { test: 'Android UI', result: 'passed', exitCode: '0' } } }, 15);
+              line({ kind: 'event', cursor: 'cur_diff', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'diff_fixture', name: 'fixture.diff', path: '/home/agent/temp/fixture.diff', kind: 'diff', size: 128 } }, 20);
+              line({ kind: 'event', cursor: 'cur_file', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'file_fixture', name: 'fixture.ts', path: '/home/agent/temp/fixture.ts', kind: 'file', size: 256 } }, 25);
+              line({ kind: 'event', cursor: 'cur_image', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'artifact.created', artifact: { id: 'image_fixture', name: 'fixture.png', path: '/home/agent/temp/fixture.png', kind: 'image', size: 512, mime: 'image/png' } }, 30);
+              line({ kind: 'event', cursor: 'cur_complete', sessionID: 'ssh_fixture', turnID: 'turn_fixture', type: 'turn.completed', status: 'completed', message: 'Fixture verified.' }, 35);
             }
             result = true;
           }
@@ -701,6 +833,7 @@ class AndroidUiInstrumentedTest {
     .replace("__WORKSPACE__", json(savedWorkspace()))
     .replace("__CONNECTED__", if (session) "true" else "false")
     .replace("__PROFILE__", json(if (session) "agent@fixture.test:22" else ""))
+    .replace("__VALUES__", values)
     .replace(
       "__STORAGE__",
       if (session) "args[0] === 'slopcode.android.remote.dat' && args[1] === 'ssh.workspace.v1' ? workspace :" else "",

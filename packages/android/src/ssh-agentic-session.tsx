@@ -214,8 +214,8 @@ function Entry(props: {
         </Show>
         <Show when={active() && item.type === "approval"}>
           <div class="mt-3 flex flex-wrap gap-2">
-            <button type="button" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "approved")} class="min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Approve</button>
-            <button type="button" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "rejected")} class="min-h-12 rounded-md border border-border-weak-base px-4 py-2 text-12-medium disabled:opacity-50">Reject</button>
+            <button type="button" data-agent-action="approve" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "approved")} class="min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Approve</button>
+            <button type="button" data-agent-action="reject" disabled={props.busy} onClick={() => props.onRespond(item.interaction, "rejected")} class="min-h-12 rounded-md border border-border-weak-base px-4 py-2 text-12-medium disabled:opacity-50">Reject</button>
           </div>
         </Show>
         <Show when={active() && item.type === "question"}>
@@ -223,7 +223,7 @@ function Entry(props: {
             <Show when={item.interaction.options?.length}>
               <div class="flex flex-wrap gap-2">
                 <For each={item.interaction.options ?? []}>
-                  {(option) => <button type="button" disabled={props.busy} onClick={() => props.onRespond(item.interaction, undefined, option)} class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">{option}</button>}
+                  {(option) => <button type="button" data-agent-action="option" disabled={props.busy} onClick={() => props.onRespond(item.interaction, undefined, option)} class="min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">{option}</button>}
                 </For>
               </div>
             </Show>
@@ -231,8 +231,8 @@ function Entry(props: {
               <div class="flex flex-col gap-2">
                 <label for={`agent-answer-${item.id}`} class="text-12-medium">Your answer</label>
                 <div class="flex gap-2">
-                  <input id={`agent-answer-${item.id}`} value={props.answer} onInput={(event) => props.onAnswer(event.currentTarget.value)} class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-14-regular" />
-                  <button type="button" disabled={props.busy || !props.answer.trim()} onClick={() => props.onRespond(item.interaction, undefined, props.answer)} class="min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Send answer</button>
+                  <input id={`agent-answer-${item.id}`} data-agent-answer={item.id} value={props.answer} onInput={(event) => props.onAnswer(event.currentTarget.value)} class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-14-regular" />
+                  <button type="button" data-agent-action="answer" disabled={props.busy || !props.answer.trim()} onClick={() => props.onRespond(item.interaction, undefined, props.answer)} class="min-h-12 rounded-md bg-surface-brand-base px-3 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Send answer</button>
                 </div>
               </div>
             </Show>
@@ -244,7 +244,7 @@ function Entry(props: {
   }
   if (item.type === "completion")
     return (
-      <section data-agent-entry="completion" role="status" aria-live="polite" class="rounded-xl border border-border-weak-base bg-surface-success-weak p-4">
+      <section data-agent-entry="completion" data-agent-completion-status={item.status} role="status" aria-live="polite" class="rounded-xl border border-border-weak-base bg-surface-success-weak p-4">
         <p class="text-14-medium">{item.status === "completed" ? "Turn complete" : item.status === "stopped" ? "Turn stopped" : "Turn failed"}</p>
         <Show when={item.message}><p class="mt-1 text-12-regular">{item.message}</p></Show>
       </section>
@@ -481,14 +481,14 @@ export function SshAgenticSession(props: Props) {
 
   return (
     <SshShell workspace={props.workspace} sessionID={restored() ? undefined : state().sessionID} sessionState={status()}>
-      <main data-agent-workspace class="min-h-screen bg-surface-base text-text-strong">
+      <main data-agent-workspace data-agent-phase={state().phase} data-agent-detached={restored() ? "true" : undefined} class="min-h-screen bg-surface-base text-text-strong">
         <section data-agent-panel class="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border-weak-base bg-surface-raised-base">
-          <header data-agent-app-bar class="flex items-center justify-between gap-3 border-b border-border-weak-base px-4 py-3">
+          <header data-agent-app-bar data-agent-status={status()} class="flex items-center justify-between gap-3 border-b border-border-weak-base px-4 py-3">
             <div class="min-w-0 pl-12">
               <p class="truncate text-14-medium">{agentName(props.workspace.agent)} · {status()}</p>
               <p class="truncate text-12-regular text-text-weak">{props.workspace.directory}</p>
             </div>
-            <button type="button" onClick={() => void disconnect()} class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular">Disconnect</button>
+            <button type="button" data-agent-action="disconnect" onClick={() => void disconnect()} class="min-h-12 shrink-0 rounded-md border border-border-weak-base px-3 py-2 text-12-regular">Disconnect</button>
           </header>
 
           <div data-agent-scroll class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
@@ -501,13 +501,13 @@ export function SshAgenticSession(props: Props) {
               </dl>
             </details>
 
-            <div role="status" aria-live="polite" aria-atomic="true" class="sr-only">Remote agent status: {status()}</div>
+            <div data-agent-status-live role="status" aria-live="polite" aria-atomic="true" class="sr-only">Remote agent status: {status()}</div>
 
             <Show when={restored()}>
               <section role="status" class="mb-4 rounded-xl border border-border-brand-base bg-surface-base p-4" data-agent-restored>
                 <h1 class="text-16-medium">Local session snapshot restored</h1>
                 <p class="mt-1 text-12-regular text-text-weak">This transcript is bound to the previous remote session. It is not attached and cannot receive replies or events.</p>
-                <button type="button" disabled={busy()} onClick={() => void start(lastPrompt(session()))} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new session</button>
+                <button type="button" data-agent-action="start" disabled={busy()} onClick={() => void start(lastPrompt(session()))} class="mt-3 min-h-12 rounded-md bg-surface-brand-base px-4 py-2 text-12-medium text-text-on-brand-base disabled:opacity-50">Start new session</button>
               </section>
             </Show>
 
@@ -542,7 +542,7 @@ export function SshAgenticSession(props: Props) {
                   {(tab) => <button id={`review-tab-${tab}`} type="button" role="tab" data-review-tab={tab} aria-selected={session().selectedReview === tab} aria-controls={`review-panel-${tab}`} tabIndex={session().selectedReview === tab ? 0 : -1} onClick={() => selectReview(tab)} onKeyDown={(event) => reviewKey(event, tab)} class={`min-h-12 shrink-0 rounded-md px-3 py-2 text-12-medium ${session().selectedReview === tab ? "bg-surface-brand-base text-text-on-brand-base" : "border border-border-weak-base"}`}>{reviewLabel(tab)}</button>}
                 </For>
               </div>
-              <div id={`review-panel-${session().selectedReview}`} role="tabpanel" aria-labelledby={`review-tab-${session().selectedReview}`} tabIndex={0} class="mt-3 flex flex-col gap-2 rounded-xl bg-surface-raised-base p-3">
+              <div id={`review-panel-${session().selectedReview}`} data-review-panel data-review-selected={session().selectedReview} role="tabpanel" aria-labelledby={`review-tab-${session().selectedReview}`} tabIndex={0} class="mt-3 flex flex-col gap-2 rounded-xl bg-surface-raised-base p-3">
                 <Show when={reviewed().length > 0} fallback={<p class="py-4 text-12-regular text-text-weak" data-review-empty>{emptyReview(session().selectedReview)}</p>}>
                   <For each={reviewed()}>{(entry) => <ReviewItem entry={entry} tab={session().selectedReview} />}</For>
                 </Show>
@@ -565,9 +565,9 @@ export function SshAgenticSession(props: Props) {
           <form data-agent-composer class="border-t border-border-weak-base bg-surface-raised-base p-3" onSubmit={(event) => { event.preventDefault(); void send() }}>
             <label class="text-12-medium" for="agent-prompt">Message the agent</label>
             <div class="mt-2 flex items-end gap-2">
-              <textarea id="agent-prompt" rows="2" value={session().draft} onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })} placeholder="Describe the outcome you want" disabled={busy() || restored() || !state().sessionID || !canSubmit(state().phase)} class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50" />
-              <button type="submit" aria-label="Send message" disabled={busy() || restored() || !session().draft.trim() || !state().sessionID || !canSubmit(state().phase)} class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">Send</button>
-              <button type="button" aria-label="Stop agent" disabled={busy() || state().phase !== "running"} onClick={() => void stop()} class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50">Stop</button>
+              <textarea id="agent-prompt" data-agent-prompt rows="2" value={session().draft} onInput={(event) => project({ type: "draft.changed", value: event.currentTarget.value })} placeholder="Describe the outcome you want" disabled={busy() || restored() || !state().sessionID || !canSubmit(state().phase)} class="min-w-0 flex-1 resize-none rounded-xl border border-border-weak-base bg-surface-base px-3 py-3 text-14-regular disabled:opacity-50" />
+              <button type="submit" data-agent-action="send" aria-label="Send message" disabled={busy() || restored() || !session().draft.trim() || !state().sessionID || !canSubmit(state().phase)} class="min-h-12 rounded-xl bg-surface-brand-base px-4 py-3 text-12-medium text-text-on-brand-base disabled:opacity-50">Send</button>
+              <button type="button" data-agent-action="stop" aria-label="Stop agent" disabled={busy() || state().phase !== "running"} onClick={() => void stop()} class="min-h-12 rounded-xl border border-border-weak-base px-3 py-3 text-12-medium disabled:opacity-50">Stop</button>
             </div>
             <Show when={state().phase === "ready" && state().lastPrompt && canRetry(state().phase, state().sessionID, !!wireState())}>
               <button type="button" disabled={busy()} onClick={retry} class="mt-2 min-h-12 rounded-md border border-border-weak-base px-3 py-2 text-12-medium disabled:opacity-50">Retry last request</button>
