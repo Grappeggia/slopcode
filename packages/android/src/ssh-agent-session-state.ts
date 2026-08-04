@@ -22,6 +22,7 @@ export type AgentSessionEntry =
       resolved: boolean
       decision?: "approved" | "rejected"
       answer?: string
+      answerOmitted?: boolean
       detailsOmitted?: boolean
     }
   | { id: string; type: "completion"; status: "completed" | "failed" | "stopped"; message?: string }
@@ -94,12 +95,14 @@ export function redactAgentSessionText(value: string) {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
     .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b/g, "[REDACTED TOKEN]")
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED TOKEN]")
+    .replace(/\b\d+\/[A-Za-z0-9._~-]{20,}(?:#[A-Za-z0-9._~-]{8,})?/g, "[REDACTED OAUTH CODE]")
+    .replace(/(?<![A-Za-z0-9._~-])[A-Za-z0-9._~-]{32,}(?:#[A-Za-z0-9._~-]{8,})?(?![A-Za-z0-9._~-])/g, "[REDACTED TOKEN]")
     .replace(/https?:\/\/[^\s/:@]+:[^\s/@]+@/gi, "https://[REDACTED]@")
     .replace(
       /(\b(?:(?:my|the|your|our|this)\s+)?(?:password|passwd|pwd|passphrase|api[_. -]?(?:key|token)|access[_. -]?token|refresh[_. -]?token|auth(?:entication|orization)?[_. -]?(?:code|token)|device[_. -]?code|verification[_. -]?code|login[_. -]?code|one[_. -]?time[_. -]?code|otp|client[_. -]?secret|secret|credential|cookie)\b)\s*(?:(?:is|was|equals?)\s+|(?:=|:)\s*|\s+)[^\r\n]+/gi,
       "$1 [REDACTED CREDENTIAL]",
     )
-    .replace(/\b[A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,3}\b/g, "[REDACTED DEVICE CODE]")
+    .replace(/\b(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,3}\b/gi, "[REDACTED DEVICE CODE]")
     .replace(
       /(\b(?:password|passwd|pwd|passphrase|api[_.-]?(?:key|token)|access[_.-]?token|refresh[_.-]?token|auth(?:entication|orization)?(?:[_.-]?(?:code|token))?|device[_.-]?code|verification[_.-]?code|login[_.-]?code|one[_.-]?time[_.-]?code|otp|secret|client[_.-]?secret|credential|cookie|token)\b\s*(?:=|:|\s+)\s*)(?!\[REDACTED\b)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;&|}]+)/gi,
       "$1[REDACTED]",
@@ -201,7 +204,7 @@ function persistedEntry(value: unknown): AgentSessionEntry | undefined {
     const next = interaction(value.interaction, type)
     const resolved = value.resolved === true
     const decision = type === "approval" && resolved ? oneOf(value.decision, ["approved", "rejected"]) : undefined
-    const answer = type === "question" && resolved ? safe(value.answer, 4 * 1024) : undefined
+    const answerOmitted = type === "question" && resolved && (typeof value.answer === "string" || value.answerOmitted === true)
     return next
       ? {
           id: entryID,
@@ -209,7 +212,7 @@ function persistedEntry(value: unknown): AgentSessionEntry | undefined {
           interaction: next,
           resolved,
           ...(decision ? { decision: decision as "approved" | "rejected" } : {}),
-          ...(answer ? { answer } : {}),
+          ...(answerOmitted ? { answerOmitted: true } : {}),
           ...((record(value.interaction) && typeof value.interaction.command === "string") || value.detailsOmitted === true
             ? { detailsOmitted: true }
             : {}),

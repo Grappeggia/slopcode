@@ -448,7 +448,7 @@ async function journey() {
       document.querySelector<HTMLTextAreaElement>("[data-agent-prompt]")?.disabled === true &&
       document.querySelector('[data-review-tab="screenshots"]')?.getAttribute("aria-selected") === "true" &&
       document.querySelector('[data-agent-entry="approval"]')?.textContent?.includes("Approved") === true &&
-      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("Use the accessible style") === true &&
+      document.querySelector('[data-agent-entry="question"]')?.textContent?.includes("not saved for security") === true &&
       !document.querySelector("[data-ssh-active-session]"),
   )
   mark("fixture-complete", true)

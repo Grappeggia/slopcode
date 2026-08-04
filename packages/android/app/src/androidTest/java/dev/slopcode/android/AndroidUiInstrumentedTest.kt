@@ -543,7 +543,7 @@ class AndroidUiInstrumentedTest {
             review: document.querySelector('[data-review-panel]')?.getAttribute('data-review-selected') || '',
             reviewEmpty: !!document.querySelector('[data-review-empty]'),
             reviewItems: document.querySelectorAll('[data-review-item]').length,
-            completionLive: completion?.getAttribute('role') === 'status' && completion?.getAttribute('aria-live') === 'polite' && !!document.querySelector('[data-agent-status-live][aria-live="polite"]')
+            completionLive: !completion?.hasAttribute('aria-live') && !!document.querySelector('[data-agent-status-live][role="status"][aria-live="polite"]')
           });
         })()
         """.trimIndent(),

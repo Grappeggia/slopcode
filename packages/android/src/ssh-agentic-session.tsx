@@ -280,6 +280,8 @@ function Entry(props: {
                   : "Response sent"
               : item.answer
                 ? `Your answer: ${item.answer}`
+                : item.answerOmitted
+                  ? "Answer sent · not saved for security"
                 : "Answer sent"}
           </p>
         </Show>

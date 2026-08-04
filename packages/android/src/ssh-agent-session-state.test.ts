@@ -312,8 +312,9 @@ describe("Android agent session persistence", () => {
     })
     expect(restored?.transcript.find((item) => item.type === "question")).toMatchObject({
       resolved: true,
-      answer: "The password [REDACTED CREDENTIAL]",
+      answerOmitted: true,
     })
+    expect(restored?.transcript.find((item) => item.type === "question")).not.toHaveProperty("answer")
     expect(
       normalizeAgentSession({
         ...restored,
@@ -335,6 +336,8 @@ describe("Android agent session persistence", () => {
       "authorization-code-value",
       "login-code-value",
       "credential-sentence-value",
+      "4/0AXEQxICqNuVRq4CH9V0lLfUgGcsQ_pKJnSVwHw0UiQ373mKC",
+      "a1b2-c3d4",
     ]
     const lines = [
       `The password is ${secrets[0]}`,
@@ -345,6 +348,8 @@ describe("Android agent session persistence", () => {
       `Authorization code is ${secrets[5]}`,
       `Your login code is ${secrets[6]}`,
       `Use this credential ${secrets[7]} for the account`,
+      `Continue with ${secrets[8]}`,
+      `Enter ${secrets[9]} on the device page`,
     ]
     let state = reduceAgentSession(initialAgentSessionState("ses_android_1"), {
       type: "draft.changed",
@@ -382,7 +387,9 @@ describe("Android agent session persistence", () => {
     expect(restored?.transcript.find((item) => item.id === "int_secret_answer")).toMatchObject({
       type: "question",
       resolved: true,
+      answerOmitted: true,
     })
+    expect(restored?.transcript.find((item) => item.id === "int_secret_answer")).not.toHaveProperty("answer")
     secrets.forEach((secret) => expect(JSON.stringify(restored)).not.toContain(secret))
   })
 
