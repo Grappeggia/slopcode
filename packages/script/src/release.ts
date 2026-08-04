@@ -386,8 +386,13 @@ export async function prepareRelease(options: {
   upload: (source: string) => Promise<void>
 }) {
   const tree = async () => {
-    const stash = await git(options.cwd, ["stash", "create"])
-    return git(options.cwd, ["rev-parse", stash ? `${stash}^{tree}` : "HEAD^{tree}"])
+    const first = await run(options.cwd, ["stash", "create"])
+    const result =
+      first.code === 1 && !first.stdout && !first.stderr ? await run(options.cwd, ["stash", "create"]) : first
+    if (result.code !== 0) {
+      throw new Error(`git stash create failed: ${result.stderr || `exit code ${result.code}`}`)
+    }
+    return git(options.cwd, ["rev-parse", result.stdout ? `${result.stdout}^{tree}` : "HEAD^{tree}"])
   }
   const original = await git(options.cwd, ["rev-parse", "HEAD"])
   const base = await git(options.cwd, ["rev-parse", "HEAD^{tree}"])
