@@ -494,10 +494,15 @@ export async function connect(input: {
     "questions",
     "plans",
     "artifacts",
+    "replay",
+    "streaming",
   ]
   return {
     nativeID,
     capabilities,
+    mode: "app_server",
+    version: "unknown",
+    resumable: true,
     async turn(prompt) {
       if (closed) throw new Error("Codex App Server session is closed")
       if (turns.size) throw new Error("Codex already has an active turn")

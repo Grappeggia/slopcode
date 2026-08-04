@@ -12,6 +12,8 @@ export const AgentOrchestrationLimits = {
   maxMetadataValueBytes: 2 * 1024,
   maxMetadataBytes: 16 * 1024,
   maxCapabilities: 16,
+  maxSessions: 100,
+  maxPendingInteractions: 32,
   maxQuestionOptions: 32,
   maxReplayEvents: 100,
   maxArtifacts: 64,
@@ -177,6 +179,12 @@ export const AgentOrchestrationCapability = Schema.Literals([
   "plans",
   "artifacts",
   "replay",
+  "cancel",
+  "retry",
+  "steer",
+  "streaming",
+  "permissions",
+  "sandboxed",
 ]).annotate({ identifier: "AgentOrchestrationV1.Capability" })
 export type AgentOrchestrationCapability = typeof AgentOrchestrationCapability.Type
 
@@ -190,6 +198,20 @@ export const AgentOrchestrationCapabilities = Schema.Array(AgentOrchestrationCap
   )
   .annotate({ identifier: "AgentOrchestrationV1.Capabilities" })
 export type AgentOrchestrationCapabilities = typeof AgentOrchestrationCapabilities.Type
+
+export const AgentOrchestrationBackendMode = Schema.Literals([
+  "acp",
+  "app_server",
+  "cli",
+  "streaming_cli",
+  "sandboxed_cli",
+]).annotate({ identifier: "AgentOrchestrationV1.BackendMode" })
+export type AgentOrchestrationBackendMode = typeof AgentOrchestrationBackendMode.Type
+
+export const AgentOrchestrationBackendVersion = text(256, "backend version is too large").annotate({
+  identifier: "AgentOrchestrationV1.BackendVersion",
+})
+export type AgentOrchestrationBackendVersion = typeof AgentOrchestrationBackendVersion.Type
 
 export const AgentOrchestrationAgent = exact(
   Schema.Struct({
@@ -216,6 +238,15 @@ const requestFields = {
   idempotencyKey: AgentOrchestrationIdempotencyKey,
 }
 
+export const AgentOrchestrationBridgeHelloRequest = exact(
+  Schema.Struct({
+    ...requestFields,
+    type: Schema.Literal("bridge.hello"),
+    agent: AgentOrchestrationAgentID,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.BridgeHelloRequest" })
+export type AgentOrchestrationBridgeHelloRequest = typeof AgentOrchestrationBridgeHelloRequest.Type
+
 export const AgentOrchestrationWorkspaceRequest = exact(
   Schema.Struct({
     ...requestFields,
@@ -238,6 +269,34 @@ export const AgentOrchestrationSessionRequest = exact(
 ).annotate({ identifier: "AgentOrchestrationV1.SessionRequest" })
 export type AgentOrchestrationSessionRequest = typeof AgentOrchestrationSessionRequest.Type
 
+export const AgentOrchestrationSessionListRequest = exact(
+  Schema.Struct({
+    ...requestFields,
+    type: Schema.Literal("session.list"),
+    workspaceID: AgentOrchestrationWorkspaceID,
+    agent: Schema.optional(AgentOrchestrationAgentID),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionListRequest" })
+export type AgentOrchestrationSessionListRequest = typeof AgentOrchestrationSessionListRequest.Type
+
+export const AgentOrchestrationSessionAttachRequest = exact(
+  Schema.Struct({
+    ...requestFields,
+    type: Schema.Literal("session.attach"),
+    sessionID: AgentOrchestrationSessionID,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionAttachRequest" })
+export type AgentOrchestrationSessionAttachRequest = typeof AgentOrchestrationSessionAttachRequest.Type
+
+export const AgentOrchestrationSessionSnapshotRequest = exact(
+  Schema.Struct({
+    ...requestFields,
+    type: Schema.Literal("session.snapshot"),
+    sessionID: AgentOrchestrationSessionID,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionSnapshotRequest" })
+export type AgentOrchestrationSessionSnapshotRequest = typeof AgentOrchestrationSessionSnapshotRequest.Type
+
 export const AgentOrchestrationTurnRequest = exact(
   Schema.Struct({
     ...requestFields,
@@ -250,6 +309,31 @@ export const AgentOrchestrationTurnRequest = exact(
   }),
 ).annotate({ identifier: "AgentOrchestrationV1.TurnRequest" })
 export type AgentOrchestrationTurnRequest = typeof AgentOrchestrationTurnRequest.Type
+
+const turnActionFields = {
+  ...requestFields,
+  sessionID: AgentOrchestrationSessionID,
+  turnID: AgentOrchestrationTurnID,
+}
+
+export const AgentOrchestrationTurnCancelRequest = exact(
+  Schema.Struct({ ...turnActionFields, type: Schema.Literal("turn.cancel") }),
+).annotate({ identifier: "AgentOrchestrationV1.TurnCancelRequest" })
+export type AgentOrchestrationTurnCancelRequest = typeof AgentOrchestrationTurnCancelRequest.Type
+
+export const AgentOrchestrationTurnRetryRequest = exact(
+  Schema.Struct({ ...turnActionFields, type: Schema.Literal("turn.retry") }),
+).annotate({ identifier: "AgentOrchestrationV1.TurnRetryRequest" })
+export type AgentOrchestrationTurnRetryRequest = typeof AgentOrchestrationTurnRetryRequest.Type
+
+export const AgentOrchestrationTurnSteerRequest = exact(
+  Schema.Struct({
+    ...turnActionFields,
+    type: Schema.Literal("turn.steer"),
+    instruction: body(AgentOrchestrationLimits.maxTextBytes, "turn steering instruction is too large"),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.TurnSteerRequest" })
+export type AgentOrchestrationTurnSteerRequest = typeof AgentOrchestrationTurnSteerRequest.Type
 
 const Revision = PositiveInt.check(Schema.isLessThanOrEqualTo(AgentOrchestrationLimits.maxInteractionRevision)).pipe(
   Schema.brand("AgentOrchestrationV1.InteractionRevision"),
@@ -369,6 +453,58 @@ export const AgentOrchestrationArtifact = exact(
 ).annotate({ identifier: "AgentOrchestrationV1.Artifact" })
 export type AgentOrchestrationArtifact = typeof AgentOrchestrationArtifact.Type
 
+export const AgentOrchestrationSessionState = Schema.Literals([
+  "idle",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "stopped",
+  "interrupted",
+  "detached",
+]).annotate({ identifier: "AgentOrchestrationV1.SessionState" })
+export type AgentOrchestrationSessionState = typeof AgentOrchestrationSessionState.Type
+
+export const AgentOrchestrationPendingInteraction = exact(
+  Schema.Struct({
+    id: AgentOrchestrationInteractionID,
+    kind: Schema.Literals(["approval", "question"]),
+    revision: Revision,
+    title: text(512, "pending interaction title is too large"),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.PendingInteraction" })
+export type AgentOrchestrationPendingInteraction = typeof AgentOrchestrationPendingInteraction.Type
+
+export const AgentOrchestrationSessionSummary = exact(
+  Schema.Struct({
+    id: AgentOrchestrationSessionID,
+    workspaceID: AgentOrchestrationWorkspaceID,
+    agent: AgentOrchestrationAgentID,
+    state: AgentOrchestrationSessionState,
+    backendVersion: AgentOrchestrationBackendVersion,
+    backendMode: AgentOrchestrationBackendMode,
+    capabilities: AgentOrchestrationCapabilities,
+    activeTurnID: Schema.optional(AgentOrchestrationTurnID),
+    lastTurnID: Schema.optional(AgentOrchestrationTurnID),
+    lastCursor: Schema.optional(AgentOrchestrationEventCursor),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionSummary" })
+export type AgentOrchestrationSessionSummary = typeof AgentOrchestrationSessionSummary.Type
+
+export const AgentOrchestrationSessionSnapshot = exact(
+  Schema.Struct({
+    session: AgentOrchestrationSessionSummary,
+    pending: Schema.Array(AgentOrchestrationPendingInteraction).check(
+      Schema.isMaxLength(AgentOrchestrationLimits.maxPendingInteractions),
+    ),
+    artifacts: Schema.Array(AgentOrchestrationArtifact).check(
+      Schema.isMaxLength(AgentOrchestrationLimits.maxArtifacts),
+    ),
+    authoritative: Schema.Literal(true),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionSnapshot" })
+export type AgentOrchestrationSessionSnapshot = typeof AgentOrchestrationSessionSnapshot.Type
+
 const eventFields = {
   version: AgentOrchestrationVersion,
   kind: Schema.Literal("event"),
@@ -384,6 +520,50 @@ const responseFields = {
   idempotencyKey: AgentOrchestrationIdempotencyKey,
 }
 
+export const AgentOrchestrationBridgeHelloResponse = exact(
+  Schema.Struct({
+    ...responseFields,
+    type: Schema.Literal("bridge.hello"),
+    bridgeVersion: text(64, "bridge version is too large"),
+    protocolVersion: AgentOrchestrationVersion,
+    agent: AgentOrchestrationAgentID,
+    backendVersion: AgentOrchestrationBackendVersion,
+    backendMode: AgentOrchestrationBackendMode,
+    capabilities: AgentOrchestrationCapabilities,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.BridgeHelloResponse" })
+export type AgentOrchestrationBridgeHelloResponse = typeof AgentOrchestrationBridgeHelloResponse.Type
+
+export const AgentOrchestrationSessionListResponse = exact(
+  Schema.Struct({
+    ...responseFields,
+    type: Schema.Literal("session.list"),
+    sessions: Schema.Array(AgentOrchestrationSessionSummary).check(
+      Schema.isMaxLength(AgentOrchestrationLimits.maxSessions),
+    ),
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionListResponse" })
+export type AgentOrchestrationSessionListResponse = typeof AgentOrchestrationSessionListResponse.Type
+
+export const AgentOrchestrationSessionAttachResponse = exact(
+  Schema.Struct({
+    ...responseFields,
+    type: Schema.Literal("session.attach"),
+    attached: Schema.Boolean,
+    snapshot: AgentOrchestrationSessionSnapshot,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionAttachResponse" })
+export type AgentOrchestrationSessionAttachResponse = typeof AgentOrchestrationSessionAttachResponse.Type
+
+export const AgentOrchestrationSessionSnapshotResponse = exact(
+  Schema.Struct({
+    ...responseFields,
+    type: Schema.Literal("session.snapshot"),
+    snapshot: AgentOrchestrationSessionSnapshot,
+  }),
+).annotate({ identifier: "AgentOrchestrationV1.SessionSnapshotResponse" })
+export type AgentOrchestrationSessionSnapshotResponse = typeof AgentOrchestrationSessionSnapshotResponse.Type
+
 /** A success response for a workspace, session, or turn request. */
 export const AgentOrchestrationAcceptedResponse = exact(
   Schema.Struct({
@@ -392,6 +572,9 @@ export const AgentOrchestrationAcceptedResponse = exact(
       "workspace.open",
       "session.create",
       "turn.create",
+      "turn.cancel",
+      "turn.retry",
+      "turn.steer",
       "interaction.approval.reply",
       "interaction.question.reply",
     ]),
@@ -591,7 +774,9 @@ export const AgentOrchestrationError = exact(
     code: Schema.Literals([
       "bad_request",
       "unsupported_agent",
+      "unsupported_operation",
       "not_found",
+      "cursor_gap",
       "interaction_conflict",
       "idempotency_conflict",
       "path_forbidden",
@@ -606,19 +791,28 @@ export const AgentOrchestrationError = exact(
   }),
 )
   .check(
-    Schema.makeFilter((value) =>
-      (value.requestID === undefined) === (value.idempotencyKey === undefined)
-        ? undefined
-        : "request errors must include both request and idempotency IDs",
-    ),
+    Schema.makeFilter((value) => {
+      if ((value.requestID === undefined) !== (value.idempotencyKey === undefined))
+        return "request errors must include both request and idempotency IDs"
+      if ((value.code === "unsupported_operation" || value.code === "cursor_gap") && value.retryable)
+        return `${value.code} errors are not retryable`
+      return undefined
+    }),
   )
   .annotate({ identifier: "AgentOrchestrationV1.Error" })
 export type AgentOrchestrationError = typeof AgentOrchestrationError.Type
 
 export const AgentOrchestrationRequest = Schema.Union([
+  AgentOrchestrationBridgeHelloRequest,
   AgentOrchestrationWorkspaceRequest,
   AgentOrchestrationSessionRequest,
+  AgentOrchestrationSessionListRequest,
+  AgentOrchestrationSessionAttachRequest,
+  AgentOrchestrationSessionSnapshotRequest,
   AgentOrchestrationTurnRequest,
+  AgentOrchestrationTurnCancelRequest,
+  AgentOrchestrationTurnRetryRequest,
+  AgentOrchestrationTurnSteerRequest,
   AgentOrchestrationApprovalReply,
   AgentOrchestrationQuestionReply,
   AgentOrchestrationPlanSavePrepare,
@@ -630,7 +824,11 @@ export type AgentOrchestrationRequest = typeof AgentOrchestrationRequest.Type
 export const AgentOrchestrationFrame = exact(
   Schema.Union([
     AgentOrchestrationRequest,
+    AgentOrchestrationBridgeHelloResponse,
     AgentOrchestrationAcceptedResponse,
+    AgentOrchestrationSessionListResponse,
+    AgentOrchestrationSessionAttachResponse,
+    AgentOrchestrationSessionSnapshotResponse,
     AgentOrchestrationEventReplayResponse,
     AgentOrchestrationEvent,
     AgentOrchestrationError,

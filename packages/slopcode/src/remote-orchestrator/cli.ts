@@ -10,7 +10,13 @@ import { create as createPermission, tool as permissionTool, type ClaudePermissi
 type Agent = Extract<AgentOrchestrationAgentID, "codex" | "claude" | "antigravity">
 type Format = "stream" | "text"
 type Permission = Pick<ClaudePermission, "config">
-export type Launch = (agent: Agent, cwd: string, prompt: string, format: Format, permission?: Permission) => ChildProcess
+export type Launch = (
+  agent: Agent,
+  cwd: string,
+  prompt: string,
+  format: Format,
+  permission?: Permission,
+) => ChildProcess
 
 const programs: Record<Exclude<Agent, "antigravity">, readonly string[]> = {
   codex: ["codex", "exec", "--json"],
@@ -21,7 +27,18 @@ export const argv = (agent: Agent, prompt: string, format: Format = "stream", pe
   if (agent === "antigravity")
     return format === "text"
       ? ["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt]
-      : ["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"]
+      : [
+          "agy",
+          "--new-project",
+          "--add-dir",
+          cwd,
+          "--sandbox",
+          "--dangerously-skip-permissions",
+          "--prompt",
+          prompt,
+          "--output-format",
+          "stream-json",
+        ]
   if (agent === "claude" && permission)
     return [
       ...programs.claude,
@@ -147,7 +164,7 @@ export async function connect(input: {
   let permission: ClaudePermission | undefined
   let closed = false
   const nativeID = `${input.agent}_${crypto.randomUUID().replaceAll("-", "")}`
-  const capabilities: readonly AgentOrchestrationCapability[] = ["workspace", "sessions", "turns"]
+  const capabilities: readonly AgentOrchestrationCapability[] = ["workspace", "sessions", "turns", "streaming"]
   const turn = async (prompt: string) => {
     if (closed) throw new Error(`${input.agent} session is closed`)
     if (active) throw new Error(`${input.agent} already has an active turn`)
@@ -244,7 +261,15 @@ export async function connect(input: {
   }
   return {
     nativeID,
-    capabilities: input.agent === "claude" ? [...capabilities, "approvals"] : capabilities,
+    capabilities:
+      input.agent === "claude"
+        ? [...capabilities, "approvals", "permissions"]
+        : input.agent === "antigravity"
+          ? [...capabilities, "sandboxed"]
+          : capabilities,
+    mode: input.agent === "antigravity" ? "sandboxed_cli" : "streaming_cli",
+    version: "unknown",
+    resumable: false,
     turn,
     approval(id, approved) {
       return permission?.approval(id, approved) ?? false

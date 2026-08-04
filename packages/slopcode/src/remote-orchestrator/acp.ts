@@ -12,6 +12,7 @@ import {
 import {
   AgentOrchestrationLimits,
   type AgentOrchestrationAgentID,
+  type AgentOrchestrationBackendMode,
   type AgentOrchestrationCapability,
 } from "@slopcode-ai/protocol"
 import { approvalCwd, contained } from "./workspace"
@@ -45,7 +46,13 @@ export type ACPEvent =
 export interface Session {
   readonly nativeID: string
   readonly capabilities: readonly AgentOrchestrationCapability[]
+  readonly mode?: AgentOrchestrationBackendMode
+  readonly version?: string
+  readonly resumable?: boolean
   turn: (prompt: string) => Promise<void>
+  cancel?: (turnID: string) => Promise<boolean>
+  retry?: (turnID: string) => Promise<boolean>
+  steer?: (turnID: string, instruction: string) => Promise<boolean>
   approval: (id: string, approved: boolean) => boolean
   question: (id: string, answer: string) => boolean
   close: () => Promise<void>
@@ -149,11 +156,13 @@ export async function connect(input: {
   start?: Launch
   codexStart?: CodexLaunch
   cliStart?: CliLaunch
+  resume?: string
 }): Promise<Session> {
   if (input.agent === "codex") {
     try {
-      return await connectCodex({ cwd: input.cwd, emit: input.emit, start: input.codexStart })
+      return await connectCodex({ cwd: input.cwd, emit: input.emit, start: input.codexStart, resume: input.resume })
     } catch (error) {
+      if (input.resume) throw error
       process.stderr.write(
         `[remote-orchestrator/codex] App Server unavailable; using CLI fallback: ${safe(error instanceof Error ? error.message : "startup failed", 512, "startup failed")}\n`,
       )
@@ -336,24 +345,37 @@ export async function connect(input: {
     .then(() => emit({ type: "retry", reason: "ACP connection closed; reconnect and retry the turn." }))
     .catch(() => undefined)
   let initialized: Awaited<ReturnType<typeof connection.initialize>>
-  let created: Awaited<ReturnType<typeof connection.newSession>>
   try {
     initialized = await connection.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { elicitation: { form: {} } },
       clientInfo: { name: "slopcode-remote-orchestrator", version: "v1" },
     })
-    created = await connection.newSession({ cwd: input.cwd, mcpServers: [] })
+    const created = await (async () => {
+      if (!input.resume) return connection.newSession({ cwd: input.cwd, mcpServers: [] })
+      await connection.loadSession({ cwd: input.cwd, sessionId: input.resume, mcpServers: [] })
+      return { sessionId: input.resume }
+    })()
+    nativeID = created.sessionId
   } catch (error) {
     await stop(child)
     throw error
   }
-  nativeID = created.sessionId
-  const capabilities: AgentOrchestrationCapability[] = ["workspace", "sessions", "turns", "approvals"]
+  const capabilities: AgentOrchestrationCapability[] = [
+    "workspace",
+    "sessions",
+    "turns",
+    "approvals",
+    "questions",
+    "streaming",
+  ]
   if (initialized.agentCapabilities?.loadSession) capabilities.push("replay")
   return {
     nativeID,
     capabilities,
+    mode: "acp",
+    version: initialized.agentInfo?.version ?? "unknown",
+    resumable: !!initialized.agentCapabilities?.loadSession,
     async turn(prompt) {
       const result = await connection.prompt({ sessionId: nativeID, prompt: [{ type: "text", text: prompt }] })
       if (result.stopReason !== "end_turn") emit({ type: "retry", reason: `ACP turn stopped: ${result.stopReason}` })

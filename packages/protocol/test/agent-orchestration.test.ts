@@ -51,6 +51,87 @@ describe("agent orchestration protocol contracts", () => {
     expect(await decode(AgentOrchestrationAgentID, "antigravity")).toBe("antigravity")
   })
 
+  test("round-trips exact bridge preflight, session recovery, and turn control frames", async () => {
+    const summary = {
+      id: "ses_orchestration_1",
+      workspaceID: "wrk_orchestration_1",
+      agent: "codex",
+      state: "detached",
+      backendVersion: "codex-cli 1.2.3",
+      backendMode: "app_server",
+      capabilities: ["workspace", "sessions", "turns", "replay", "cancel"],
+      lastTurnID: "trn_orchestration_1",
+      lastCursor: "cur_7",
+    } as const
+    const snapshot = {
+      session: summary,
+      pending: [{ id: "int_approval_1", kind: "approval", revision: 2, title: "Approval pending" }],
+      artifacts: [
+        {
+          id: "art_orchestration_1",
+          name: "report",
+          kind: "report",
+          path: "/srv/slopcode/report.md",
+          size: 128,
+        },
+      ],
+      authoritative: true,
+    } as const
+    const frames = [
+      { ...request, type: "bridge.hello", agent: "codex" },
+      {
+        ...request,
+        kind: "response",
+        type: "bridge.hello",
+        bridgeVersion: "1.0.0",
+        protocolVersion: "v1",
+        agent: "codex",
+        backendVersion: "codex-cli 1.2.3",
+        backendMode: "app_server",
+        capabilities: summary.capabilities,
+      },
+      { ...request, type: "session.list", workspaceID: workspace.id, agent: "codex" },
+      { ...request, kind: "response", type: "session.list", sessions: [summary] },
+      { ...request, type: "session.attach", sessionID: summary.id },
+      { ...request, kind: "response", type: "session.attach", attached: true, snapshot },
+      { ...request, type: "session.snapshot", sessionID: summary.id },
+      { ...request, kind: "response", type: "session.snapshot", snapshot },
+      { ...request, type: "turn.cancel", sessionID: summary.id, turnID: "trn_orchestration_1" },
+      { ...request, type: "turn.retry", sessionID: summary.id, turnID: "trn_orchestration_1" },
+      {
+        ...request,
+        type: "turn.steer",
+        sessionID: summary.id,
+        turnID: "trn_orchestration_1",
+        instruction: "Keep the implementation bounded.",
+      },
+      {
+        ...request,
+        kind: "error",
+        type: "error",
+        code: "unsupported_operation",
+        message: "turn.steer is not supported by codex CLI fallback",
+        retryable: false,
+      },
+    ]
+
+    const values = await Promise.all(frames.map((frame) => decode(AgentOrchestrationFrame, frame)))
+    expect(values.map((value) => value.type).join(",")).toBe(frames.map((frame) => frame.type).join(","))
+    await expect(decode(AgentOrchestrationFrame, { ...frames[1], extra: true })).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationFrame, {
+        ...frames[11],
+        retryable: true,
+      }),
+    ).rejects.toThrow()
+    await expect(
+      decode(AgentOrchestrationFrame, {
+        ...frames[3],
+        sessions: Array(AgentOrchestrationLimits.maxSessions + 1).fill(summary),
+      }),
+    ).rejects.toThrow()
+  })
+
   test("accepts strict workspace, session, turn, interaction, plan, artifact, event, and error frames", async () => {
     const frames = [
       {

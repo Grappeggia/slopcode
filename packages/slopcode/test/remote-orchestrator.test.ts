@@ -54,7 +54,8 @@ const claudePermissionRequest = async (config: string, tool: string, input: Reco
       if (index < 0) return
       const response = JSON.parse(rest.slice(0, index))
       client.destroy()
-      if (response.id !== id || typeof response.output !== "string") return reject(new Error("unexpected Claude approval"))
+      if (response.id !== id || typeof response.output !== "string")
+        return reject(new Error("unexpected Claude approval"))
       resolve(response.output)
     })
     client.once("error", reject)
@@ -121,7 +122,11 @@ describe("remote orchestrator", () => {
         start: () => spawn(process.execPath, [fixture, agent], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
       })
       await session.turn("safe prompt")
-      expect(session.capabilities).toEqual(agent === "claude" ? ["workspace", "sessions", "turns", "approvals"] : ["workspace", "sessions", "turns"])
+      expect(session.capabilities).toEqual(
+        agent === "claude"
+          ? ["workspace", "sessions", "turns", "streaming", "approvals", "permissions"]
+          : ["workspace", "sessions", "turns", "streaming"],
+      )
       expect(events).toContainEqual(expect.objectContaining({ type: "output", text: `${agent}:safe prompt` }))
       expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"thread.started"') }))
       expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringContaining('"turn.completed"') }))
@@ -140,7 +145,10 @@ describe("remote orchestrator", () => {
     const approval = events.find((event): event is Extract<ACPEvent, { type: "approval" }> => event.type === "approval")
     expect(approval).toMatchObject({ title: "Claude wants to use Write", command: "index.html", cwd })
     if (approval) expect(permission.approval(approval.id, true)).toBe(true)
-    expect(JSON.parse(await request)).toEqual({ behavior: "allow", updatedInput: { file_path: "index.html", content: "safe" } })
+    expect(JSON.parse(await request)).toEqual({
+      behavior: "allow",
+      updatedInput: { file_path: "index.html", content: "safe" },
+    })
     await permission.close()
   })
 
@@ -163,6 +171,8 @@ describe("remote orchestrator", () => {
       "questions",
       "plans",
       "artifacts",
+      "replay",
+      "streaming",
     ])
     const turn = session.turn("safe prompt")
     await waitFor(() => events.filter((event) => event.type === "approval").length >= 2)
@@ -230,7 +240,7 @@ describe("remote orchestrator", () => {
       cliStart: (_agent, dir) =>
         spawn(process.execPath, [fixture, "codex"], { cwd: dir, shell: false, stdio: ["pipe", "pipe", "pipe"] }),
     })
-    expect(session.capabilities).toEqual(["workspace", "sessions", "turns"])
+    expect(session.capabilities).toEqual(["workspace", "sessions", "turns", "streaming"])
     await session.turn("fallback prompt")
     expect(events).toContainEqual(expect.objectContaining({ type: "output", text: "codex:fallback prompt" }))
     await session.close()
@@ -256,7 +266,18 @@ describe("remote orchestrator", () => {
       },
     })
     await session.turn(prompt)
-    expect(value).toEqual(["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"])
+    expect(value).toEqual([
+      "agy",
+      "--new-project",
+      "--add-dir",
+      cwd,
+      "--sandbox",
+      "--dangerously-skip-permissions",
+      "--prompt",
+      prompt,
+      "--output-format",
+      "stream-json",
+    ])
     expect(events).toContainEqual(
       expect.objectContaining({ type: "output", text: `antigravity:${prompt.replaceAll("\n", " ")}` }),
     )
@@ -266,8 +287,28 @@ describe("remote orchestrator", () => {
   test("keeps option-shaped Antigravity prompts in the named prompt argument", () => {
     for (const prompt of ["--help", "--dangerously-skip-permissions"]) {
       const value = argv("antigravity", prompt)
-      expect(value).toEqual(["agy", "--new-project", "--add-dir", ".", "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"])
-      expect(argv("antigravity", prompt, "text")).toEqual(["agy", "--new-project", "--add-dir", ".", "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt])
+      expect(value).toEqual([
+        "agy",
+        "--new-project",
+        "--add-dir",
+        ".",
+        "--sandbox",
+        "--dangerously-skip-permissions",
+        "--prompt",
+        prompt,
+        "--output-format",
+        "stream-json",
+      ])
+      expect(argv("antigravity", prompt, "text")).toEqual([
+        "agy",
+        "--new-project",
+        "--add-dir",
+        ".",
+        "--sandbox",
+        "--dangerously-skip-permissions",
+        "--prompt",
+        prompt,
+      ])
     }
   })
 
@@ -294,7 +335,18 @@ describe("remote orchestrator", () => {
     })
     await session.turn(prompt)
     expect(launches).toEqual([
-      ["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt, "--output-format", "stream-json"],
+      [
+        "agy",
+        "--new-project",
+        "--add-dir",
+        cwd,
+        "--sandbox",
+        "--dangerously-skip-permissions",
+        "--prompt",
+        prompt,
+        "--output-format",
+        "stream-json",
+      ],
       ["agy", "--new-project", "--add-dir", cwd, "--sandbox", "--dangerously-skip-permissions", "--prompt", prompt],
     ])
     expect(events).toContainEqual(expect.objectContaining({ type: "output", text: "fallback-ok" }))
@@ -935,7 +987,7 @@ describe("remote orchestrator", () => {
         ),
       ),
     )
-    await waitFor(() => output.filter((item) => item.kind === "event").length >= 8)
+    await waitFor(() => output.filter((item) => item.kind === "event").length >= 10)
     const scoped = sessions.map((sessionID) =>
       output.filter((item) => item.kind === "event" && item.sessionID === sessionID),
     )
@@ -975,6 +1027,552 @@ describe("remote orchestrator", () => {
         ),
       ).size,
     ).toBe(2)
+    await bridge.close()
+  })
+
+  test("returns explicit backend preflight details", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => {
+        throw new Error("session open is not part of preflight")
+      },
+      async (agent) => ({
+        version: `${agent} 1.2.3`,
+        mode: agent === "codex" ? "app_server" : "acp",
+        capabilities: ["workspace", "sessions", "turns", "replay"],
+      }),
+    )
+    await bridge.handle(frame("bridge.hello", { agent: "codex" }))
+    expect(output.at(-1)).toMatchObject({
+      kind: "response",
+      type: "bridge.hello",
+      bridgeVersion: "1.0.0",
+      protocolVersion: "v1",
+      agent: "codex",
+      backendVersion: "codex 1.2.3",
+      backendMode: "app_server",
+      capabilities: ["workspace", "sessions", "turns", "replay"],
+    })
+    await bridge.close()
+  })
+
+  test("survives bridge restart with redacted replay, snapshots, and durable idempotency", async () => {
+    const root = await temp()
+    const first: Frame[] = []
+    let opens = 0
+    const session = (emit: (event: ACPEvent) => void): Session => ({
+      nativeID: "durable-native-session",
+      capabilities: ["workspace", "sessions", "turns", "replay"],
+      mode: "acp",
+      version: "fixture 1.0.0",
+      resumable: true,
+      async turn() {
+        emit({ type: "output", text: "sensitive model output", nativeID: "native-output" })
+        emit({ type: "reasoning", text: "sensitive reasoning", nativeID: "native-reasoning" })
+      },
+      approval: () => false,
+      question: () => false,
+      async close() {},
+    })
+    const bridge = new Bridge(
+      root,
+      (value) => first.push(value),
+      async (input) => {
+        opens++
+        return session(input.emit)
+      },
+    )
+    const opened = frame("workspace.open", {
+      workspace: { id: "wrk_durable", path: root, metadata: { note: "sensitive workspace value" } },
+      agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+      requestID: "req_durable_workspace",
+      idempotencyKey: "idem_durable_workspace",
+    })
+    const created = frame("session.create", {
+      workspaceID: "wrk_durable",
+      agent: "opencode",
+      requestID: "req_durable_session",
+      idempotencyKey: "idem_durable_session",
+    })
+    await bridge.handle(opened)
+    await bridge.handle(created)
+    const response = sessionResponses(first).at(-1)
+    expect(response?.sessionID).toStartWith("ses_")
+    await bridge.handle(
+      frame("turn.create", {
+        sessionID: response?.sessionID,
+        turnID: "trn_durable",
+        agent: "opencode",
+        prompt: "sensitive user prompt",
+        requestID: "req_durable_turn",
+        idempotencyKey: "idem_durable_turn",
+      }),
+    )
+    await waitFor(() => first.some((item) => item.kind === "event" && item.type === "turn.completed"))
+    const journal = await Bun.file(path.join(root, ".slopcode", "remote-orchestrator", "v1.json")).text()
+    expect(journal).not.toContain("sensitive user prompt")
+    expect(journal).not.toContain("sensitive model output")
+    expect(journal).not.toContain("sensitive reasoning")
+    expect(journal).not.toContain("sensitive workspace value")
+    expect(journal).toContain("[output redacted for resume]")
+
+    const second: Frame[] = []
+    const restarted = new Bridge(
+      root,
+      (value) => second.push(value),
+      async (input) => {
+        opens++
+        return session(input.emit)
+      },
+    )
+    await restarted.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_durable", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+        requestID: "req_durable_restart",
+        idempotencyKey: "idem_durable_restart",
+      }),
+    )
+    await restarted.handle(created)
+    expect(opens).toBe(1)
+    expect(sessionResponses(second).at(-1)?.sessionID).toBe(response?.sessionID)
+    await restarted.handle(
+      frame("session.list", {
+        workspaceID: "wrk_durable",
+        requestID: "req_durable_list",
+        idempotencyKey: "idem_durable_list",
+      }),
+    )
+    expect(second.at(-1)).toMatchObject({
+      kind: "response",
+      type: "session.list",
+      sessions: [{ id: response?.sessionID, state: "completed", lastCursor: expect.stringMatching(/^cur_/) }],
+    })
+    await restarted.handle(
+      frame("session.snapshot", {
+        sessionID: response?.sessionID,
+        requestID: "req_durable_snapshot",
+        idempotencyKey: "idem_durable_snapshot",
+      }),
+    )
+    expect(second.at(-1)).toMatchObject({
+      kind: "response",
+      type: "session.snapshot",
+      snapshot: { authoritative: true, session: { id: response?.sessionID, state: "completed" } },
+    })
+    await restarted.handle(
+      frame("event.replay", {
+        sessionID: response?.sessionID,
+        limit: 1,
+        requestID: "req_durable_replay_one",
+        idempotencyKey: "idem_durable_replay_one",
+      }),
+    )
+    const replay = second.at(-1)
+    expect(replay).toMatchObject({ kind: "response", type: "event.replay", hasMore: true })
+    if (replay?.kind === "response" && replay.type === "event.replay") {
+      expect(replay.events[0]).toMatchObject({ type: "turn.output", text: "[output redacted for resume]" })
+      await restarted.handle(
+        frame("event.replay", {
+          sessionID: response?.sessionID,
+          afterCursor: replay.events[0]?.cursor,
+          limit: 100,
+          requestID: "req_durable_replay_next",
+          idempotencyKey: "idem_durable_replay_next",
+        }),
+      )
+      const continued = second.at(-1)
+      expect(continued).toMatchObject({ kind: "response", type: "event.replay", hasMore: false })
+      if (continued?.kind === "response" && continued.type === "event.replay")
+        expect(continued.events.map((item) => item.sequence)).toEqual(
+          [...continued.events].map((item) => item.sequence).sort((a, b) => a - b),
+        )
+    }
+    await bridge.close()
+    await restarted.close()
+  })
+
+  test("replays persisted events after an actual bridge subprocess restart", async () => {
+    const root = await temp()
+    const fixture = path.join(import.meta.dir, "fixture", "remote-orchestrator-restart-child.ts")
+    const start = () => {
+      const child = spawn(process.execPath, [fixture, root], {
+        cwd: root,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+      const output: Frame[] = []
+      let rest = ""
+      child.stdout?.setEncoding("utf8")
+      child.stdout?.on("data", (chunk: string) => {
+        rest += chunk
+        let index = rest.indexOf("\n")
+        while (index >= 0) {
+          const line = rest.slice(0, index)
+          rest = rest.slice(index + 1)
+          if (line) output.push(decode(JSON.parse(line)))
+          index = rest.indexOf("\n")
+        }
+      })
+      return { child, output }
+    }
+    const stop = async (child: ReturnType<typeof spawn>) => {
+      child.stdin?.end()
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject)
+        child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`restart fixture exited ${code}`))))
+      })
+    }
+    const opened = frame("workspace.open", {
+      workspace: { id: "wrk_process_restart", path: root },
+      agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+      requestID: "req_process_workspace",
+      idempotencyKey: "idem_process_workspace",
+    })
+    const created = frame("session.create", {
+      workspaceID: "wrk_process_restart",
+      agent: "opencode",
+      requestID: "req_process_session",
+      idempotencyKey: "idem_process_session",
+    })
+    const first = start()
+    first.child.stdin?.write(`${JSON.stringify(opened)}\n`)
+    await waitFor(() => first.output.some((item) => item.kind === "response" && item.type === "workspace.open"))
+    first.child.stdin?.write(`${JSON.stringify(created)}\n`)
+    await waitFor(() => sessionResponses(first.output).length === 1)
+    const id = sessionResponses(first.output)[0]!.sessionID
+    first.child.stdin?.write(
+      `${JSON.stringify(
+        frame("turn.create", {
+          sessionID: id,
+          turnID: "trn_process_restart",
+          agent: "opencode",
+          prompt: "process restart prompt",
+          requestID: "req_process_turn",
+          idempotencyKey: "idem_process_turn",
+        }),
+      )}\n`,
+    )
+    await waitFor(() => first.output.some((item) => item.kind === "event" && item.type === "turn.completed"))
+    await stop(first.child)
+
+    const second = start()
+    second.child.stdin?.write(
+      `${JSON.stringify(
+        frame("workspace.open", {
+          workspace: { id: "wrk_process_restart", path: root },
+          agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+          requestID: "req_process_workspace_restart",
+          idempotencyKey: "idem_process_workspace_restart",
+        }),
+      )}\n`,
+    )
+    await waitFor(() => second.output.some((item) => item.kind === "response" && item.type === "workspace.open"))
+    second.child.stdin?.write(`${JSON.stringify(created)}\n`)
+    await waitFor(() => sessionResponses(second.output).length === 1)
+    expect(sessionResponses(second.output)[0]?.sessionID).toBe(id)
+    second.child.stdin?.write(
+      `${JSON.stringify(
+        frame("event.replay", {
+          sessionID: id,
+          limit: 100,
+          requestID: "req_process_replay",
+          idempotencyKey: "idem_process_replay",
+        }),
+      )}\n`,
+    )
+    await waitFor(() => second.output.some((item) => item.kind === "response" && item.type === "event.replay"))
+    const replay = second.output.find((item) => item.kind === "response" && item.type === "event.replay")
+    if (replay?.kind === "response" && replay.type === "event.replay")
+      expect(replay.events.map((item) => item.type)).toEqual(["turn.output", "turn.completed"])
+    await stop(second.child)
+  })
+
+  test("recovers an abrupt active turn as an authoritative interrupted snapshot", async () => {
+    const root = await temp()
+    const first: Frame[] = []
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const bridge = new Bridge(
+      root,
+      (value) => first.push(value),
+      async () => ({
+        nativeID: "interrupted-native",
+        capabilities: ["workspace", "sessions", "turns", "replay"],
+        mode: "acp",
+        version: "fixture 1.0.0",
+        resumable: true,
+        turn: () => gate,
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_interrupted", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_interrupted", agent: "opencode" }))
+    const id = sessionResponses(first).at(-1)?.sessionID
+    await bridge.handle(
+      frame("turn.create", { sessionID: id, turnID: "trn_interrupted", agent: "opencode", prompt: "go" }),
+    )
+
+    const output: Frame[] = []
+    const restarted = new Bridge(root, (value) => output.push(value))
+    await restarted.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_interrupted", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+        requestID: "req_interrupted_restart",
+        idempotencyKey: "idem_interrupted_restart",
+      }),
+    )
+    await restarted.handle(
+      frame("session.snapshot", {
+        sessionID: id,
+        requestID: "req_interrupted_snapshot",
+        idempotencyKey: "idem_interrupted_snapshot",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({
+      kind: "response",
+      type: "session.snapshot",
+      snapshot: {
+        authoritative: true,
+        session: { id, state: "interrupted", lastTurnID: "trn_interrupted" },
+      },
+    })
+    expect(JSON.stringify(output.at(-1))).not.toContain("activeTurnID")
+    release()
+    await waitFor(() => first.some((item) => item.kind === "event" && item.type === "turn.completed"))
+    await bridge.close()
+    await restarted.close()
+  })
+
+  test("returns a cursor gap and authoritative snapshot after the retained tail advances", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async (input) => ({
+        nativeID: "tail-native",
+        capabilities: ["workspace", "sessions", "turns", "replay"],
+        mode: "acp",
+        version: "fixture 1.0.0",
+        resumable: true,
+        async turn() {
+          for (let index = 0; index < 130; index++) input.emit({ type: "output", text: `event ${index}` })
+        },
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_tail", path: root },
+        agent: { id: "opencode", capabilities: ["workspace", "sessions", "turns", "replay"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_tail", agent: "opencode" }))
+    const id = sessionResponses(output).at(-1)?.sessionID
+    await bridge.handle(frame("turn.create", { sessionID: id, agent: "opencode", prompt: "tail" }))
+    await waitFor(() => output.some((item) => item.kind === "event" && item.type === "turn.completed"))
+    await bridge.handle(
+      frame("event.replay", {
+        sessionID: id,
+        afterCursor: "cur_1",
+        limit: 100,
+        requestID: "req_tail_gap",
+        idempotencyKey: "idem_tail_gap",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({
+      kind: "error",
+      code: "cursor_gap",
+      retryable: false,
+      details: { snapshotRequired: "true" },
+    })
+    await bridge.handle(
+      frame("session.snapshot", {
+        sessionID: id,
+        requestID: "req_tail_snapshot",
+        idempotencyKey: "idem_tail_snapshot",
+      }),
+    )
+    expect(output.at(-1)).toMatchObject({
+      kind: "response",
+      type: "session.snapshot",
+      snapshot: { authoritative: true },
+    })
+    await bridge.close()
+  })
+
+  test("rejects corrupt, oversized, and symlinked state journals", async () => {
+    const cases = ["corrupt", "oversized", "symlink"] as const
+    for (const item of cases) {
+      const root = await temp()
+      const dir = path.join(root, ".slopcode", "remote-orchestrator")
+      if (item === "symlink") {
+        const outside = await temp()
+        await symlink(outside, path.join(root, ".slopcode"), "dir")
+      }
+      if (item !== "symlink") {
+        await mkdir(dir, { recursive: true })
+        await Bun.write(path.join(dir, "v1.json"), item === "corrupt" ? "not json" : "x".repeat(2 * 1024 * 1024 + 1))
+      }
+      const output: Frame[] = []
+      const bridge = new Bridge(root, (value) => output.push(value))
+      await bridge.handle(
+        frame("workspace.open", {
+          workspace: { id: `wrk_${item}`, path: root },
+          agent: { id: "opencode", capabilities: ["workspace"] },
+          requestID: `req_${item}_journal`,
+          idempotencyKey: `idem_${item}_journal`,
+        }),
+      )
+      expect(output.at(-1)).toMatchObject({
+        kind: "error",
+        code: item === "corrupt" ? "bad_request" : item === "oversized" ? "too_large" : "path_forbidden",
+        retryable: false,
+      })
+      await bridge.close()
+    }
+  })
+
+  test("routes supported turn controls only to the active provider turn", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const calls: string[] = []
+    let release: () => void = () => undefined
+    let finish: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const finished = new Promise<void>((resolve) => (finish = resolve))
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => ({
+        nativeID: "controls-native",
+        capabilities: ["workspace", "sessions", "turns", "cancel", "retry", "steer"],
+        mode: "app_server",
+        version: "fixture 1.0.0",
+        resumable: true,
+        async turn() {
+          await gate
+          finish()
+        },
+        async cancel(id) {
+          calls.push(`cancel:${id}`)
+          return true
+        },
+        async retry(id) {
+          calls.push(`retry:${id}`)
+          return true
+        },
+        async steer(id, instruction) {
+          calls.push(`steer:${id}:${instruction}`)
+          return true
+        },
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_controls", path: root },
+        agent: { id: "codex", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_controls", agent: "codex" }))
+    const id = sessionResponses(output).at(-1)?.sessionID
+    await bridge.handle(
+      frame("turn.create", { sessionID: id, turnID: "trn_controls", agent: "codex", prompt: "start" }),
+    )
+    await bridge.handle(
+      frame("turn.steer", {
+        sessionID: id,
+        turnID: "trn_controls",
+        instruction: "focus tests",
+        requestID: "req_controls_steer",
+        idempotencyKey: "idem_controls_steer",
+      }),
+    )
+    await bridge.handle(
+      frame("turn.cancel", {
+        sessionID: id,
+        turnID: "trn_controls",
+        requestID: "req_controls_cancel",
+        idempotencyKey: "idem_controls_cancel",
+      }),
+    )
+    expect(output.filter((item) => item.kind === "event" && item.type === "turn.completed")).toHaveLength(1)
+    await bridge.handle(
+      frame("turn.retry", {
+        sessionID: id,
+        turnID: "trn_controls",
+        requestID: "req_controls_retry",
+        idempotencyKey: "idem_controls_retry",
+      }),
+    )
+    expect(calls).toEqual(["steer:trn_controls:focus tests", "cancel:trn_controls", "retry:trn_controls"])
+    expect(output.at(-1)).toMatchObject({ kind: "response", type: "turn.retry", turnID: "trn_controls" })
+    release()
+    await finished
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(output.filter((item) => item.kind === "event" && item.type === "turn.completed")).toHaveLength(1)
+    await bridge.close()
+  })
+
+  test("returns stable non-retryable errors for provider-unsupported turn operations", async () => {
+    const root = await temp()
+    const output: Frame[] = []
+    const bridge = new Bridge(
+      root,
+      (value) => output.push(value),
+      async () => ({
+        nativeID: "limited-native",
+        capabilities: ["workspace", "sessions", "turns"],
+        mode: "streaming_cli",
+        version: "fixture 1.0.0",
+        resumable: false,
+        async turn() {},
+        approval: () => false,
+        question: () => false,
+        async close() {},
+      }),
+    )
+    await bridge.handle(
+      frame("workspace.open", {
+        workspace: { id: "wrk_limited", path: root },
+        agent: { id: "claude", capabilities: ["workspace", "sessions", "turns"] },
+      }),
+    )
+    await bridge.handle(frame("session.create", { workspaceID: "wrk_limited", agent: "claude" }))
+    const id = sessionResponses(output).at(-1)?.sessionID
+    for (const type of ["turn.cancel", "turn.retry", "turn.steer"] as const) {
+      await bridge.handle(
+        frame(type, {
+          sessionID: id,
+          turnID: "trn_unsupported",
+          ...(type === "turn.steer" ? { instruction: "change direction" } : {}),
+          requestID: `req_${type.replace(".", "_")}`,
+          idempotencyKey: `idem_${type.replace(".", "_")}`,
+        }),
+      )
+      expect(output.at(-1)).toMatchObject({
+        kind: "error",
+        code: "unsupported_operation",
+        retryable: false,
+      })
+    }
     await bridge.close()
   })
 

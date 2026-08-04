@@ -3,15 +3,35 @@ import path from "node:path"
 import { Schema } from "effect"
 import {
   AgentOrchestrationFrame,
+  AgentOrchestrationInteractionID,
   AgentOrchestrationLimits,
+  AgentOrchestrationSessionID,
+  AgentOrchestrationTurnID,
+  AgentOrchestrationWorkspace,
   type AgentOrchestrationAgentID,
+  type AgentOrchestrationBackendMode,
+  type AgentOrchestrationCapability,
+  type AgentOrchestrationEvent,
+  type AgentOrchestrationFrame as Frame,
   type AgentOrchestrationRequest,
 } from "@slopcode-ai/protocol"
 import { connect, type ACPEvent, type Session } from "./acp"
+import { bridgeVersion, probe, type Probe, type Result } from "./preflight"
+import {
+  limits as stateLimits,
+  redact,
+  StateError,
+  Store,
+  type Request as SavedRequest,
+  type Session as SavedSession,
+} from "./state"
 import { approvalCwd, contained, WorkspaceError } from "./workspace"
 
 const decode = Schema.decodeUnknownSync(AgentOrchestrationFrame)
-type Frame = typeof AgentOrchestrationFrame.Type
+const decodeWorkspace = Schema.decodeUnknownSync(AgentOrchestrationWorkspace)
+const decodeSessionID = Schema.decodeUnknownSync(AgentOrchestrationSessionID)
+const decodeInteractionID = Schema.decodeUnknownSync(AgentOrchestrationInteractionID)
+const decodeTurnID = Schema.decodeUnknownSync(AgentOrchestrationTurnID)
 const bytes = (value: string) => Buffer.byteLength(value)
 const clean = (value: string, size = 2_000, fallback = "") => {
   const normalized = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim()
@@ -52,30 +72,37 @@ const fingerprint = (frame: AgentOrchestrationRequest) => {
     .update(JSON.stringify(canonical(value)) ?? "")
     .digest("hex")
 }
+const number = (cursor: string) => Number(cursor.slice(4))
+const fallbackMode = (agent: AgentOrchestrationAgentID): AgentOrchestrationBackendMode => {
+  if (agent === "slopcode" || agent === "opencode") return "acp"
+  if (agent === "codex") return "app_server"
+  if (agent === "antigravity") return "sandboxed_cli"
+  return "streaming_cli"
+}
+const safeVersion = (value: string | undefined) => clean(value ?? "unknown", 256, "unknown")
+const supported = (value: AgentOrchestrationAgentID) =>
+  value === "slopcode" || value === "opencode" || value === "codex" || value === "claude" || value === "antigravity"
 
 type Stored = {
-  adapter: Session
-  agent: AgentOrchestrationAgentID
-  workspaceID: string
+  record: SavedSession
+  store: Store
   workspace: string
-  activeTurnID?: string
-  lastTurnID?: string
+  adapter?: Session
   queue: Promise<void>
+  run: number
 }
-
 type Interaction = {
   sessionID: string
   kind: "approval" | "question"
   revision: number
   nativeID: string
 }
-
 type Open = (input: {
   agent: AgentOrchestrationAgentID
   cwd: string
   emit: (event: ACPEvent) => void
+  resume?: string
 }) => Promise<Session>
-
 type RequestRecord = {
   requestID: string
   idempotencyKey: string
@@ -84,24 +111,55 @@ type RequestRecord = {
   resolve: (frame: Frame) => void
   response?: Frame
 }
+type Code =
+  | "bad_request"
+  | "unsupported_agent"
+  | "unsupported_operation"
+  | "not_found"
+  | "cursor_gap"
+  | "interaction_conflict"
+  | "idempotency_conflict"
+  | "path_forbidden"
+  | "too_large"
+  | "internal"
 
-const maxRequests = 256
-const isSupportedAgent = (value: AgentOrchestrationAgentID) =>
-  value === "slopcode" || value === "opencode" || value === "codex" || value === "claude" || value === "antigravity"
+const persistedResponse = (frame: Frame): Frame => {
+  if (frame.kind === "error")
+    return decode({
+      ...frame,
+      message:
+        frame.code === "cursor_gap"
+          ? "Event cursor is outside the retained tail"
+          : frame.code === "unsupported_operation"
+            ? "Provider operation is unsupported"
+            : "Request failed",
+      ...(frame.code === "cursor_gap" ? { details: { snapshotRequired: "true" } } : { details: undefined }),
+    })
+  if (frame.kind !== "response") return frame
+  if (frame.type === "event.replay") return decode({ ...frame, events: frame.events.map(redact) })
+  if (frame.type === "workspace.open" && frame.workspace)
+    return decode({ ...frame, workspace: { id: frame.workspace.id, path: frame.workspace.path } })
+  return frame
+}
 
 export class Bridge {
-  readonly workspaces = new Map<string, string>()
+  readonly workspaces = new Map<string, { path: string; store: Store }>()
   readonly sessions = new Map<string, Stored>()
   readonly native = new Map<string, string>()
   readonly interactions = new Map<string, Interaction>()
   #requests = new Map<string, RequestRecord>()
+  #events = new Map<string, AgentOrchestrationEvent[]>()
+  #stores = new Map<string, Store>()
+  #preflights = new Map<AgentOrchestrationAgentID, Result>()
+  #tasks = new Set<Promise<void>>()
   #sequence = 0
   #closed = false
 
   constructor(
     private readonly root: string,
-    private readonly write: (frame: AgentOrchestrationFrame) => void,
+    private readonly write: (frame: Frame) => void,
     private readonly open: Open = connect,
+    private readonly preflight: Probe = probe,
   ) {}
 
   private out(frame: unknown) {
@@ -126,18 +184,7 @@ export class Bridge {
     }
   }
 
-  private errorFrame(
-    code:
-      | "bad_request"
-      | "unsupported_agent"
-      | "not_found"
-      | "interaction_conflict"
-      | "idempotency_conflict"
-      | "path_forbidden"
-      | "internal",
-    message: string,
-    frame?: Partial<AgentOrchestrationRequest>,
-  ) {
+  private errorFrame(code: Code, message: string, frame?: Partial<AgentOrchestrationRequest>) {
     return decode({
       version: "v1",
       kind: "error",
@@ -148,57 +195,58 @@ export class Bridge {
       code,
       message: clean(message),
       retryable: code === "internal",
+      ...(code === "cursor_gap" ? { details: { snapshotRequired: "true" } } : {}),
     })
   }
 
-  private error(
-    code:
-      | "bad_request"
-      | "unsupported_agent"
-      | "not_found"
-      | "interaction_conflict"
-      | "idempotency_conflict"
-      | "path_forbidden"
-      | "internal",
-    message: string,
-    frame?: Partial<AgentOrchestrationRequest>,
-  ) {
+  private error(code: Code, message: string, frame?: Partial<AgentOrchestrationRequest>) {
     const value = this.errorFrame(code, message, frame)
     this.out(value)
     return value
   }
 
-  private complete(record: RequestRecord, frame: unknown) {
-    const value = decode(frame)
-    record.response = value
-    record.resolve(value)
-    this.out(value)
-  }
-
-  private fail(
-    record: RequestRecord,
-    code:
-      | "bad_request"
-      | "unsupported_agent"
-      | "not_found"
-      | "interaction_conflict"
-      | "idempotency_conflict"
-      | "path_forbidden"
-      | "internal",
-    message: string,
-    frame: AgentOrchestrationRequest,
-  ) {
-    this.complete(record, this.errorFrame(code, message, frame))
-  }
-
   private remember(record: RequestRecord) {
     this.#requests.set(`request:${record.requestID}`, record)
     this.#requests.set(`idempotency:${record.idempotencyKey}`, record)
-    while (new Set(this.#requests.values()).size > maxRequests) {
+    while (new Set(this.#requests.values()).size > stateLimits.requests) {
       const first = this.#requests.values().next().value as RequestRecord | undefined
       if (!first) return
       this.#requests.delete(`request:${first.requestID}`)
       this.#requests.delete(`idempotency:${first.idempotencyKey}`)
+    }
+  }
+
+  private hydrate(store: Store) {
+    this.#sequence = Math.max(this.#sequence, store.state.cursor)
+    for (const event of store.state.events) {
+      const events = this.#events.get(event.sessionID) ?? []
+      events.push(event)
+      this.#events.set(event.sessionID, events.slice(-stateLimits.events))
+    }
+    for (const record of store.state.sessions) {
+      if (this.sessions.has(record.id)) continue
+      this.sessions.set(record.id, { record, store, workspace: store.workspace, queue: Promise.resolve(), run: 0 })
+      this.native.set(record.id, scoped(record.id, record.nativeID))
+      for (const item of record.pending)
+        this.interactions.set(item.id, {
+          sessionID: record.id,
+          kind: item.kind,
+          revision: item.revision,
+          nativeID: item.nativeID,
+        })
+    }
+    for (const saved of store.state.requests) {
+      if (this.#requests.has(`request:${saved.requestID}`) || this.#requests.has(`idempotency:${saved.idempotencyKey}`))
+        continue
+      const response = decode(saved.response)
+      this.remember({
+        requestID: saved.requestID,
+        idempotencyKey: saved.idempotencyKey,
+        fingerprint: saved.fingerprint,
+        done: Promise.resolve(response),
+        resolve: () => undefined,
+        response,
+      })
     }
   }
 
@@ -226,37 +274,122 @@ export class Bridge {
     return record
   }
 
-  private event(
+  private async complete(record: RequestRecord, frame: unknown, store?: Store) {
+    const value = decode(frame)
+    if (store) {
+      const response = persistedResponse(value)
+      const saved: SavedRequest = {
+        requestID: record.requestID,
+        idempotencyKey: record.idempotencyKey,
+        fingerprint: record.fingerprint,
+        response,
+      }
+      const previous = store.state.requests
+      store.state.requests = [
+        ...store.state.requests.filter(
+          (item) => item.requestID !== saved.requestID && item.idempotencyKey !== saved.idempotencyKey,
+        ),
+        saved,
+      ].slice(-stateLimits.requests)
+      await store.save().catch((error: unknown) => {
+        store.state.requests = previous
+        throw error
+      })
+    }
+    record.response = value
+    record.resolve(value)
+    this.out(value)
+  }
+
+  private async fail(
+    record: RequestRecord,
+    code: Code,
+    message: string,
+    frame: AgentOrchestrationRequest,
+    store?: Store,
+  ) {
+    await this.complete(record, this.errorFrame(code, message, frame), store)
+  }
+
+  private summary(session: Stored) {
+    const value = session.record
+    return {
+      id: value.id,
+      workspaceID: value.workspaceID,
+      agent: value.agent,
+      state: value.state,
+      backendVersion: value.backendVersion,
+      backendMode: value.backendMode,
+      capabilities: value.capabilities,
+      ...(value.activeTurnID ? { activeTurnID: value.activeTurnID } : {}),
+      ...(value.lastTurnID ? { lastTurnID: value.lastTurnID } : {}),
+      ...(value.lastCursor ? { lastCursor: value.lastCursor } : {}),
+    }
+  }
+
+  private snapshot(session: Stored) {
+    return {
+      session: this.summary(session),
+      pending: session.record.pending.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        revision: item.revision,
+        title: item.title,
+      })),
+      artifacts: session.record.artifacts,
+      authoritative: true as const,
+    }
+  }
+
+  private async event(
     sessionID: string,
     input: Omit<Record<string, unknown>, "version" | "kind" | "cursor" | "sequence" | "sessionID">,
   ) {
+    const session = this.sessions.get(sessionID)
+    if (!session) return
     const sequence = ++this.#sequence
-    this.out({ version: "v1", kind: "event", cursor: `cur_${sequence}`, sequence, sessionID, ...input })
+    const frame = decode({ version: "v1", kind: "event", cursor: `cur_${sequence}`, sequence, sessionID, ...input })
+    if (frame.kind !== "event") throw new Error("orchestrator event projection failed")
+    const events = [...(this.#events.get(sessionID) ?? []), frame].slice(-stateLimits.events)
+    this.#events.set(sessionID, events)
+    session.store.state.cursor = sequence
+    session.store.state.events = [...session.store.state.events, redact(frame)].slice(-stateLimits.events)
+    session.record.lastCursor = frame.cursor
+    if (frame.type === "artifact.created") {
+      session.record.artifacts = [
+        ...session.record.artifacts.filter((item) => item.id !== frame.artifact.id),
+        { ...frame.artifact, metadata: undefined },
+      ].slice(-AgentOrchestrationLimits.maxArtifacts)
+    }
+    if (frame.type === "interaction.approval.requested" || frame.type === "interaction.question.requested")
+      session.record.state = "waiting"
+    if (frame.type === "turn.completed") {
+      session.record.activeTurnID = undefined
+      session.record.state = session.record.pending.length ? "waiting" : frame.status
+    }
+    await session.store.save()
+    this.out(frame)
   }
 
   private async mapped(sessionID: string, session: Stored, event: ACPEvent, turnID: string | undefined) {
-    if (event.type === "output" && turnID) {
-      this.event(sessionID, {
+    if (event.type === "output" && turnID)
+      return this.event(sessionID, {
         type: "turn.output",
         turnID,
-        text: streamText(event.text, AgentOrchestrationLimits.maxTextBytes),
+        text: streamText(event.text),
         ...(event.nativeID ? { metadata: { nativeID: native(event.nativeID) } } : {}),
       })
-      return
-    }
-    if (event.type === "reasoning" && turnID) {
-      this.event(sessionID, {
+    if (event.type === "reasoning" && turnID)
+      return this.event(sessionID, {
         type: "turn.reasoning",
         turnID,
-        text: streamText(event.text, AgentOrchestrationLimits.maxTextBytes),
+        text: streamText(event.text),
         ...(event.nativeID ? { metadata: { nativeID: native(event.nativeID) } } : {}),
       })
-      return
-    }
     if (event.type === "tool" && turnID) {
       const id = identifier("tol", scoped(sessionID, event.id))
       this.native.set(id, scoped(sessionID, event.id))
-      this.event(sessionID, {
+      return this.event(sessionID, {
         type: "tool.updated",
         turnID,
         tool: {
@@ -270,13 +403,16 @@ export class Bridge {
           metadata: { nativeID: native(event.id) },
         },
       })
-      return
     }
     if (event.type === "approval" && turnID) {
-      const id = identifier("int", scoped(sessionID, event.id))
-      this.interactions.set(id, { sessionID, kind: "approval", revision: 1, nativeID: event.id })
+      const id = decodeInteractionID(identifier("int", scoped(sessionID, event.id)))
+      const item = { id, kind: "approval" as const, revision: 1, nativeID: event.id, title: "Approval pending" }
+      this.interactions.set(id, { sessionID, kind: item.kind, revision: item.revision, nativeID: item.nativeID })
+      session.record.pending = [...session.record.pending.filter((value) => value.id !== id), item].slice(
+        -AgentOrchestrationLimits.maxPendingInteractions,
+      )
       const cwd = await approvalCwd(session.workspace, event.cwd)
-      this.event(sessionID, {
+      return this.event(sessionID, {
         type: "interaction.approval.requested",
         turnID,
         interaction: {
@@ -289,12 +425,15 @@ export class Bridge {
           metadata: { nativeID: native(event.id) },
         },
       })
-      return
     }
     if (event.type === "question" && turnID) {
-      const id = identifier("int", scoped(sessionID, event.id))
-      this.interactions.set(id, { sessionID, kind: "question", revision: 1, nativeID: event.id })
-      this.event(sessionID, {
+      const id = decodeInteractionID(identifier("int", scoped(sessionID, event.id)))
+      const item = { id, kind: "question" as const, revision: 1, nativeID: event.id, title: "Input required" }
+      this.interactions.set(id, { sessionID, kind: item.kind, revision: item.revision, nativeID: item.nativeID })
+      session.record.pending = [...session.record.pending.filter((value) => value.id !== id), item].slice(
+        -AgentOrchestrationLimits.maxPendingInteractions,
+      )
+      return this.event(sessionID, {
         type: "interaction.question.requested",
         turnID,
         interaction: {
@@ -314,12 +453,11 @@ export class Bridge {
           metadata: { nativeID: native(event.id) },
         },
       })
-      return
     }
     if (event.type === "plan") {
       const id = identifier("pln", scoped(sessionID, event.id))
       this.native.set(id, scoped(sessionID, event.id))
-      this.event(sessionID, {
+      return this.event(sessionID, {
         type: "plan.available",
         plan: {
           id,
@@ -329,13 +467,12 @@ export class Bridge {
           metadata: { nativeID: native(event.id), persisted: "false" },
         },
       })
-      return
     }
     if (event.type === "artifact") {
       const value = await contained(session.workspace, event.path).catch(() => undefined)
       if (!value) {
         if (turnID)
-          this.event(sessionID, {
+          await this.event(sessionID, {
             type: "turn.output",
             turnID,
             text: "Dropped ACP artifact outside the active workspace.",
@@ -344,7 +481,7 @@ export class Bridge {
       }
       const id = identifier("art", scoped(sessionID, event.id))
       this.native.set(id, scoped(sessionID, event.id))
-      this.event(sessionID, {
+      return this.event(sessionID, {
         type: "artifact.created",
         ...(turnID ? { turnID } : {}),
         artifact: {
@@ -356,26 +493,23 @@ export class Bridge {
           metadata: { nativeID: native(event.id) },
         },
       })
-      return
     }
-    if (event.type === "retry" && turnID) {
-      this.event(sessionID, {
+    if (event.type === "retry" && turnID)
+      return this.event(sessionID, {
         type: "turn.retry",
         turnID,
         reason: clean(event.reason, 2 * 1024, "Agent retry requested"),
       })
-      return
-    }
     if (event.type === "unsupported" && ["available_commands_update", "usage_update"].includes(event.feature)) return
     const message =
       event.type === "unsupported"
         ? `Unsupported ACP capability: ${event.feature}`
         : `Dropped ACP ${event.type} update outside the active workspace.`
-    if (turnID) this.event(sessionID, { type: "turn.reasoning", turnID, text: message })
+    if (turnID) await this.event(sessionID, { type: "turn.reasoning", turnID, text: message })
   }
 
   private enqueue(sessionID: string, session: Stored, event: ACPEvent) {
-    const turnID = session.activeTurnID ?? session.lastTurnID
+    const turnID = session.record.activeTurnID ?? session.record.lastTurnID
     session.queue = session.queue
       .then(() => this.mapped(sessionID, session, event, turnID))
       .catch((error: unknown) => {
@@ -383,154 +517,425 @@ export class Bridge {
       })
   }
 
-  async handle(frame: AgentOrchestrationFrame) {
-    if (frame.kind !== "request") return this.error("bad_request", "bridge accepts request frames only")
-    const record = await this.begin(frame)
-    if (!record) return
+  private async workspace(frame: Extract<AgentOrchestrationRequest, { type: "workspace.open" }>) {
+    let request: RequestRecord | undefined
     try {
-      if (frame.type === "workspace.open") {
-        if (!isSupportedAgent(frame.agent.id))
-          return this.fail(record, "unsupported_agent", `${frame.agent.id} is not available in the ACP bridge`, frame)
-        const workspace = await contained(this.root, frame.workspace.path)
-        this.workspaces.set(frame.workspace.id, workspace)
-        this.complete(record, {
+      if (!supported(frame.agent.id)) {
+        request = await this.begin(frame)
+        if (request)
+          await this.fail(request, "unsupported_agent", `${frame.agent.id} is not available in the bridge`, frame)
+        return
+      }
+      const workspace = await contained(this.root, frame.workspace.path)
+      let store = this.#stores.get(workspace)
+      if (!store) {
+        store = await Store.open(decodeWorkspace({ ...frame.workspace, path: workspace }))
+        this.#stores.set(workspace, store)
+        this.hydrate(store)
+      }
+      request = await this.begin(frame)
+      if (!request) return
+      this.workspaces.set(frame.workspace.id, { path: workspace, store })
+      await this.complete(
+        request,
+        {
           version: "v1",
           kind: "response",
           type: "workspace.open",
           requestID: frame.requestID,
           idempotencyKey: frame.idempotencyKey,
           workspace: { ...frame.workspace, path: workspace },
+        },
+        store,
+      )
+    } catch (error) {
+      if (!request) request = await this.begin(frame)
+      if (!request) return
+      const code =
+        error instanceof WorkspaceError || (error instanceof StateError && error.code === "path_forbidden")
+          ? "path_forbidden"
+          : error instanceof StateError && error.code === "too_large"
+            ? "too_large"
+            : error instanceof StateError && error.code === "corrupt"
+              ? "bad_request"
+              : "internal"
+      await this.fail(request, code, error instanceof Error ? error.message : "workspace open failed", frame)
+    }
+  }
+
+  async handle(frame: Frame) {
+    if (frame.kind !== "request") return this.error("bad_request", "bridge accepts request frames only")
+    if (frame.type === "workspace.open") return this.workspace(frame)
+    const record = await this.begin(frame)
+    if (!record) return
+    try {
+      if (frame.type === "bridge.hello") {
+        const result = await this.preflight(frame.agent, this.root)
+        this.#preflights.set(frame.agent, result)
+        await this.complete(record, {
+          version: "v1",
+          kind: "response",
+          type: "bridge.hello",
+          requestID: frame.requestID,
+          idempotencyKey: frame.idempotencyKey,
+          bridgeVersion,
+          protocolVersion: "v1",
+          agent: frame.agent,
+          backendVersion: result.version,
+          backendMode: result.mode,
+          capabilities: result.capabilities,
         })
         return
       }
       if (frame.type === "session.create") {
-        if (!isSupportedAgent(frame.agent))
-          return this.fail(record, "unsupported_agent", `${frame.agent} does not support the ACP bridge`, frame)
-        const workspace = this.workspaces.get(frame.workspaceID)
-        if (!workspace) return this.fail(record, "not_found", "workspace was not opened", frame)
-        const sessionID = identifier("ses")
+        if (!supported(frame.agent))
+          return this.fail(record, "unsupported_agent", `${frame.agent} is unavailable`, frame)
+        const opened = this.workspaces.get(frame.workspaceID)
+        if (!opened) return this.fail(record, "not_found", "workspace was not opened", frame)
+        if (opened.store.state.sessions.length >= stateLimits.sessions)
+          return this.fail(record, "too_large", "workspace session journal is full", frame, opened.store)
+        const id = decodeSessionID(identifier("ses"))
         const pending: ACPEvent[] = []
         let stored: Stored | undefined
         const adapter = await this.open({
           agent: frame.agent,
-          cwd: workspace,
+          cwd: opened.path,
           emit: (event) => {
-            if (stored) return this.enqueue(sessionID, stored, event)
+            if (stored) return this.enqueue(id, stored, event)
             pending.push(event)
           },
         })
-        stored = { adapter, agent: frame.agent, workspaceID: frame.workspaceID, workspace, queue: Promise.resolve() }
-        this.sessions.set(sessionID, stored)
-        this.native.set(sessionID, scoped(sessionID, adapter.nativeID))
-        this.complete(record, {
-          version: "v1",
-          kind: "response",
-          type: "session.create",
-          requestID: frame.requestID,
-          idempotencyKey: frame.idempotencyKey,
-          sessionID,
-          capabilities: adapter.capabilities,
-        })
-        for (const event of pending) this.enqueue(sessionID, stored, event)
+        const check = this.#preflights.get(frame.agent)
+        const saved: SavedSession = {
+          id,
+          workspaceID: frame.workspaceID,
+          agent: frame.agent,
+          nativeID: native(adapter.nativeID),
+          backendVersion: safeVersion(adapter.version === "unknown" ? check?.version : adapter.version),
+          backendMode: adapter.mode ?? check?.mode ?? fallbackMode(frame.agent),
+          capabilities: [...adapter.capabilities],
+          state: "idle",
+          pending: [],
+          artifacts: [],
+        }
+        stored = {
+          record: saved,
+          store: opened.store,
+          workspace: opened.path,
+          adapter,
+          queue: Promise.resolve(),
+          run: 0,
+        }
+        this.sessions.set(id, stored)
+        opened.store.state.sessions = [...opened.store.state.sessions, saved]
+        this.native.set(id, scoped(id, adapter.nativeID))
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: "session.create",
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            sessionID: id,
+            capabilities: adapter.capabilities,
+          },
+          opened.store,
+        )
+        for (const event of pending) this.enqueue(id, stored, event)
         await stored.queue
+        return
+      }
+      if (frame.type === "session.list") {
+        const opened = this.workspaces.get(frame.workspaceID)
+        if (!opened) return this.fail(record, "not_found", "workspace was not opened", frame)
+        const sessions = [...this.sessions.values()]
+          .filter(
+            (item) =>
+              item.record.workspaceID === frame.workspaceID && (!frame.agent || item.record.agent === frame.agent),
+          )
+          .map((item) => this.summary(item))
+          .slice(0, AgentOrchestrationLimits.maxSessions)
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: "session.list",
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            sessions,
+          },
+          opened.store,
+        )
+        return
+      }
+      if (frame.type === "session.attach") {
+        const session = this.sessions.get(frame.sessionID)
+        if (!session) return this.fail(record, "not_found", "session was not found", frame)
+        if (!session.adapter && session.record.capabilities.includes("replay")) {
+          const pending: ACPEvent[] = []
+          let adapter: Session | undefined
+          adapter = await this.open({
+            agent: session.record.agent,
+            cwd: session.workspace,
+            resume: session.record.nativeID,
+            emit: (event) => {
+              if (adapter) return this.enqueue(frame.sessionID, session, event)
+              pending.push(event)
+            },
+          })
+          if (adapter.resumable !== false) {
+            session.adapter = adapter
+            session.record.nativeID = native(adapter.nativeID)
+            session.record.backendMode = adapter.mode ?? session.record.backendMode
+            session.record.backendVersion = safeVersion(
+              adapter.version === "unknown" ? session.record.backendVersion : adapter.version,
+            )
+            session.record.capabilities = [...adapter.capabilities]
+            session.record.state = session.record.pending.length ? "waiting" : "idle"
+            for (const event of pending) this.enqueue(frame.sessionID, session, event)
+            await session.queue
+          } else await adapter.close()
+        }
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: "session.attach",
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            attached: !!session.adapter,
+            snapshot: this.snapshot(session),
+          },
+          session.store,
+        )
+        return
+      }
+      if (frame.type === "session.snapshot") {
+        const session = this.sessions.get(frame.sessionID)
+        if (!session) return this.fail(record, "not_found", "session was not found", frame)
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: "session.snapshot",
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            snapshot: this.snapshot(session),
+          },
+          session.store,
+        )
         return
       }
       if (frame.type === "turn.create") {
         const session = this.sessions.get(frame.sessionID)
-        if (!session || session.agent !== frame.agent)
+        if (!session || session.record.agent !== frame.agent)
           return this.fail(record, "not_found", "session was not found for this agent", frame)
-        if (session.activeTurnID)
-          return this.fail(record, "bad_request", "a turn is already active for this session", frame)
-        const turnID = frame.turnID ?? identifier("trn")
-        session.activeTurnID = turnID
-        session.lastTurnID = turnID
-        this.complete(record, {
-          version: "v1",
-          kind: "response",
-          type: "turn.create",
-          requestID: frame.requestID,
-          idempotencyKey: frame.idempotencyKey,
-          sessionID: frame.sessionID,
-          turnID,
-        })
+        if (!session.adapter)
+          return this.fail(record, "not_found", "session is detached and cannot start a turn", frame, session.store)
+        if (session.record.activeTurnID)
+          return this.fail(record, "bad_request", "a turn is already active for this session", frame, session.store)
+        const turnID = frame.turnID ?? decodeTurnID(identifier("trn"))
+        session.record.activeTurnID = turnID
+        session.record.lastTurnID = turnID
+        session.record.state = "running"
+        const run = ++session.run
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: "turn.create",
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            sessionID: frame.sessionID,
+            turnID,
+          },
+          session.store,
+        )
         let message: string | undefined
-        void session.adapter
+        const task = session.adapter
           .turn(frame.prompt)
           .catch((error: unknown) => {
-            message = error instanceof Error ? error.message : "ACP turn failed"
-            this.error("internal", message)
+            message = error instanceof Error ? error.message : "agent turn failed"
           })
           .then(async () => {
             await session.queue
-            this.event(frame.sessionID, {
+            if (session.record.activeTurnID !== turnID || session.run !== run) return
+            await this.event(frame.sessionID, {
               type: "turn.completed",
               turnID,
               status: message ? "failed" : "completed",
               ...(message ? { message: clean(message, 2 * 1024) } : {}),
             })
-            if (session.activeTurnID === turnID) session.activeTurnID = undefined
           })
+          .catch((error: unknown) => {
+            this.error("internal", error instanceof Error ? error.message : "turn state persistence failed")
+          })
+          .finally(() => this.#tasks.delete(task))
+        this.#tasks.add(task)
         return
       }
-      if (frame.type === "interaction.approval.reply") {
+      if (frame.type === "turn.cancel" || frame.type === "turn.retry" || frame.type === "turn.steer") {
+        const session = this.sessions.get(frame.sessionID)
+        if (!session || !session.adapter) return this.fail(record, "not_found", "attached session was not found", frame)
+        const operation = frame.type.slice(5) as "cancel" | "retry" | "steer"
+        const action = session.adapter[operation]
+        if (!action || !session.record.capabilities.includes(operation as AgentOrchestrationCapability))
+          return this.fail(
+            record,
+            "unsupported_operation",
+            `${frame.type} is not supported by ${session.record.agent} in ${session.record.backendMode} mode`,
+            frame,
+            session.store,
+          )
+        const current =
+          frame.type === "turn.retry"
+            ? !session.record.activeTurnID && session.record.lastTurnID === frame.turnID
+            : session.record.activeTurnID === frame.turnID
+        if (!current)
+          return this.fail(
+            record,
+            "bad_request",
+            `${frame.turnID} is not the current ${operation} target`,
+            frame,
+            session.store,
+          )
+        const accepted =
+          frame.type === "turn.steer"
+            ? await session.adapter.steer?.(frame.turnID, frame.instruction)
+            : frame.type === "turn.cancel"
+              ? await session.adapter.cancel?.(frame.turnID)
+              : await session.adapter.retry?.(frame.turnID)
+        if (!accepted)
+          return this.fail(
+            record,
+            "unsupported_operation",
+            `${frame.type} was rejected by the provider`,
+            frame,
+            session.store,
+          )
+        if (frame.type === "turn.retry") {
+          session.run++
+          session.record.activeTurnID = frame.turnID
+          session.record.state = "running"
+        }
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: frame.type,
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            sessionID: frame.sessionID,
+            turnID: frame.turnID,
+          },
+          session.store,
+        )
+        if (frame.type === "turn.cancel") {
+          session.run++
+          await this.event(frame.sessionID, {
+            type: "turn.completed",
+            turnID: frame.turnID,
+            status: "stopped",
+          })
+        }
+        return
+      }
+      if (frame.type === "interaction.approval.reply" || frame.type === "interaction.question.reply") {
         const session = this.sessions.get(frame.sessionID)
         const interaction = this.interactions.get(frame.interactionID)
-        if (
-          !session ||
-          !interaction ||
-          interaction.sessionID !== frame.sessionID ||
-          interaction.kind !== "approval" ||
-          interaction.revision !== frame.revision ||
-          !session.adapter.approval(interaction.nativeID, frame.decision === "approved")
-        )
-          return this.fail(record, "interaction_conflict", "approval is no longer pending", frame)
+        const kind = frame.type === "interaction.approval.reply" ? "approval" : "question"
+        const accepted =
+          !!session &&
+          !!session.adapter &&
+          !!interaction &&
+          interaction.sessionID === frame.sessionID &&
+          interaction.kind === kind &&
+          interaction.revision === frame.revision &&
+          (frame.type === "interaction.approval.reply"
+            ? session.adapter.approval(interaction.nativeID, frame.decision === "approved")
+            : session.adapter.question(interaction.nativeID, frame.answer))
+        if (!session || !accepted)
+          return this.fail(record, "interaction_conflict", `${kind} is no longer pending`, frame, session?.store)
         this.interactions.delete(frame.interactionID)
-        this.complete(record, {
-          version: "v1",
-          kind: "response",
-          type: "interaction.approval.reply",
-          requestID: frame.requestID,
-          idempotencyKey: frame.idempotencyKey,
-          sessionID: frame.sessionID,
-        })
+        session.record.pending = session.record.pending.filter((item) => item.id !== frame.interactionID)
+        session.record.state = session.record.activeTurnID ? "running" : "idle"
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: frame.type,
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            sessionID: frame.sessionID,
+          },
+          session.store,
+        )
         return
       }
-      if (frame.type === "interaction.question.reply") {
+      if (frame.type === "event.replay") {
         const session = this.sessions.get(frame.sessionID)
-        const interaction = this.interactions.get(frame.interactionID)
-        if (
-          !session ||
-          !interaction ||
-          interaction.sessionID !== frame.sessionID ||
-          interaction.kind !== "question" ||
-          interaction.revision !== frame.revision ||
-          !session.adapter.question(interaction.nativeID, frame.answer)
+        if (!session) return this.fail(record, "not_found", "session was not found", frame)
+        const after = frame.afterCursor ? number(frame.afterCursor) : undefined
+        const first = session.store.state.events[0]?.sequence
+        if (after !== undefined && (after > session.store.state.cursor || (first !== undefined && after < first - 1)))
+          return this.fail(
+            record,
+            "cursor_gap",
+            "event cursor is outside the retained tail; request a snapshot",
+            frame,
+            session.store,
+          )
+        const available = (this.#events.get(frame.sessionID) ?? []).filter(
+          (event) => after === undefined || event.sequence > after,
         )
-          return this.fail(record, "interaction_conflict", "question is no longer pending", frame)
-        this.interactions.delete(frame.interactionID)
-        this.complete(record, {
-          version: "v1",
-          kind: "response",
-          type: "interaction.question.reply",
-          requestID: frame.requestID,
-          idempotencyKey: frame.idempotencyKey,
-          sessionID: frame.sessionID,
-        })
+        const events = available.slice(0, frame.limit)
+        const hasMore = available.length > events.length
+        await this.complete(
+          record,
+          {
+            version: "v1",
+            kind: "response",
+            type: "event.replay",
+            requestID: frame.requestID,
+            idempotencyKey: frame.idempotencyKey,
+            events,
+            ...(hasMore ? { nextCursor: available[events.length]!.cursor } : {}),
+            hasMore,
+          },
+          session.store,
+        )
         return
       }
-      return this.fail(record, "bad_request", `${frame.type} is not available in the ACP bridge`, frame)
+      await this.fail(record, "unsupported_operation", `${frame.type} is not available in the bridge`, frame)
     } catch (error) {
-      if (error instanceof WorkspaceError) return this.fail(record, "path_forbidden", error.message, frame)
-      return this.fail(record, "internal", error instanceof Error ? error.message : "remote orchestrator failed", frame)
+      const code =
+        error instanceof WorkspaceError || (error instanceof StateError && error.code === "path_forbidden")
+          ? "path_forbidden"
+          : error instanceof StateError && error.code === "too_large"
+            ? "too_large"
+            : error instanceof StateError && error.code === "corrupt"
+              ? "bad_request"
+              : "internal"
+      await this.fail(record, code, error instanceof Error ? error.message : "remote orchestrator failed", frame)
     }
   }
 
   async close() {
     this.#closed = true
-    await Promise.allSettled([...this.sessions.values()].map((session) => session.adapter.close()))
+    await Promise.allSettled([...this.sessions.values()].map((session) => session.adapter?.close()))
+    await Promise.allSettled([...this.#tasks])
+    await Promise.allSettled([...this.#stores.values()].map((store) => store.close()))
     this.sessions.clear()
     this.interactions.clear()
     this.#requests.clear()
+    this.#events.clear()
   }
 }
 
